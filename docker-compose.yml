@@ -16,11 +16,10 @@ services:
     env_file:
       - .env
     depends_on:
-      - siwe-oidc
+      - siwx-oidc
       - proxy
       - letsencrypt
     volumes:
-      #      - matrix_data:/data
       - matrix_data:/data
       - proxy_data_certs:/certs:rw
 
@@ -33,23 +32,28 @@ services:
       retries: 5
     restart: always
 
-  siwe-oidc:
-    image: ghcr.io/spruceid/siwe_oidc:20221208081605782143
+  siwx-oidc:
+    build:
+      context: ../siwx-oidc
+      dockerfile: Dockerfile
+      additional_contexts:
+        aqua-auth: ../aqua-auth
     depends_on:
       - redis
     ports:
-      - ${SIWEOIDC_PORT}:${SIWEOIDC_PORT}
+      - ${SIWXOIDC_PORT}:${SIWXOIDC_PORT}
     environment:
-      SIWEOIDC_REDIS_URL: "redis://redis"
-      SIWEOIDC_ADDRESS: 0.0.0.0
-      SIWEOIDC_HOST: ${SIWEOIDC_HOST}
-      SIWEOIDC_PORT: ${SIWEOIDC_PORT}
-      SIWEOIDC_DEFAULT_CLIENTS: ${SIWEOIDC_DEFAULT_CLIENTS}
-      SIWEOIDC_BASE_URL: ${SIWEOIDC_BASE_URL}
+      SIWXOIDC_REDIS_URL: "redis://redis"
+      SIWXOIDC_ADDRESS: 0.0.0.0
+      SIWXOIDC_HOST: ${SIWXOIDC_HOST}
+      SIWXOIDC_PORT: ${SIWXOIDC_PORT}
+      SIWXOIDC_DEFAULT_CLIENTS: ${SIWXOIDC_DEFAULT_CLIENTS}
+      SIWXOIDC_BASE_URL: ${SIWXOIDC_BASE_URL}
+      SIWXOIDC_SUPPORTED_NAMESPACES: ${SIWXOIDC_SUPPORTED_NAMESPACES:-eip155,ed25519,p256}
       RUST_LOG: ${RUST_LOG}
-      VIRTUAL_HOST: ${SIWEOIDC_HOST}
-      VIRTUAL_PORT: ${SIWEOIDC_PORT}
-      LETSENCRYPT_HOST: ${SIWEOIDC_HOST}
+      VIRTUAL_HOST: ${SIWXOIDC_HOST}
+      VIRTUAL_PORT: ${SIWXOIDC_PORT}
+      LETSENCRYPT_HOST: ${SIWXOIDC_HOST}
       LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL}
 
   proxy:
@@ -69,7 +73,6 @@ services:
       - proxy_data_html:/usr/share/nginx/html:rw
       - proxy_data_certs:/etc/nginx/certs:ro
       - /var/run/docker.sock:/tmp/docker.sock:ro
-      #- "./max_upload_size.conf:/etc/nginx/conf.d/max_upload_size.conf"
     restart: unless-stopped
 
   letsencrypt:
