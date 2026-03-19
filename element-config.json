@@ -1,0 +1,10 @@
+{
+    "default_server_config": {
+        "m.homeserver": {
+            "base_url": "http://localhost:8080",
+            "server_name": "localhost"
+        }
+    },
+    "disable_guests": true,
+    "disable_3pid_login": true
+}

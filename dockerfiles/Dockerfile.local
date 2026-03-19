@@ -1,5 +1,5 @@
 FROM matrixdotorg/synapse:v1.149.1
 RUN apt update && apt install wget -y && apt clean
 RUN wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/bin/yq && chmod +x /usr/bin/yq
-COPY ./entrypoints/matrix_server.sh /matrix_server.sh
+COPY ./entrypoints/matrix_server_local.sh /matrix_server.sh
 ENTRYPOINT ["/matrix_server.sh"]

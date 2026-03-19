@@ -16,6 +16,7 @@ MATRIX_REPORT_STATS=no
 MATRIX_MESSAGE_LIFETIME=4w
 ATTACH=false
 LETSENCRYPT_EMAIL=
+WALLETCONNECT_PROJECT_ID=
 
 #formatting
 bold=$(tput bold)
@@ -26,6 +27,7 @@ function printHelp() {
 echo "#################################################################"
 echo "General"
 echo "--ENABLE_DEBUG \"enable debug-mode (disable detach and set siweoidc debug-level)\""
+echo "--WALLETCONNECT_PROJECT_ID (required) \"set WalletConnect project ID from cloud.walletconnect.com\""
 echo "--LETSENCRYPT_EMAIL (required) \"set letsencrypt-email\""
 echo "--reset \"resets/delete all data\""
 echo "--stop \"stop all containers\""
@@ -55,7 +57,7 @@ echo "#################################################################"
 }
 
 function stopContainers() {
-    docker-compose down
+    docker compose down
 }
 
 
@@ -63,7 +65,7 @@ function resetAllData() {
     read -r -p $'Destroying containers and deleting all data \n\tAre you sure? [y/N] ' response
     case "$response" in
                     [yY][eE][sS]|[yY])
-                        docker-compose down -v
+                        docker compose down -v
                         rm .env
                         ;;
                     *)
@@ -81,9 +83,9 @@ function echoEroor() {
 
 function startupServer() {
 if [ "$ATTACH" == "true" ]; then
-    docker-compose up
+    docker compose up
 else
-  docker-compose up -d
+  docker compose up -d
 fi
 }
 
@@ -106,6 +108,13 @@ function checkRequiredArguments() {
     if [[ -z "${SIWEOIDC_HOST}" ]]; then
       echoEroor "missing SIWEOIDC_HOST!!!!"
       echoEroor "use --SIWEOIDC_HOST"
+      printHelp
+      exit 1
+    fi
+
+    if [[ -z "${WALLETCONNECT_PROJECT_ID}" ]]; then
+      echoEroor "missing WALLETCONNECT_PROJECT_ID!!!!"
+      echoEroor "use --WALLETCONNECT_PROJECT_ID"
       printHelp
       exit 1
     fi
@@ -211,6 +220,11 @@ while [ "$#" -gt 0 ]; do
                 shift
                 shift
                 ;;
+            --WALLETCONNECT_PROJECT_ID)
+                WALLETCONNECT_PROJECT_ID="$2"
+                shift
+                shift
+                ;;
             --MATRIX_REPORT_STATS)
                 MATRIX_REPORT_STATS=yes
                 shift
@@ -255,8 +269,9 @@ else
   echo "RUST_LOG=$RUST_LOG" >> .env
 
 
-  echo "#GENERAL_CONFIG"
+  echo "#GENERAL_CONFIG" >> .env
   echo "LETSENCRYPT_EMAIL=$LETSENCRYPT_EMAIL" >> .env
+  echo "WALLETCONNECT_PROJECT_ID=$WALLETCONNECT_PROJECT_ID" >> .env
 
 
 

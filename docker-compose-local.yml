@@ -1,0 +1,61 @@
+services:
+  matrix_synapse:
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: dockerfiles/Dockerfile.local
+    extra_hosts:
+      - "localhost:host-gateway"
+    ports:
+      - "${MATRIX_PORT}:${MATRIX_PORT}"
+      - "8448:8448"
+    environment:
+      SYNAPSE_SERVER_NAME: ${MATRIX_HOST}
+      SYNAPSE_REPORT_STATS: ${MATRIX_REPORT_STATS}
+    env_file:
+      - .env.local
+    depends_on:
+      - siwe-oidc
+    volumes:
+      - matrix_data:/data
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: [ "CMD", "redis-cli","ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: always
+
+  siwe-oidc:
+    build:
+      context: .
+      dockerfile: dockerfiles/Dockerfile.siwe-oidc
+      args:
+        PROJECT_ID: ${WALLETCONNECT_PROJECT_ID}
+    depends_on:
+      - redis
+    ports:
+      - ${SIWEOIDC_PORT}:${SIWEOIDC_PORT}
+    environment:
+      SIWEOIDC_REDIS_URL: "redis://redis"
+      SIWEOIDC_ADDRESS: 0.0.0.0
+      SIWEOIDC_HOST: ${SIWEOIDC_HOST}
+      SIWEOIDC_PORT: ${SIWEOIDC_PORT}
+      SIWEOIDC_DEFAULT_CLIENTS: ${SIWEOIDC_DEFAULT_CLIENTS}
+      SIWEOIDC_BASE_URL: ${SIWEOIDC_BASE_URL}
+      RUST_LOG: ${RUST_LOG}
+
+  element-web:
+    image: vectorim/element-web:latest
+    ports:
+      - "3000:80"
+    volumes:
+      - ./element-config.json:/app/config.json:ro
+    depends_on:
+      - matrix_synapse
+    restart: unless-stopped
+
+volumes:
+  matrix_data:

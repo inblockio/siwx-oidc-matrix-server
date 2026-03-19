@@ -20,12 +20,11 @@ services:
       - proxy
       - letsencrypt
     volumes:
-      #      - matrix_data:/data
       - matrix_data:/data
       - proxy_data_certs:/certs:rw
 
   redis:
-    image: redis
+    image: redis:7-alpine
     healthcheck:
       test: [ "CMD", "redis-cli","ping" ]
       interval: 10s
@@ -34,7 +33,11 @@ services:
     restart: always
 
   siwe-oidc:
-    image: ghcr.io/spruceid/siwe_oidc:20221208081605782143
+    build:
+      context: .
+      dockerfile: dockerfiles/Dockerfile.siwe-oidc
+      args:
+        PROJECT_ID: ${WALLETCONNECT_PROJECT_ID}
     depends_on:
       - redis
     ports:
@@ -53,7 +56,7 @@ services:
       LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL}
 
   proxy:
-    image: nginxproxy/nginx-proxy:alpine
+    image: nginxproxy/nginx-proxy:1.6-alpine
     container_name: proxy_server_proxy_1
     labels:
       - "com.github.jrcs.letsencrypt_nginx_proxy_companion.nginx_proxy=true"
@@ -69,11 +72,10 @@ services:
       - proxy_data_html:/usr/share/nginx/html:rw
       - proxy_data_certs:/etc/nginx/certs:ro
       - /var/run/docker.sock:/tmp/docker.sock:ro
-      #- "./max_upload_size.conf:/etc/nginx/conf.d/max_upload_size.conf"
     restart: unless-stopped
 
   letsencrypt:
-    image: nginxproxy/acme-companion:latest
+    image: nginxproxy/acme-companion:2.6
     container_name: proxy_server_letsencrypt_1
     depends_on:
       - proxy

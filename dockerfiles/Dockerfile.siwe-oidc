@@ -1,0 +1,44 @@
+FROM clux/muslrust:stable AS chef
+WORKDIR /siwe-oidc
+RUN cargo install cargo-chef
+
+FROM chef AS dep_planner
+RUN git clone --depth 1 https://github.com/spruceid/siwe-oidc.git /tmp/siwe-oidc && \
+    cp -r /tmp/siwe-oidc/src ./src && \
+    cp /tmp/siwe-oidc/Cargo.lock . && \
+    cp /tmp/siwe-oidc/Cargo.toml . && \
+    cp /tmp/siwe-oidc/siwe-oidc.toml .
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS dep_cacher
+COPY --from=dep_planner /siwe-oidc/recipe.json recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json
+
+FROM chef AS builder
+COPY --from=dep_cacher /siwe-oidc/target/ ./target/
+COPY --from=dep_cacher $CARGO_HOME $CARGO_HOME
+COPY --from=dep_planner /siwe-oidc/ ./
+ENV RUSTFLAGS="--allow dependency_on_unit_never_type_fallback"
+RUN cargo build --release
+
+FROM node:18-alpine AS node_builder
+RUN apk add --no-cache git
+ARG PROJECT_ID
+ENV PROJECT_ID=${PROJECT_ID}
+RUN git clone --depth 1 https://github.com/spruceid/siwe-oidc.git /siwe-oidc
+WORKDIR /siwe-oidc/js/ui
+RUN npm install typescript@5.4.5 --save-dev --legacy-peer-deps && \
+    npm install --legacy-peer-deps && \
+    npm install ethers@^5 @walletconnect/ethereum-provider@^2.11.0 @wagmi/connectors@~4.1.0 --legacy-peer-deps && \
+    ln -sf browser.js node_modules/process/browser
+RUN npm run build
+
+FROM alpine:latest
+COPY --from=builder /siwe-oidc/target/x86_64-unknown-linux-musl/release/siwe-oidc /usr/local/bin/
+WORKDIR /siwe-oidc
+RUN mkdir -p ./static
+COPY --from=node_builder /siwe-oidc/static/ ./static/
+COPY --from=builder /siwe-oidc/siwe-oidc.toml ./
+ENV SIWEOIDC_ADDRESS="0.0.0.0"
+EXPOSE 8000
+ENTRYPOINT ["siwe-oidc"]
