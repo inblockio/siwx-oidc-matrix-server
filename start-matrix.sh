@@ -7,7 +7,7 @@ SIWEOIDC_SECRET_ID=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 13; echo)
 SIWEOIDC_HOST=
 SIWEOIDC_PORT=
 SIWEOIDC_DEFAULT_CLIENTS=
-RUST_LOG="siwe_oidc=error,tower_http=error"
+RUST_LOG="siwx_oidc=error,tower_http=error"
 SIWEOIDC_BASE_URL=
 MATRIX_HOST=
 MATRIX_PORT=
@@ -25,7 +25,7 @@ reset=$(tput sgr0)
 function printHelp() {
 echo "#################################################################"
 echo "General"
-echo "--ENABLE_DEBUG \"enable debug-mode (disable detach and set siweoidc debug-level)\""
+echo "--ENABLE_DEBUG \"enable debug-mode (disable detach and set siwx-oidc debug-level)\""
 echo "--LETSENCRYPT_EMAIL (required) \"set letsencrypt-email\""
 echo "--reset \"resets/delete all data\""
 echo "--stop \"stop all containers\""
@@ -33,12 +33,12 @@ echo "--stop \"stop all containers\""
 echo ""
 echo ""
 
-echo "SIWEOIDC-Config"
-echo "--SIWEOIDC_CLIENT_ID \"set siweoidc-client-id (if not set, we will generate one)\" !!!ONLY USE IT IF YOU KNOW WHAT YOU DO!!!"
-echo "--SIWEOIDC_SECRET_ID \"set siweoidc-secret-id (if not set, we will generate one)\" !!!ONLY USE IT IF YOU KNOW WHAT YOU DO!!!"
-echo "--SIWEOIDC_HOST (required) \"set siweoidc-sever e.g. siwe-oidc.example.com\""
-echo "--SIWEOIDC_PORT \"set siweoidc-port e.g. 8081 \" !!!ONLY USE IT IF YOU KNOW WHAT YOU DO!!!"
-echo "--SIWEOIDC_DEFAULT_CLIENTS \"set siweoidc_default_clients e.g \"'{<SIWEOIDC_CLIENT_ID>=\"{\\\"secret\\\":\\\"<SIWEOIDC_SECRET_ID>\\\", \\\"metadata\\\": {\\\"redirect_uris\\\": [\\\"<MATRIX_BASE_URL>/_synapse/client/oidc/callback\\\"]}}\"}'\" \" !!!ONLY USE IT IF YOU KNOW WHAT YOU DO!!!"
+echo "SIWX-OIDC Config"
+echo "--SIWEOIDC_CLIENT_ID \"set siwx-oidc client-id (if not set, we will generate one)\" !!!ONLY USE IT IF YOU KNOW WHAT YOU DO!!!"
+echo "--SIWEOIDC_SECRET_ID \"set siwx-oidc secret-id (if not set, we will generate one)\" !!!ONLY USE IT IF YOU KNOW WHAT YOU DO!!!"
+echo "--SIWEOIDC_HOST (required) \"set siwx-oidc server e.g. siwx-oidc.example.com\""
+echo "--SIWEOIDC_PORT \"set siwx-oidc port e.g. 8081 \" !!!ONLY USE IT IF YOU KNOW WHAT YOU DO!!!"
+echo "--SIWEOIDC_DEFAULT_CLIENTS \"set siwx-oidc default_clients e.g \"'{<SIWEOIDC_CLIENT_ID>=\"{\\\"secret\\\":\\\"<SIWEOIDC_SECRET_ID>\\\", \\\"metadata\\\": {\\\"redirect_uris\\\": [\\\"<MATRIX_BASE_URL>/_synapse/client/oidc/callback\\\"]}}\"}'\" \" !!!ONLY USE IT IF YOU KNOW WHAT YOU DO!!!"
 
 echo ""
 echo ""
@@ -187,7 +187,7 @@ while [ "$#" -gt 0 ]; do
                 shift
                 ;;
             --ENABLE_DEBUG)
-                RUST_LOG="siwe_oidc=debug,tower_http=trace"
+                RUST_LOG="siwx_oidc=debug,tower_http=trace"
                 ATTACH=true
                 shift
                 ;;
@@ -230,7 +230,7 @@ fillMissing
 if test -f "$ENV_FILE"; then
   source .env
   echo ".env found! skipping setup!"
-  echo "if you want a new setup: rm .env && docker volume rm siwe-oidc-matrix-server_matrix_data"
+  echo "if you want a new setup: rm .env && docker volume rm siwx-oidc-matrix-server_matrix_data"
   startupServer
 
 else

@@ -29,9 +29,9 @@ yq -i --unwrapScalar=false ".tls_certificate_path = \"/data/certs/fullchain.pem\
 yq -i --unwrapScalar=false ".tls_private_key_path = \"/data/certs/key.pem\"" /data/homeserver.yaml
 
 #oidc-config
-yq -i ".oidc_providers[0].idp_id = \"siwe-oidc\"" /data/homeserver.yaml
-yq -i ".oidc_providers[0].idp_name = \"siwe-oidc\"" /data/homeserver.yaml
-yq -i ".oidc_providers[0].idp_brand = \"siwe-oidc\"" /data/homeserver.yaml
+yq -i ".oidc_providers[0].idp_id = \"siwx-oidc\"" /data/homeserver.yaml
+yq -i ".oidc_providers[0].idp_name = \"siwx-oidc\"" /data/homeserver.yaml
+yq -i ".oidc_providers[0].idp_brand = \"siwx-oidc\"" /data/homeserver.yaml
 
 #retention
 yq -i ".retention.enabled=true" /data/homeserver.yaml

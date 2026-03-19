@@ -16,7 +16,7 @@ services:
     env_file:
       - .env
     depends_on:
-      - siwe-oidc
+      - siwx-oidc
       - proxy
       - letsencrypt
     volumes:
@@ -33,8 +33,8 @@ services:
       retries: 5
     restart: always
 
-  siwe-oidc:
-    image: ghcr.io/spruceid/siwe_oidc:20221208081605782143
+  siwx-oidc:
+    image: ghcr.io/inblockio/siwx-oidc:latest
     depends_on:
       - redis
     ports:
