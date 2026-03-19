@@ -95,7 +95,9 @@ function generateSigningKeyConfig() {
   if [ ! -f siwx-oidc-config/siwe-oidc.toml ]; then
     PEM=$(openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 2>/dev/null)
     cat > siwx-oidc-config/siwe-oidc.toml << TOMLEOF
-signing_key_pem = """
+[signing_key_pem]
+___figment_value_id = "string"
+___figment_value_value = """
 ${PEM}
 """
 TOMLEOF

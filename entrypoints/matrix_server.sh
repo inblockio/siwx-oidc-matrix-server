@@ -45,7 +45,7 @@ yq -i ".oidc_providers[0].client_secret = \"${MATRIX_OIDC_SECRET_ID}\"" /data/ho
 yq -i --unwrapScalar=false ".oidc_providers[0].user_mapping_provider.config.localpart_template=\"{{ user.preferred_username }}\"" /data/homeserver.yaml
 yq -i --unwrapScalar=false ".oidc_providers[0].user_mapping_provider.config.display_name_template=\"{{ user.preferred_username }}\"" /data/homeserver.yaml
 
-echo "Server needs to restart 3-5 times to get certificates and connections!"
+echo "First boot: Synapse may restart once while Let's Encrypt provisions TLS certificates."
 sleep 5
 
 else

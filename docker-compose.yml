@@ -22,6 +22,11 @@ services:
         condition: service_started
       letsencrypt:
         condition: service_started
+    # Route OIDC issuer hostname to the nginx proxy container so Synapse
+    # can reach siwx-oidc via HTTPS without hairpin NAT through the
+    # external IP (which times out from inside Docker).
+    extra_hosts:
+      - "${SIWEOIDC_HOST}:host-gateway"
     volumes:
       - matrix_data:/data
       - proxy_data_certs:/certs:rw
@@ -58,7 +63,7 @@ services:
     volumes:
       - ./siwx-oidc-config/siwe-oidc.toml:/siwx-oidc/siwe-oidc.toml:ro
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:${SIWEOIDC_PORT}/.well-known/openid-configuration"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:${SIWEOIDC_PORT}/.well-known/openid-configuration"]
       interval: 10s
       timeout: 5s
       retries: 5
