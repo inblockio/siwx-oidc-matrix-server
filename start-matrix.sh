@@ -55,7 +55,7 @@ echo "#################################################################"
 }
 
 function stopContainers() {
-    docker-compose down
+    docker compose down
 }
 
 
@@ -63,7 +63,7 @@ function resetAllData() {
     read -r -p $'Destroying containers and deleting all data \n\tAre you sure? [y/N] ' response
     case "$response" in
                     [yY][eE][sS]|[yY])
-                        docker-compose down -v
+                        docker compose down -v
                         rm .env
                         ;;
                     *)
@@ -73,7 +73,7 @@ function resetAllData() {
                 esac
 }
 
-function echoEroor() {
+function echoError() {
     text=$1
     echo "${bold}${red}${text}${reset}"
 }
@@ -81,31 +81,49 @@ function echoEroor() {
 
 function startupServer() {
 if [ "$ATTACH" == "true" ]; then
-    docker-compose up
+    docker compose up
 else
-  docker-compose up -d
+  docker compose up -d
 fi
+}
+
+function generateSigningKeyConfig() {
+  # Generate persistent ES256 signing key in a TOML config file.
+  # This file is mounted into the siwx-oidc container so the key
+  # survives container restarts (tokens remain valid across redeploys).
+  mkdir -p siwx-oidc-config
+  if [ ! -f siwx-oidc-config/siwe-oidc.toml ]; then
+    PEM=$(openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 2>/dev/null)
+    cat > siwx-oidc-config/siwe-oidc.toml << TOMLEOF
+signing_key_pem = """
+${PEM}
+"""
+TOMLEOF
+    echo "Generated persistent OIDC signing key in siwx-oidc-config/siwe-oidc.toml"
+  else
+    echo "OIDC signing key already exists, keeping existing key"
+  fi
 }
 
 function checkRequiredArguments() {
 
     if [[ -z "${LETSENCRYPT_EMAIL}" ]]; then
-      echoEroor "missing LETSENCRYPT_EMAIL!!!!"
-      echoEroor "use --LETSENCRYPT_EMAIL"
+      echoError "missing LETSENCRYPT_EMAIL!!!!"
+      echoError "use --LETSENCRYPT_EMAIL"
       printHelp
       exit 1
     fi
 
     if [[ -z "${MATRIX_HOST}" ]]; then
-      echoEroor "missing MATRIX_HOST!!!!"
-      echoEroor "use --MATRIX_HOST"
+      echoError "missing MATRIX_HOST!!!!"
+      echoError "use --MATRIX_HOST"
       printHelp
       exit 1
     fi
 
     if [[ -z "${SIWEOIDC_HOST}" ]]; then
-      echoEroor "missing SIWEOIDC_HOST!!!!"
-      echoEroor "use --SIWEOIDC_HOST"
+      echoError "missing SIWEOIDC_HOST!!!!"
+      echoError "use --SIWEOIDC_HOST"
       printHelp
       exit 1
     fi
@@ -240,6 +258,9 @@ else
   SIWEOIDC_DEFAULT_CLIENTS="'{$SIWEOIDC_CLIENT_ID=\"{\\\"secret\\\":\\\"$SIWEOIDC_SECRET_ID\\\", \\\"metadata\\\": {\\\"redirect_uris\\\": [\\\"$MATRIX_BASE_URL/_synapse/client/oidc/callback\\\"]}}\"}'"
   fi
 
+  # Generate persistent OIDC signing key config
+  generateSigningKeyConfig
+
   if [ ! -f ./.env ]; then
       touch .env
   else
@@ -255,7 +276,8 @@ else
   echo "RUST_LOG=$RUST_LOG" >> .env
 
 
-  echo "#GENERAL_CONFIG"
+  echo "" >> .env
+  echo "#GENERAL_CONFIG" >> .env
   echo "LETSENCRYPT_EMAIL=$LETSENCRYPT_EMAIL" >> .env
 
 
@@ -272,8 +294,3 @@ else
   startupServer
 
 fi
-
-
-
-
-
