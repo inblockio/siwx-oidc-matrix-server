@@ -41,7 +41,7 @@ yq -i ".oidc_providers[0].issuer = \"${SIWEOIDC_BASE_URL}\"" /data/homeserver.ya
 
 yq -i ".oidc_providers[0].client_id = \"${MATRIX_OIDC_CLIENT_ID}\"" /data/homeserver.yaml
 yq -i ".oidc_providers[0].client_secret = \"${MATRIX_OIDC_SECRET_ID}\"" /data/homeserver.yaml
-yq -i ".oidc_providers[0].token_endpoint_auth_method = \"client_secret_post\"" /data/homeserver.yaml
+yq -i ".oidc_providers[0].client_auth_method = \"client_secret_post\"" /data/homeserver.yaml
 
 yq -i --unwrapScalar=false ".oidc_providers[0].user_mapping_provider.config.localpart_template=\"{{ user.preferred_username | replace(':', '-') }}\"" /data/homeserver.yaml
 yq -i --unwrapScalar=false ".oidc_providers[0].user_mapping_provider.config.display_name_template=\"{{ user.preferred_username }}\"" /data/homeserver.yaml
