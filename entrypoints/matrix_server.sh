@@ -44,7 +44,7 @@ yq -i ".oidc_providers[0].client_secret = \"${MATRIX_OIDC_SECRET_ID}\"" /data/ho
 yq -i ".oidc_providers[0].client_auth_method = \"client_secret_post\"" /data/homeserver.yaml
 
 yq -i --unwrapScalar=false ".oidc_providers[0].user_mapping_provider.config.localpart_template=\"{{ user.preferred_username | replace(':', '-') }}\"" /data/homeserver.yaml
-yq -i --unwrapScalar=false ".oidc_providers[0].user_mapping_provider.config.display_name_template=\"{{ user.preferred_username }}\"" /data/homeserver.yaml
+yq -i --unwrapScalar=false ".oidc_providers[0].user_mapping_provider.config.display_name_template=\"{{ user.name or user.preferred_username }}\"" /data/homeserver.yaml
 
 echo "First boot: Synapse may restart once while Let's Encrypt provisions TLS certificates."
 sleep 5
