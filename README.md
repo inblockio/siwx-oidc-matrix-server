@@ -96,6 +96,16 @@ This parameter enables or disables the reporting of statistical data related to 
 usage. When activated, the server will periodically send statistical reports to a specified endpoint or log them for
 monitoring and analysis purposes.
 
+## Security
+
+### .env file permissions
+
+The `.env` file contains secrets and must be readable only by its owner:
+
+```
+chmod 600 .env
+```
+
 ## Examples
 
 ### startup:

@@ -30,7 +30,7 @@ services:
       start_period: 30s
     volumes:
       - matrix_data:/data
-      - proxy_data_certs:/certs:rw
+      - proxy_data_certs:/certs:ro
 
   redis:
     image: redis
@@ -47,8 +47,6 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    ports:
-      - ${SIWEOIDC_PORT}:${SIWEOIDC_PORT}
     environment:
       SIWEOIDC_REDIS_URL: "redis://redis"
       SIWEOIDC_ADDRESS: 0.0.0.0
