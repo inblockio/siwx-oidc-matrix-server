@@ -16,27 +16,37 @@ services:
     env_file:
       - .env
     depends_on:
-      - siwe-oidc
-      - proxy
-      - letsencrypt
+      siwx-oidc:
+        condition: service_healthy
+      proxy:
+        condition: service_started
+      letsencrypt:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fSs http://localhost:${MATRIX_PORT}/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     volumes:
-      #      - matrix_data:/data
       - matrix_data:/data
       - proxy_data_certs:/certs:rw
 
   redis:
     image: redis
     healthcheck:
-      test: [ "CMD", "redis-cli","ping" ]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
     restart: always
 
-  siwe-oidc:
-    image: ghcr.io/spruceid/siwe_oidc:20221208081605782143
+  siwx-oidc:
+    image: ghcr.io/inblockio/siwx-oidc:latest
+    restart: unless-stopped
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     ports:
       - ${SIWEOIDC_PORT}:${SIWEOIDC_PORT}
     environment:
@@ -51,10 +61,25 @@ services:
       VIRTUAL_PORT: ${SIWEOIDC_PORT}
       LETSENCRYPT_HOST: ${SIWEOIDC_HOST}
       LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL}
+    volumes:
+      - ./siwx-oidc-config/siwe-oidc.toml:/siwx-oidc/siwe-oidc.toml:ro
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:${SIWEOIDC_PORT}/.well-known/openid-configuration"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   proxy:
     image: nginxproxy/nginx-proxy:alpine
     container_name: proxy_server_proxy_1
+    # Network aliases let Synapse resolve the OIDC issuer and Matrix
+    # hostnames to the proxy container directly, avoiding hairpin NAT.
+    networks:
+      default:
+        aliases:
+          - ${SIWEOIDC_HOST}
+          - ${MATRIX_HOST}
     labels:
       - "com.github.jrcs.letsencrypt_nginx_proxy_companion.nginx_proxy=true"
     environment:
@@ -69,7 +94,6 @@ services:
       - proxy_data_html:/usr/share/nginx/html:rw
       - proxy_data_certs:/etc/nginx/certs:ro
       - /var/run/docker.sock:/tmp/docker.sock:ro
-      #- "./max_upload_size.conf:/etc/nginx/conf.d/max_upload_size.conf"
     restart: unless-stopped
 
   letsencrypt:
@@ -85,7 +109,6 @@ services:
       - proxy_data_certs:/etc/nginx/certs:rw
       - /var/run/docker.sock:/var/run/docker.sock:ro
     restart: unless-stopped
-
 
 volumes:
   matrix_data:

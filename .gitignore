@@ -4,3 +4,5 @@
 /.idea/
 /siwe-oidc-matrix-server.iml
 /proxy/
+/siwx-oidc-config/
+/.env.local
