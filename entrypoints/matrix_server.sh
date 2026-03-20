@@ -29,9 +29,9 @@ yq -i --unwrapScalar=false ".tls_certificate_path = \"/data/certs/fullchain.pem\
 yq -i --unwrapScalar=false ".tls_private_key_path = \"/data/certs/key.pem\"" /data/homeserver.yaml
 
 #oidc-config
-yq -i ".oidc_providers[0].idp_id = \"siwe-oidc\"" /data/homeserver.yaml
-yq -i ".oidc_providers[0].idp_name = \"siwe-oidc\"" /data/homeserver.yaml
-yq -i ".oidc_providers[0].idp_brand = \"siwe-oidc\"" /data/homeserver.yaml
+yq -i ".oidc_providers[0].idp_id = \"siwx-oidc\"" /data/homeserver.yaml
+yq -i ".oidc_providers[0].idp_name = \"siwx-oidc\"" /data/homeserver.yaml
+yq -i ".oidc_providers[0].idp_brand = \"siwx-oidc\"" /data/homeserver.yaml
 
 #retention
 yq -i ".retention.enabled=true" /data/homeserver.yaml
@@ -41,11 +41,12 @@ yq -i ".oidc_providers[0].issuer = \"${SIWEOIDC_BASE_URL}\"" /data/homeserver.ya
 
 yq -i ".oidc_providers[0].client_id = \"${MATRIX_OIDC_CLIENT_ID}\"" /data/homeserver.yaml
 yq -i ".oidc_providers[0].client_secret = \"${MATRIX_OIDC_SECRET_ID}\"" /data/homeserver.yaml
+yq -i ".oidc_providers[0].client_auth_method = \"client_secret_post\"" /data/homeserver.yaml
 
-yq -i --unwrapScalar=false ".oidc_providers[0].user_mapping_provider.config.localpart_template=\"{{ user.preferred_username }}\"" /data/homeserver.yaml
-yq -i --unwrapScalar=false ".oidc_providers[0].user_mapping_provider.config.display_name_template=\"{{ user.name }}\"" /data/homeserver.yaml
+yq -i --unwrapScalar=false ".oidc_providers[0].user_mapping_provider.config.localpart_template=\"{{ user.preferred_username | replace(':', '-') }}\"" /data/homeserver.yaml
+yq -i --unwrapScalar=false ".oidc_providers[0].user_mapping_provider.config.display_name_template=\"{{ user.name or user.preferred_username }}\"" /data/homeserver.yaml
 
-echo "Server needs to restart 3-5 times to get certificates and connections!"
+echo "First boot: Synapse may restart once while Let's Encrypt provisions TLS certificates."
 sleep 5
 
 else

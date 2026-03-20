@@ -7,7 +7,7 @@ SIWEOIDC_SECRET_ID=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 13; echo)
 SIWEOIDC_HOST=
 SIWEOIDC_PORT=
 SIWEOIDC_DEFAULT_CLIENTS=
-RUST_LOG="siwe_oidc=error,tower_http=error"
+RUST_LOG="siwx_oidc=error,tower_http=error"
 SIWEOIDC_BASE_URL=
 MATRIX_HOST=
 MATRIX_PORT=
@@ -26,7 +26,7 @@ reset=$(tput sgr0)
 function printHelp() {
 echo "#################################################################"
 echo "General"
-echo "--ENABLE_DEBUG \"enable debug-mode (disable detach and set siweoidc debug-level)\""
+echo "--ENABLE_DEBUG \"enable debug-mode (disable detach and set siwx-oidc debug-level)\""
 echo "--WALLETCONNECT_PROJECT_ID (required) \"set WalletConnect project ID from cloud.walletconnect.com\""
 echo "--LETSENCRYPT_EMAIL (required) \"set letsencrypt-email\""
 echo "--reset \"resets/delete all data\""
@@ -35,12 +35,12 @@ echo "--stop \"stop all containers\""
 echo ""
 echo ""
 
-echo "SIWEOIDC-Config"
-echo "--SIWEOIDC_CLIENT_ID \"set siweoidc-client-id (if not set, we will generate one)\" !!!ONLY USE IT IF YOU KNOW WHAT YOU DO!!!"
-echo "--SIWEOIDC_SECRET_ID \"set siweoidc-secret-id (if not set, we will generate one)\" !!!ONLY USE IT IF YOU KNOW WHAT YOU DO!!!"
-echo "--SIWEOIDC_HOST (required) \"set siweoidc-sever e.g. siwe-oidc.example.com\""
-echo "--SIWEOIDC_PORT \"set siweoidc-port e.g. 8081 \" !!!ONLY USE IT IF YOU KNOW WHAT YOU DO!!!"
-echo "--SIWEOIDC_DEFAULT_CLIENTS \"set siweoidc_default_clients e.g \"'{<SIWEOIDC_CLIENT_ID>=\"{\\\"secret\\\":\\\"<SIWEOIDC_SECRET_ID>\\\", \\\"metadata\\\": {\\\"redirect_uris\\\": [\\\"<MATRIX_BASE_URL>/_synapse/client/oidc/callback\\\"]}}\"}'\" \" !!!ONLY USE IT IF YOU KNOW WHAT YOU DO!!!"
+echo "SIWX-OIDC Config"
+echo "--SIWEOIDC_CLIENT_ID \"set siwx-oidc client-id (if not set, we will generate one)\" !!!ONLY USE IT IF YOU KNOW WHAT YOU DO!!!"
+echo "--SIWEOIDC_SECRET_ID \"set siwx-oidc secret-id (if not set, we will generate one)\" !!!ONLY USE IT IF YOU KNOW WHAT YOU DO!!!"
+echo "--SIWEOIDC_HOST (required) \"set siwx-oidc server e.g. siwx-oidc.example.com\""
+echo "--SIWEOIDC_PORT \"set siwx-oidc port e.g. 8081 \" !!!ONLY USE IT IF YOU KNOW WHAT YOU DO!!!"
+echo "--SIWEOIDC_DEFAULT_CLIENTS \"set siwx-oidc default_clients e.g \"'{<SIWEOIDC_CLIENT_ID>=\"{\\\"secret\\\":\\\"<SIWEOIDC_SECRET_ID>\\\", \\\"metadata\\\": {\\\"redirect_uris\\\": [\\\"<MATRIX_BASE_URL>/_synapse/client/oidc/callback\\\"]}}\"}'\" \" !!!ONLY USE IT IF YOU KNOW WHAT YOU DO!!!"
 
 echo ""
 echo ""
@@ -75,7 +75,7 @@ function resetAllData() {
                 esac
 }
 
-function echoEroor() {
+function echoError() {
     text=$1
     echo "${bold}${red}${text}${reset}"
 }
@@ -89,25 +89,45 @@ else
 fi
 }
 
+function generateSigningKeyConfig() {
+  # Generate persistent ES256 signing key in a TOML config file.
+  # This file is mounted into the siwx-oidc container so the key
+  # survives container restarts (tokens remain valid across redeploys).
+  mkdir -p siwx-oidc-config
+  if [ ! -f siwx-oidc-config/siwe-oidc.toml ]; then
+    PEM=$(openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 2>/dev/null)
+    cat > siwx-oidc-config/siwe-oidc.toml << TOMLEOF
+[signing_key_pem]
+___figment_value_id = "string"
+___figment_value_value = """
+${PEM}
+"""
+TOMLEOF
+    echo "Generated persistent OIDC signing key in siwx-oidc-config/siwe-oidc.toml"
+  else
+    echo "OIDC signing key already exists, keeping existing key"
+  fi
+}
+
 function checkRequiredArguments() {
 
     if [[ -z "${LETSENCRYPT_EMAIL}" ]]; then
-      echoEroor "missing LETSENCRYPT_EMAIL!!!!"
-      echoEroor "use --LETSENCRYPT_EMAIL"
+      echoError "missing LETSENCRYPT_EMAIL!!!!"
+      echoError "use --LETSENCRYPT_EMAIL"
       printHelp
       exit 1
     fi
 
     if [[ -z "${MATRIX_HOST}" ]]; then
-      echoEroor "missing MATRIX_HOST!!!!"
-      echoEroor "use --MATRIX_HOST"
+      echoError "missing MATRIX_HOST!!!!"
+      echoError "use --MATRIX_HOST"
       printHelp
       exit 1
     fi
 
     if [[ -z "${SIWEOIDC_HOST}" ]]; then
-      echoEroor "missing SIWEOIDC_HOST!!!!"
-      echoEroor "use --SIWEOIDC_HOST"
+      echoError "missing SIWEOIDC_HOST!!!!"
+      echoError "use --SIWEOIDC_HOST"
       printHelp
       exit 1
     fi
@@ -196,7 +216,7 @@ while [ "$#" -gt 0 ]; do
                 shift
                 ;;
             --ENABLE_DEBUG)
-                RUST_LOG="siwe_oidc=debug,tower_http=trace"
+                RUST_LOG="siwx_oidc=debug,tower_http=trace"
                 ATTACH=true
                 shift
                 ;;
@@ -244,7 +264,7 @@ fillMissing
 if test -f "$ENV_FILE"; then
   source .env
   echo ".env found! skipping setup!"
-  echo "if you want a new setup: rm .env && docker volume rm siwe-oidc-matrix-server_matrix_data"
+  echo "if you want a new setup: rm .env && docker volume rm siwx-oidc-matrix-server_matrix_data"
   startupServer
 
 else
@@ -253,6 +273,9 @@ else
   then
   SIWEOIDC_DEFAULT_CLIENTS="'{$SIWEOIDC_CLIENT_ID=\"{\\\"secret\\\":\\\"$SIWEOIDC_SECRET_ID\\\", \\\"metadata\\\": {\\\"redirect_uris\\\": [\\\"$MATRIX_BASE_URL/_synapse/client/oidc/callback\\\"]}}\"}'"
   fi
+
+  # Generate persistent OIDC signing key config
+  generateSigningKeyConfig
 
   if [ ! -f ./.env ]; then
       touch .env
@@ -269,6 +292,7 @@ else
   echo "RUST_LOG=$RUST_LOG" >> .env
 
 
+  echo "" >> .env
   echo "#GENERAL_CONFIG" >> .env
   echo "LETSENCRYPT_EMAIL=$LETSENCRYPT_EMAIL" >> .env
   echo "WALLETCONNECT_PROJECT_ID=$WALLETCONNECT_PROJECT_ID" >> .env
@@ -287,8 +311,3 @@ else
   startupServer
 
 fi
-
-
-
-
-
