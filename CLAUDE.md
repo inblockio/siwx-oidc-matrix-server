@@ -75,6 +75,14 @@ deployment you must also edit `/data/homeserver.yaml` directly inside the
   --SIWEOIDC_HOST siwx-oidc.example.com \
   --LETSENCRYPT_EMAIL you@example.com
 
+# Update siwx-oidc to latest image
+# IMPORTANT: Always restart Synapse after redeploying siwx-oidc.
+# Synapse caches the OIDC JWK on startup; if siwx-oidc restarts with a
+# different key derivation, Synapse will reject ID tokens (bad_signature).
+docker compose pull siwx-oidc
+docker compose up -d siwx-oidc
+docker compose restart matrix_synapse
+
 # Rebuild Synapse image after entrypoint changes
 docker compose build matrix_synapse
 
