@@ -22,11 +22,12 @@ services:
         condition: service_started
       letsencrypt:
         condition: service_started
-    # Route OIDC issuer hostname to the nginx proxy container so Synapse
-    # can reach siwx-oidc via HTTPS without hairpin NAT through the
-    # external IP (which times out from inside Docker).
-    extra_hosts:
-      - "${SIWEOIDC_HOST}:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fSs http://localhost:${MATRIX_PORT}/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     volumes:
       - matrix_data:/data
       - proxy_data_certs:/certs:rw
@@ -72,6 +73,13 @@ services:
   proxy:
     image: nginxproxy/nginx-proxy:alpine
     container_name: proxy_server_proxy_1
+    # Network aliases let Synapse resolve the OIDC issuer and Matrix
+    # hostnames to the proxy container directly, avoiding hairpin NAT.
+    networks:
+      default:
+        aliases:
+          - ${SIWEOIDC_HOST}
+          - ${MATRIX_HOST}
     labels:
       - "com.github.jrcs.letsencrypt_nginx_proxy_companion.nginx_proxy=true"
     environment:
