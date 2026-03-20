@@ -43,7 +43,7 @@ yq -i ".oidc_providers[0].client_id = \"${MATRIX_OIDC_CLIENT_ID}\"" /data/homese
 yq -i ".oidc_providers[0].client_secret = \"${MATRIX_OIDC_SECRET_ID}\"" /data/homeserver.yaml
 yq -i ".oidc_providers[0].token_endpoint_auth_method = \"client_secret_post\"" /data/homeserver.yaml
 
-yq -i --unwrapScalar=false ".oidc_providers[0].user_mapping_provider.config.localpart_template=\"{{ user.preferred_username | replace('did:pkh:eip155:1:', '') }}\"" /data/homeserver.yaml
+yq -i --unwrapScalar=false ".oidc_providers[0].user_mapping_provider.config.localpart_template=\"{{ user.preferred_username | replace(':', '-') }}\"" /data/homeserver.yaml
 yq -i --unwrapScalar=false ".oidc_providers[0].user_mapping_provider.config.display_name_template=\"{{ user.preferred_username }}\"" /data/homeserver.yaml
 
 echo "First boot: Synapse may restart once while Let's Encrypt provisions TLS certificates."
