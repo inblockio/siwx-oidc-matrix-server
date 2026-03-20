@@ -13,6 +13,7 @@ services:
       VIRTUAL_PORT: ${MATRIX_PORT}
       LETSENCRYPT_HOST: ${MATRIX_HOST}
       LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL}
+      MATRIX_ADMIN_DID: ${MATRIX_ADMIN_DID:-}
     env_file:
       - .env
     depends_on:
@@ -54,13 +55,12 @@ services:
       SIWEOIDC_PORT: ${SIWEOIDC_PORT}
       SIWEOIDC_DEFAULT_CLIENTS: ${SIWEOIDC_DEFAULT_CLIENTS}
       SIWEOIDC_BASE_URL: ${SIWEOIDC_BASE_URL}
+      SIWEOIDC_SIGNING_KEY_PEM: ${SIWEOIDC_SIGNING_KEY_PEM}
       RUST_LOG: ${RUST_LOG}
       VIRTUAL_HOST: ${SIWEOIDC_HOST}
       VIRTUAL_PORT: ${SIWEOIDC_PORT}
       LETSENCRYPT_HOST: ${SIWEOIDC_HOST}
       LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL}
-    volumes:
-      - ./siwx-oidc-config/siwe-oidc.toml:/siwx-oidc/siwe-oidc.toml:ro
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:${SIWEOIDC_PORT}/.well-known/openid-configuration"]
       interval: 10s

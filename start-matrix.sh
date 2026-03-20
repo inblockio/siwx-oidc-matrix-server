@@ -2,8 +2,8 @@
 
 ENV_FILE=./.env
 
-SIWEOIDC_CLIENT_ID=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 13; echo)
-SIWEOIDC_SECRET_ID=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 13; echo)
+SIWEOIDC_CLIENT_ID=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 32; echo)
+SIWEOIDC_SECRET_ID=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 32; echo)
 SIWEOIDC_HOST=
 SIWEOIDC_PORT=
 SIWEOIDC_DEFAULT_CLIENTS=
@@ -87,24 +87,15 @@ else
 fi
 }
 
-function generateSigningKeyConfig() {
-  # Generate persistent ES256 signing key in a TOML config file.
-  # This file is mounted into the siwx-oidc container so the key
-  # survives container restarts (tokens remain valid across redeploys).
-  mkdir -p siwx-oidc-config
-  if [ ! -f siwx-oidc-config/siwe-oidc.toml ]; then
-    PEM=$(openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 2>/dev/null)
-    cat > siwx-oidc-config/siwe-oidc.toml << TOMLEOF
-[signing_key_pem]
-___figment_value_id = "string"
-___figment_value_value = """
-${PEM}
-"""
-TOMLEOF
-    echo "Generated persistent OIDC signing key in siwx-oidc-config/siwe-oidc.toml"
-  else
-    echo "OIDC signing key already exists, keeping existing key"
-  fi
+function appendSigningKey() {
+  # Generate a persistent ES256 signing key and append it to .env as a single-line
+  # double-quoted value. Docker Compose (godotenv) converts \n → actual newlines
+  # when passing to the container, so the app receives a valid PEM string.
+  # The key lives only in .env (chmod 600, gitignored) — no separate file on disk.
+  PEM=$(openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 2>/dev/null)
+  PEM_LINE=$(printf '%s' "$PEM" | sed ':a;N;$!ba;s/\n/\\n/g')
+  echo "SIWEOIDC_SIGNING_KEY_PEM=\"${PEM_LINE}\"" >> .env
+  echo "Generated persistent OIDC signing key (stored in .env)"
 }
 
 function checkRequiredArguments() {
@@ -260,15 +251,9 @@ else
   SIWEOIDC_DEFAULT_CLIENTS="'{$SIWEOIDC_CLIENT_ID=\"{\\\"secret\\\":\\\"$SIWEOIDC_SECRET_ID\\\", \\\"metadata\\\": {\\\"redirect_uris\\\": [\\\"$MATRIX_BASE_URL/_synapse/client/oidc/callback\\\"]}}\"}'"
   fi
 
-  # Generate persistent OIDC signing key config
-  generateSigningKeyConfig
-
-  if [ ! -f ./.env ]; then
-      touch .env
-  else
-    rm .env
-    touch .env
-  fi
+  rm -f .env
+  touch .env
+  chmod 600 .env
 
   echo "#SIWEOIDC-CONFIG" >> .env
   echo "SIWEOIDC_HOST=$SIWEOIDC_HOST" >> .env
@@ -276,14 +261,13 @@ else
   echo "SIWEOIDC_DEFAULT_CLIENTS=$SIWEOIDC_DEFAULT_CLIENTS" >> .env
   echo "SIWEOIDC_BASE_URL=$SIWEOIDC_BASE_URL" >> .env
   echo "RUST_LOG=$RUST_LOG" >> .env
-
+  appendSigningKey
 
   echo "" >> .env
   echo "#GENERAL_CONFIG" >> .env
   echo "LETSENCRYPT_EMAIL=$LETSENCRYPT_EMAIL" >> .env
 
-
-
+  echo "" >> .env
   echo "#MATRIX-CONFIG" >> .env
   echo "MATRIX_OIDC_CLIENT_ID=$SIWEOIDC_CLIENT_ID" >> .env
   echo "MATRIX_OIDC_SECRET_ID=$SIWEOIDC_SECRET_ID" >> .env
