@@ -126,6 +126,10 @@ chmod 600 .env
 ./start-matrix.sh --reset
 ````
 
+## Contributing
+
+Open contribution requests (new integrations, features, and services) are tracked in the [request-for-contribution](https://github.com/inblockio/request-for-contribution) repo. Browse open requests there if you want to help or propose new work.
+
 ## Issues/Integrations
 ### App-Element-Android:
 https://github.com/element-hq/element-meta/discussions/2556
