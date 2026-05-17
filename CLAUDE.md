@@ -23,7 +23,7 @@ siwx-oidc-matrix-server/
 | Service          | Image / Build                              | Port(s)       | Notes |
 |------------------|--------------------------------------------|---------------|-------|
 | `matrix_synapse` | `./dockerfiles/Dockerfile` (Synapse-based) | 8448          | Depends on `siwx-oidc` healthcheck |
-| `siwx-oidc`      | `ghcr.io/inblockio/siwx-oidc:latest`       | `SIWEOIDC_PORT` (default 8081) | CAIP-122 OIDC provider |
+| `siwx-oidc`      | Built from `../siwx-oidc` (local)          | `SIWEOIDC_PORT` (default 8081) | CAIP-122 OIDC provider + MSC3861 token introspection |
 | `redis`          | `redis`                                    | internal      | Session store for siwx-oidc |
 | `proxy`          | `nginxproxy/nginx-proxy:alpine`            | 80, 443       | Reverse proxy; aliases both hostnames on the Docker network |
 | `letsencrypt`    | `nginxproxy/acme-companion`                | —             | Auto-provisions TLS for proxy |
@@ -130,6 +130,21 @@ docker compose exec matrix_synapse sh -c '
 '
 docker compose restart matrix_synapse
 ```
+
+## MSC3861 Delegated Auth (feat/msc3861 branch)
+
+The stack now uses MSC3861 delegated authentication instead of legacy OIDC provider mode:
+
+- Synapse delegates ALL auth to siwx-oidc via token introspection
+- Opaque tokens: `mat_` (access, 300s TTL), `mcr_` (refresh, 86400s TTL)
+- User provisioning: siwx-oidc calls `/_synapse/mas/` endpoints to create users/devices
+- Device lifecycle: `SIWX_` prefixed device IDs, cross-signing reset on every login
+- Token revocation: `POST /oauth2/revoke` + `POST /_matrix/client/v3/logout`
+
+Key env vars:
+- `MAS_SHARED_SECRET`: Shared between Synapse and siwx-oidc for introspection auth
+- `SIWEOIDC_MAS_SHARED_SECRET`: Same value, consumed by siwx-oidc (figment prefix)
+- `SIWEOIDC_SYNAPSE_ENDPOINT`: How siwx-oidc reaches Synapse (e.g., `http://matrix_synapse:8080`)
 
 ## Security posture
 
