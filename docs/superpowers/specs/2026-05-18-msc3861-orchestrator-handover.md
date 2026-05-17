@@ -14,6 +14,7 @@ This document is a self-contained briefing for an orchestrator session that will
 |---|---|---|---|
 | siwx-oidc-matrix-server | `/home/system-001/siwx-oidc-matrix-server` | create `feat/msc3861` from `master` | `git@github.com:inblockio/siwx-oidc-matrix-server.git` |
 | siwx-oidc | **NOT CLONED** - clone to `/home/system-001/siwx-oidc` | create `feat/msc3861` from `main` | `git@github.com:inblockio/siwx-oidc.git` |
+| aqua-rs-auth | `/home/system-001/aqua-rs-auth` | use as dependency (path or crates.io) | local |
 
 **First step**: Clone siwx-oidc if not present:
 ```bash
@@ -22,6 +23,58 @@ git clone git@github.com:inblockio/siwx-oidc.git
 cd siwx-oidc
 git checkout -b feat/msc3861
 ```
+
+## Shared Dependency: aqua-rs-auth
+
+**Crate name**: `aqua-auth` (at `/home/system-001/aqua-rs-auth`)
+
+aqua-rs-auth is inblock.io's universal CAIP-122 authentication library. It provides the cryptographic primitives that both siwx-oidc and the integration test need. Using it eliminates duplicate crypto code and guarantees that server and test produce/verify identical message formats.
+
+### What aqua-auth provides (use these, don't reimplement)
+
+| Function | Purpose | Used by |
+|---|---|---|
+| `verify_caip122(did, message, signature)` | Dispatch signature verification (EIP-191, Ed25519, P-256) | siwx-oidc server |
+| `build_message(MessageParams)` | Construct spec-compliant CAIP-122 messages | siwx-oidc server + test |
+| `address_from_verifying_key(key)` | Derive Ethereum address from k256 key | Integration test |
+| `eip55_checksum(addr)` | EIP-55 checksum an address | Both |
+| `address_from_did(did)` | Extract address bytes from eip155 DID | siwx-oidc server |
+| `identifier_from_did(did)` | Extract the identifier portion for localpart derivation | siwx-oidc server |
+| `parse_did_namespace(did)` | Determine which verifier to use | siwx-oidc server |
+| `client::authenticate(http, base_url, did, sign_fn)` | Drive full challenge-response flow (feature: `client`) | Integration test |
+
+### What aqua-auth does NOT own (stays in siwx-oidc)
+
+| Concern | Why not in aqua-auth |
+|---|---|
+| Redis storage (tokens, sessions, challenges) | aqua-auth is storage-agnostic; siwx-oidc owns its Redis backend |
+| Synapse provisioning HTTP calls | Matrix-specific; not generic auth |
+| OIDC token issuance (mat_, mcr_ tokens) | Protocol-specific to Matrix/MAS |
+| HTTP route handlers (Axum) | aqua-auth is transport-agnostic |
+
+### Design principle
+
+aqua-auth = **pure crypto + protocol types + message format**. Storage and transport are the consumer's concern. If a pluggable storage trait is needed later, it goes in aqua-auth as a trait; Redis impl stays in siwx-oidc.
+
+### Cargo.toml additions for siwx-oidc
+
+```toml
+[dependencies]
+aqua-auth = { path = "../aqua-rs-auth" }
+# OR when published: aqua-auth = "0.1"
+
+[dev-dependencies]
+aqua-auth = { path = "../aqua-rs-auth", features = ["client"] }
+```
+
+### Impact on siwx-oidc code
+
+When agents modify siwx-oidc's signature verification or message construction:
+1. **Replace** any custom `verify_eip191`, `verify_ed25519`, `verify_p256` with `aqua_auth::verify_caip122`
+2. **Replace** custom DID parsing with `aqua_auth::{address_from_did, identifier_from_did, parse_did_namespace}`
+3. **Replace** custom CAIP-122 message building with `aqua_auth::build_message`
+4. **Verify** that the existing siwx-oidc message format matches aqua-auth's output (compare a known test vector). If they differ, align on aqua-auth's format (it's spec-compliant).
+5. If siwx-oidc has helper functions like `eth_address_from_key` or `eip55_checksum`, replace with aqua-auth equivalents
 
 ## Parallelization Map
 
@@ -280,6 +333,8 @@ Response: {} (200)
 
 **Key integration point**: The `sign_in` handler in `src/oidc.rs` is where wallet verification happens. After signature verification succeeds, before generating the auth code, insert the Synapse provisioning calls.
 
+**aqua-auth integration**: If the `sign_in` handler currently has custom signature verification logic, replace it with `aqua_auth::verify_caip122(did, message, signature)`. Use `aqua_auth::identifier_from_did(did)` to derive the localpart for Synapse provisioning calls. Use `aqua_auth::address_from_did(did)` if you need the raw address bytes.
+
 ---
 
 ### Agent G: Integration Test (Wave 3)
@@ -303,7 +358,7 @@ use k256::ecdsa::SigningKey;
 use rand::rngs::OsRng;
 use reqwest::{Client, redirect::Policy};
 use sha2::{Sha256, Digest};
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use aqua_auth::{address_from_verifying_key, eip55_checksum, build_message, MessageParams};
 
 #[tokio::test]
 async fn full_lifecycle() {
@@ -311,9 +366,11 @@ async fn full_lifecycle() {
     let matrix_host = std::env::var("MATRIX_HOST").unwrap_or("http://localhost:8080".into());
     let siwx_host = std::env::var("SIWEOIDC_HOST").unwrap_or("http://localhost:8081".into());
 
-    // 1. Generate keypair
+    // 1. Generate keypair (aqua-auth provides address derivation)
     let signing_key = SigningKey::random(&mut OsRng);
-    let address = eth_address_from_key(&signing_key);
+    let verifying_key = signing_key.verifying_key();
+    let addr_bytes = address_from_verifying_key(verifying_key);
+    let address = eip55_checksum(&addr_bytes);
     let did = format!("did:pkh:eip155:1:{}", address);
 
     // 2. Discover auth endpoints
@@ -336,9 +393,16 @@ async fn full_lifecycle() {
     let session_cookie = extract_cookie(&authz_resp, "session");
     let nonce = extract_nonce_from_redirect(&authz_resp);
 
-    // 5. Build + sign CAIP-122 message
-    let message = build_caip122_message(&address, &siwx_host, &nonce);
-    let signature = eip191_sign(&signing_key, &message);
+    // 5. Build CAIP-122 message (aqua-auth ensures format matches server)
+    let message = build_message(&MessageParams {
+        did: &did,
+        domain: &siwx_host,
+        uri: "http://localhost:9999/cb",
+        nonce: &nonce,
+        issued_at: chrono::Utc::now(),
+        expiration_time: chrono::Utc::now() + chrono::Duration::minutes(5),
+    }).unwrap();
+    let signature = eip191_sign(&signing_key, &message); // custom helper (aqua-auth verifies, doesn't sign)
     let siwx_cookie = serde_json::json!({"did": did, "message": message, "signature": signature});
 
     // 6. Submit to /sign_in
@@ -382,23 +446,28 @@ async fn full_lifecycle() {
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", features = ["json", "cookies"] }
+aqua-auth = { path = "../aqua-rs-auth", features = ["client"] }
 k256 = { version = "0.13", features = ["ecdsa"] }
 sha2 = "0.10"
-sha3 = "0.10"  # for keccak256 (eth address derivation)
-hex = "0.4"
-base64 = "0.22"
 serde_json = "1"
 urlencoding = "2"
 rand = "0.8"
+hex = "0.4"
 ```
 
-**Helper functions needed** (write these in the test file):
-- `eth_address_from_key(key: &SigningKey) -> String` (keccak256 of uncompressed pubkey, take last 20 bytes, EIP-55 checksum)
-- `eip191_sign(key: &SigningKey, message: &str) -> String` (prefix + keccak256 + sign + recovery byte)
-- `build_caip122_message(address, domain, nonce) -> String` (EIP-4361 format)
+**aqua-auth provides** (do NOT reimplement):
+- `aqua_auth::address_from_verifying_key(key)` -> `[u8; 20]` (replaces custom keccak256 + slice)
+- `aqua_auth::eip55_checksum(addr)` -> `String` (replaces custom EIP-55)
+- `aqua_auth::build_message(MessageParams)` -> CAIP-122 message (replaces custom message construction)
+- `aqua_auth::client::authenticate(http, base_url, did, sign_fn)` -> drives the challenge-response flow (optional: can simplify the test significantly if the siwx-oidc API matches the expected flow)
+
+**Helper functions still needed** (write these in the test file):
+- `eip191_sign(key: &SigningKey, message: &str) -> String` (EIP-191 prefix + keccak256 + sign + recovery byte; aqua-auth verifies but doesn't sign)
 - `extract_cookie(response, name) -> String`
 - `extract_nonce_from_redirect(response) -> String`
 - `extract_code_from_location(response) -> String`
+
+**Note on signing**: aqua-auth is a verification library, not a signing library. The test must sign messages itself using `k256::ecdsa::SigningKey`. Reference implementation: `aqua-rs-auth/src/verify_eip191.rs` shows the exact prefix format and hash construction to replicate in reverse (sign instead of verify).
 
 **Running**: 
 ```bash
