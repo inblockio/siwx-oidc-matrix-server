@@ -1,0 +1,11 @@
+FROM vectorim/element-web:latest
+
+COPY config/element-config.json /app/config.json
+COPY config/siwx-redirect.js /app/siwx-redirect.js
+COPY config/siwx-splash.html /app/siwx-splash.html
+COPY config/inblockio_logo_dark.png /app/inblockio_logo_dark.png
+COPY entrypoints/element_entrypoint.sh /docker-entrypoint.sh
+
+RUN chmod +x /docker-entrypoint.sh
+
+ENTRYPOINT ["/docker-entrypoint.sh"]
