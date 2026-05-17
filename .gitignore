@@ -1,8 +1,6 @@
 /mount_point/
 /.env
 /homeserver.yaml
-/.idea/
-/siwe-oidc-matrix-server.iml
 /proxy/
 /siwx-oidc-config/
 /.env.local
