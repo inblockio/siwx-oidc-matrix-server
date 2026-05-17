@@ -74,6 +74,12 @@ services:
     environment:
       MATRIX_BASE_URL: ${MATRIX_BASE_URL}
       MATRIX_HOST: ${MATRIX_HOST}
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:8080/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     depends_on:
       matrix_synapse:
         condition: service_healthy
