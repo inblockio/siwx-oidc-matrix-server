@@ -1,0 +1,12 @@
+{
+  "default_server_config": {
+    "m.homeserver": {
+      "base_url": "%%MATRIX_BASE_URL%%",
+      "server_name": "%%MATRIX_HOST%%"
+    }
+  },
+  "disable_custom_urls": true,
+  "disable_guests": true,
+  "disable_login_language_selector": true,
+  "brand": "inblock.io Chat"
+}
