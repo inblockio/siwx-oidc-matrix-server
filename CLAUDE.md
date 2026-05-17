@@ -27,6 +27,7 @@ siwx-oidc-matrix-server/
 | `redis`          | `redis`                                    | internal      | Session store for siwx-oidc |
 | `proxy`          | `nginxproxy/nginx-proxy:alpine`            | 80, 443       | Reverse proxy; aliases both hostnames on the Docker network |
 | `letsencrypt`    | `nginxproxy/acme-companion`                | —             | Auto-provisions TLS for proxy |
+| `element-web`    | `./dockerfiles/Dockerfile.element` (Element Web) | 80 (internal) | SIWX auto-login client, served via proxy at `${CLIENT_HOST}` |
 
 Volumes: `matrix_data` (Synapse data), `proxy_data_*` (nginx/acme state).
 
@@ -73,6 +74,20 @@ on every container start. Silently defers if the user hasn't logged in yet.
 and read with `os.environ` — never interpolated into Python source code. Input is validated
 against `^did:[a-z]+:[a-z0-9]+:[a-z0-9]+:0x[0-9a-fA-F]{40}$` before use.
 
+## Element Web client
+
+A self-hosted Element Web instance is included in the stack, accessible at
+`https://${CLIENT_HOST}`. It is pre-configured to connect to the local Synapse
+and auto-redirects unauthenticated users to the SIWX OIDC login flow.
+
+The redirect logic lives in `config/siwx-redirect.js`. A branded splash screen
+(`config/siwx-splash.html`) displays briefly while the redirect occurs. Both are
+injected into Element's `index.html` at container start by
+`entrypoints/element_entrypoint.sh`.
+
+No Element Web fork is needed. The stock `vectorim/element-web` image is used as
+a base. To update Element, change the tag in `dockerfiles/Dockerfile.element`.
+
 ## Common operations
 
 ```bash
@@ -80,6 +95,7 @@ against `^did:[a-z]+:[a-z0-9]+:[a-z0-9]+:0x[0-9a-fA-F]{40}$` before use.
 ./start-matrix.sh \
   --MATRIX_HOST matrix.example.com \
   --SIWEOIDC_HOST siwx-oidc.example.com \
+  --CLIENT_HOST element.example.com \
   --LETSENCRYPT_EMAIL you@example.com
 
 # Stop
