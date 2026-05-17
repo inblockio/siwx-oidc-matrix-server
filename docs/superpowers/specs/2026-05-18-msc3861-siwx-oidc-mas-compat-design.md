@@ -278,13 +278,76 @@ Since this is dev/staging only, a clean reset (`--reset`) is also acceptable.
 
 ## Success Criteria
 
-1. Wallet login produces a trusted session with no verification prompt
-2. Cross-signing reset happens automatically without secondary auth challenge
-3. Subsequent logins on new clients are seamless (no "verify this device" dialog)
-4. Token introspection responds in <10ms (Redis lookup + shared secret comparison)
-5. Legacy Matrix clients (Element Web with traditional login) can authenticate via compat endpoints
-6. `docker compose up` works end-to-end on the feature branch
-7. Master branch remains deployable with current traditional OIDC throughout development
+### Gate: Unattended Integration Test Passes
+
+The single gate for "done" is a Rust integration test (`cargo test --test e2e_msc3861`) that runs against the Docker Compose stack and verifies the complete lifecycle without human interaction:
+
+```rust
+// tests/e2e_msc3861.rs (in siwx-oidc repo)
+//
+// Prerequisites: docker compose up (feat/msc3861 branches of both repos)
+// Env: MATRIX_HOST, SIWEOIDC_HOST, MAS_SHARED_SECRET
+
+#[tokio::test]
+async fn full_lifecycle() {
+    // 1. Generate random Ethereum keypair (k256)
+    // 2. GET /_matrix/client/v1/auth_metadata -> discover endpoints
+    // 3. Generate PKCE code_verifier + code_challenge
+    // 4. GET /authorize -> capture session cookie + nonce
+    // 5. Build CAIP-122 message, EIP-191 sign with generated key
+    // 6. GET /sign_in with Cookie: session=...; siwx={did,message,signature}
+    //    -> capture auth code from 302 Location
+    // 7. POST /oauth2/token with code + code_verifier -> mat_ token + device_id
+    // 8. GET /_matrix/client/v3/account/whoami -> assert user_id matches DID
+    // 9. POST /_matrix/client/v3/createRoom -> assert 200
+    // 10. POST /_matrix/client/v3/rooms/{id}/send/m.room.message -> assert 200
+    // 11. POST /oauth2/revoke -> assert 200
+    // 12. GET /_matrix/client/v3/account/whoami -> assert 401 (token dead)
+}
+
+#[tokio::test]
+async fn returning_user_new_device() {
+    // Same wallet signs in twice (different device_ids)
+    // Both sessions work concurrently
+    // No cross-signing verification prompt (allow_cross_signing_reset was called)
+}
+
+#[tokio::test]
+async fn refresh_token_flow() {
+    // Login, wait for access token expiry (or use short TTL in test config)
+    // Exchange refresh token for new access token
+    // Old access token rejected, new one works
+}
+
+#[tokio::test]
+async fn introspection_performance() {
+    // Login, then call whoami 100 times
+    // Measure p99 latency (proxy for introspection speed)
+    // Assert < 50ms per request (Synapse caches, so mostly cache hits)
+}
+```
+
+### Acceptance Criteria (Derived from Tests)
+
+| # | Criterion | Verified By |
+|---|---|---|
+| 1 | Fresh wallet can login and get Matrix access | `full_lifecycle` steps 1-8 |
+| 2 | Authenticated user can create rooms and send messages | `full_lifecycle` steps 9-10 |
+| 3 | Token revocation kills the session and removes device | `full_lifecycle` steps 11-12 |
+| 4 | Same wallet, second login, no verification prompt | `returning_user_new_device` |
+| 5 | Refresh token extends session without re-auth | `refresh_token_flow` |
+| 6 | Introspection is fast enough for production use | `introspection_performance` |
+| 7 | Element Web at element.inblock.io completes OIDC login | Manual verification (parallel agent) |
+| 8 | `docker compose up` brings up full stack from clean state | CI / test setup |
+| 9 | Master branch remains deployable with traditional OIDC | No changes to master until merge |
+
+### What Makes This Unattended
+
+- **No browser**: The `siwx` cookie (containing `{did, message, signature}`) is set directly via HTTP `Cookie` header. siwx-oidc cannot distinguish this from a browser-based flow.
+- **No MetaMask**: EIP-191 signing is done programmatically with `k256` crate (same approach as siwx-oidc's own `e2e_flow` test in `src/oidc.rs:1100-1279`).
+- **No manual redirect following**: `reqwest` with redirect policy set to manual; test captures Location headers and drives the flow step by step.
+- **No pre-existing state**: Each test generates fresh keys. No seed phrases, no pre-registered accounts.
+- **Self-verifying**: Assertions in the test itself; no human checking logs.
 
 ## Out of Scope
 
