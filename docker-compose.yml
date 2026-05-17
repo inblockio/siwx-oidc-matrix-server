@@ -4,8 +4,8 @@ services:
     build:
       context: .
       dockerfile: dockerfiles/Dockerfile
-    ports:
-      - "8448:${MATRIX_PORT}"
+    expose:
+      - "${MATRIX_PORT}"
     environment:
       SYNAPSE_SERVER_NAME: ${MATRIX_HOST}
       SYNAPSE_REPORT_STATS: ${MATRIX_REPORT_STATS}

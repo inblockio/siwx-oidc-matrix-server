@@ -25,6 +25,9 @@ yq -i ".experimental_features.msc3861.account_management_url = \"${SIWEOIDC_BASE
 yq -i ".experimental_features.msc3861.client_id = \"0000000000000000000SYNAPSE\"" /data/homeserver.yaml
 yq -i ".experimental_features.msc3861.admin_token = \"${MAS_SHARED_SECRET}\"" /data/homeserver.yaml
 
+#federation via well-known delegation (Caddy serves .well-known on port 443)
+yq -i ".serve_server_wellknown = false" /data/homeserver.yaml
+
 #retention
 yq -i ".retention.enabled=true" /data/homeserver.yaml
 yq -i ".retention.default_policy.allowed_lifetime_max= \"${MATRIX_MESSAGE_LIFETIME}\"" /data/homeserver.yaml

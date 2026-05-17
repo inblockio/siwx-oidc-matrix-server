@@ -53,17 +53,20 @@ ssh -i "$SSH_KEY" "$SERVER" bash -s << 'REMOTE_SCRIPT'
 if [ -d /home/matrix/siwx-oidc/.git ]; then
   cd /home/matrix/siwx-oidc
   git fetch origin
-  git reset --hard origin/master
-  echo "siwx-oidc repo updated."
+  git checkout feat/msc3861 2>/dev/null || git checkout -b feat/msc3861 origin/feat/msc3861
+  git reset --hard origin/feat/msc3861
+  echo "siwx-oidc repo updated (feat/msc3861)."
 else
-  git clone https://github.com/inblockio/siwx-oidc.git /home/matrix/siwx-oidc
-  echo "siwx-oidc repo cloned."
+  git clone -b feat/msc3861 https://github.com/inblockio/siwx-oidc.git /home/matrix/siwx-oidc
+  echo "siwx-oidc repo cloned (feat/msc3861)."
 fi
 REMOTE_SCRIPT
 
 echo ""
-echo "[4/6] Making scripts executable..."
+echo "[4/6] Making scripts executable and fixing paths..."
 ssh -i "$SSH_KEY" "$SERVER" "chmod +x ${REMOTE_DIR}/start-matrix.sh ${REMOTE_DIR}/entrypoints/*.sh"
+# Fix siwx-oidc build context for server layout (./siwx-oidc instead of ../siwx-oidc)
+ssh -i "$SSH_KEY" "$SERVER" "sed -i 's|context: \.\./siwx-oidc|context: ./siwx-oidc|' ${REMOTE_DIR}/docker-compose.yml"
 
 echo ""
 echo "[5/6] Updating Caddyfile..."
@@ -78,6 +81,15 @@ else
 
 matrix.inblock.io {
     encode zstd gzip
+
+    handle /.well-known/matrix/server {
+        respond `{"m.server": "matrix.inblock.io:443"}`
+    }
+    handle /.well-known/matrix/client {
+        header Access-Control-Allow-Origin *
+        respond `{"m.homeserver": {"base_url": "https://matrix.inblock.io"}}`
+    }
+
     reverse_proxy matrix_synapse:8080
 }
 
@@ -89,10 +101,6 @@ siwx-oidc.inblock.io {
 element.inblock.io {
     encode zstd gzip
     reverse_proxy element-web:80
-}
-
-matrix.inblock.io:8448 {
-    reverse_proxy matrix_synapse:8080
 }
 EOF
   echo "Caddy entries added."
