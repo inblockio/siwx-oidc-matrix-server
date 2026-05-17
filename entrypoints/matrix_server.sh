@@ -23,6 +23,7 @@ yq -i ".experimental_features.msc3861.enabled = true" /data/homeserver.yaml
 yq -i ".experimental_features.msc3861.issuer = \"${SIWEOIDC_BASE_URL}\"" /data/homeserver.yaml
 yq -i ".experimental_features.msc3861.account_management_url = \"${SIWEOIDC_BASE_URL}\"" /data/homeserver.yaml
 yq -i ".experimental_features.msc3861.client_id = \"0000000000000000000SYNAPSE\"" /data/homeserver.yaml
+yq -i ".experimental_features.msc3861.client_secret = \"${MAS_SHARED_SECRET}\"" /data/homeserver.yaml
 yq -i ".experimental_features.msc3861.admin_token = \"${MAS_SHARED_SECRET}\"" /data/homeserver.yaml
 
 #federation via well-known delegation (Caddy serves .well-known on port 443)

@@ -100,7 +100,7 @@ siwx-oidc.inblock.io {
 
 element.inblock.io {
     encode zstd gzip
-    reverse_proxy element-web:80
+    reverse_proxy element-web:8080
 }
 EOF
   echo "Caddy entries added."
