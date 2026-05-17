@@ -5,6 +5,7 @@ ENV_FILE=./.env
 SIWEOIDC_CLIENT_ID=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 32; echo)
 SIWEOIDC_SECRET_ID=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 32; echo)
 SIWEOIDC_HOST=
+CLIENT_HOST=
 SIWEOIDC_PORT=
 SIWEOIDC_DEFAULT_CLIENTS=
 RUST_LOG="siwx_oidc=error,tower_http=error"
@@ -48,6 +49,12 @@ echo "--MATRIX_HOST (required) \"set matrix-server e.g. matrix.example.com\""
 echo "--MATRIX_PORT \"set matrix-port e.g. 8080 !!!ONLY USE IT IF YOU KNOW WHAT YOU DO!!!\""
 echo "--MATRIX_MESSAGE_LIFETIME \"set message lifetime default: 4w"
 echo "--MATRIX_REPORT_STATS \"default: no\""
+
+echo ""
+echo ""
+
+echo "Element Web Client Config"
+echo "--CLIENT_HOST (required) \"set element-web client hostname e.g. element.example.com\""
 
 echo ""
 echo ""
@@ -121,6 +128,13 @@ function checkRequiredArguments() {
       exit 1
     fi
 
+    if [[ -z "${CLIENT_HOST}" ]]; then
+      echoError "missing CLIENT_HOST!!!!"
+      echoError "use --CLIENT_HOST"
+      printHelp
+      exit 1
+    fi
+
 }
 
 function checkAutoCompletion() {
@@ -184,6 +198,11 @@ while [ "$#" -gt 0 ]; do
                 ;;
             --SIWEOIDC_HOST)
                 SIWEOIDC_HOST="$2"
+                shift
+                shift
+                ;;
+            --CLIENT_HOST)
+                CLIENT_HOST="$2"
                 shift
                 shift
                 ;;
@@ -276,6 +295,10 @@ else
   echo "MATRIX_BASE_URL=$MATRIX_BASE_URL" >> .env
   echo "MATRIX_REPORT_STATS=$MATRIX_REPORT_STATS" >> .env
   echo "MATRIX_MESSAGE_LIFETIME=$MATRIX_MESSAGE_LIFETIME" >> .env
+
+  echo "" >> .env
+  echo "#CLIENT-CONFIG" >> .env
+  echo "CLIENT_HOST=$CLIENT_HOST" >> .env
 
   startupServer
 
