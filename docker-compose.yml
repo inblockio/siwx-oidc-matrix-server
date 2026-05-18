@@ -55,6 +55,8 @@ services:
       SIWEOIDC_SIGNING_KEY_PEM: ${SIWEOIDC_SIGNING_KEY_PEM}
       SIWEOIDC_MAS_SHARED_SECRET: ${MAS_SHARED_SECRET}
       SIWEOIDC_SYNAPSE_ENDPOINT: http://matrix_synapse:${MATRIX_PORT}
+      SIWEOIDC_REQUIRE_SECRET: "false"
+      SIWEOIDC_SUPPORTED_DID_METHODS: '["pkh","key"]'
       RUST_LOG: ${RUST_LOG}
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:${SIWEOIDC_PORT}/.well-known/openid-configuration"]

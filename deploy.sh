@@ -42,9 +42,17 @@ scp -i "$SSH_KEY" \
 
 scp -i "$SSH_KEY" \
   "$SCRIPT_DIR/config/element-config.json" \
-  "$SCRIPT_DIR/config/siwx-redirect.js" \
-  "$SCRIPT_DIR/config/siwx-splash.html" \
+  "$SCRIPT_DIR/config/siwx-gate.js" \
+  "$SCRIPT_DIR/config/siwx-login.html" \
   "$SCRIPT_DIR/config/inblockio_logo_dark.png" \
+  "$SCRIPT_DIR/config/favicon.ico" \
+  "$SCRIPT_DIR/config/favicon-24.png" \
+  "$SCRIPT_DIR/config/favicon-120.png" \
+  "$SCRIPT_DIR/config/favicon-144.png" \
+  "$SCRIPT_DIR/config/favicon-152.png" \
+  "$SCRIPT_DIR/config/favicon-180.png" \
+  "$SCRIPT_DIR/config/favicon-512.png" \
+  "$SCRIPT_DIR/config/favicon-1024.png" \
   "$SERVER:${REMOTE_DIR}/config/"
 
 echo ""
@@ -90,11 +98,61 @@ matrix.inblock.io {
         respond `{"m.homeserver": {"base_url": "https://matrix.inblock.io"}}`
     }
 
-    reverse_proxy matrix_synapse:8080
+    handle /_matrix/client/v3/login {
+        @cors_preflight method OPTIONS
+        handle @cors_preflight {
+            header Access-Control-Allow-Origin "https://element.inblock.io"
+            header Access-Control-Allow-Methods "GET, POST, OPTIONS"
+            header Access-Control-Allow-Headers "Content-Type, Authorization"
+            header Access-Control-Max-Age "86400"
+            respond 204
+        }
+        header Access-Control-Allow-Origin "https://element.inblock.io"
+        reverse_proxy siwx-oidc:8081
+    }
+    handle /_matrix/client/v3/logout {
+        @cors_preflight method OPTIONS
+        handle @cors_preflight {
+            header Access-Control-Allow-Origin "https://element.inblock.io"
+            header Access-Control-Allow-Methods "GET, POST, OPTIONS"
+            header Access-Control-Allow-Headers "Content-Type, Authorization"
+            header Access-Control-Max-Age "86400"
+            respond 204
+        }
+        header Access-Control-Allow-Origin "https://element.inblock.io"
+        reverse_proxy siwx-oidc:8081
+    }
+    handle /_matrix/client/v3/refresh {
+        @cors_preflight method OPTIONS
+        handle @cors_preflight {
+            header Access-Control-Allow-Origin "https://element.inblock.io"
+            header Access-Control-Allow-Methods "GET, POST, OPTIONS"
+            header Access-Control-Allow-Headers "Content-Type, Authorization"
+            header Access-Control-Max-Age "86400"
+            respond 204
+        }
+        header Access-Control-Allow-Origin "https://element.inblock.io"
+        reverse_proxy siwx-oidc:8081
+    }
+
+    handle {
+        reverse_proxy matrix_synapse:8080
+    }
 }
 
 siwx-oidc.inblock.io {
     encode zstd gzip
+
+    @cors_preflight method OPTIONS
+    handle @cors_preflight {
+        header Access-Control-Allow-Origin "https://element.inblock.io"
+        header Access-Control-Allow-Methods "GET, POST, OPTIONS"
+        header Access-Control-Allow-Headers "Content-Type, Authorization"
+        header Access-Control-Max-Age "86400"
+        respond 204
+    }
+
+    header Access-Control-Allow-Origin "https://element.inblock.io"
     reverse_proxy siwx-oidc:8081
 }
 
