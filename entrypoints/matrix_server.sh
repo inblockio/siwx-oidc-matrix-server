@@ -18,13 +18,11 @@ yq -i ".listeners[0].type = \"http\"" /data/homeserver.yaml
 yq -i ".listeners[0].x_forwarded = true" /data/homeserver.yaml
 yq -i "del(.listeners[1])" /data/homeserver.yaml
 
-#msc3861 delegated auth
-yq -i ".experimental_features.msc3861.enabled = true" /data/homeserver.yaml
-yq -i ".experimental_features.msc3861.issuer = \"${SIWEOIDC_BASE_URL}\"" /data/homeserver.yaml
-yq -i ".experimental_features.msc3861.account_management_url = \"${SIWEOIDC_BASE_URL}\"" /data/homeserver.yaml
-yq -i ".experimental_features.msc3861.client_id = \"0000000000000000000SYNAPSE\"" /data/homeserver.yaml
-yq -i ".experimental_features.msc3861.client_secret = \"${MAS_SHARED_SECRET}\"" /data/homeserver.yaml
-yq -i ".experimental_features.msc3861.admin_token = \"${MAS_SHARED_SECRET}\"" /data/homeserver.yaml
+#delegated auth (matrix_authentication_service, stable since Synapse 1.136)
+yq -i ".matrix_authentication_service.enabled = true" /data/homeserver.yaml
+yq -i ".matrix_authentication_service.endpoint = \"http://siwx-oidc:${SIWEOIDC_PORT}\"" /data/homeserver.yaml
+yq -i ".matrix_authentication_service.secret = \"${MAS_SHARED_SECRET}\"" /data/homeserver.yaml
+yq -i ".matrix_authentication_service.account_management_url = \"${SIWEOIDC_BASE_URL}\"" /data/homeserver.yaml
 
 #federation via well-known delegation (Caddy serves .well-known on port 443)
 yq -i ".serve_server_wellknown = false" /data/homeserver.yaml
