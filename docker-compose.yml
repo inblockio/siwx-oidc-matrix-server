@@ -30,12 +30,15 @@ services:
 
   redis:
     image: redis
+    command: redis-server --appendonly yes
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
     restart: always
+    volumes:
+      - redis_data:/data
     networks:
       - default
 
@@ -90,6 +93,7 @@ services:
 
 volumes:
   matrix_data:
+  redis_data:
 
 networks:
   portal-net:
