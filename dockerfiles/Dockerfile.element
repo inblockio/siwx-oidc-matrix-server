@@ -3,6 +3,7 @@ FROM vectorim/element-web:latest
 USER root
 
 COPY config/element-config.json /app/config.json
+COPY config/siwx-gate.js /app/siwx-gate.js
 COPY config/siwx-redirect.js /app/siwx-redirect.js
 COPY config/siwx-callback.js /app/siwx-callback.js
 COPY config/siwx-splash.html /app/siwx-splash.html
