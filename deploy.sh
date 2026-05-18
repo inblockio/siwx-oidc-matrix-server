@@ -97,15 +97,15 @@ matrix.inblock.io {
     }
 
     handle /_matrix/client/v3/login {
-        header Access-Control-Allow-Origin *
+        header Access-Control-Allow-Origin "https://element.inblock.io"
         reverse_proxy siwx-oidc:8081
     }
     handle /_matrix/client/v3/logout {
-        header Access-Control-Allow-Origin *
+        header Access-Control-Allow-Origin "https://element.inblock.io"
         reverse_proxy siwx-oidc:8081
     }
     handle /_matrix/client/v3/refresh {
-        header Access-Control-Allow-Origin *
+        header Access-Control-Allow-Origin "https://element.inblock.io"
         reverse_proxy siwx-oidc:8081
     }
 
@@ -116,7 +116,7 @@ matrix.inblock.io {
 
 siwx-oidc.inblock.io {
     encode zstd gzip
-    header Access-Control-Allow-Origin *
+    header Access-Control-Allow-Origin "https://element.inblock.io"
     reverse_proxy siwx-oidc:8081
 }
 
