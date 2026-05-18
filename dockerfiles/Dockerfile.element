@@ -1,10 +1,8 @@
-FROM vectorim/element-web:latest
+FROM vectorim/element-web:v1.12.18
 
 USER root
 
 COPY config/element-config.json /app/config.json
-COPY config/siwx-gate.js /app/siwx-gate.js
-COPY config/siwx-login.html /app/siwx-login.html
 COPY config/inblockio_logo_dark.png /app/inblockio_logo_dark.png
 COPY config/favicon.ico /app/favicon.ico
 COPY config/favicon-24.png /app/favicon-24.png

@@ -3,6 +3,10 @@
     "m.homeserver": {
       "base_url": "%%MATRIX_BASE_URL%%",
       "server_name": "%%MATRIX_HOST%%"
+    },
+    "m.authentication": {
+      "issuer": "%%SIWEOIDC_BASE_URL%%",
+      "account": "%%SIWEOIDC_BASE_URL%%"
     }
   },
   "disable_custom_urls": true,
