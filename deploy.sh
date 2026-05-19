@@ -85,6 +85,25 @@ if grep -q "matrix.inblock.io" "$CADDYFILE"; then
 else
   cat >> "$CADDYFILE" << 'EOF'
 
+# Reusable CORS snippet for SIWX-OIDC endpoints.
+# Browsers reject comma-separated values on Access-Control-Allow-Origin, so we
+# echo the request Origin when it matches the allowlist below. Add new browser
+# clients (Cinny, Beeper, etc.) to BOTH matcher lines.
+(siwx_cors_allowlist) {
+    @cors_origin header Origin "https://element.inblock.io" "https://app.cinny.in"
+    @cors_preflight {
+        method OPTIONS
+        header Origin "https://element.inblock.io" "https://app.cinny.in"
+    }
+    header @cors_origin Access-Control-Allow-Origin "{http.request.header.Origin}"
+    header @cors_origin Vary "Origin"
+    header @cors_origin Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
+    header @cors_origin Access-Control-Allow-Headers "Authorization, Content-Type, X-Requested-With"
+    header @cors_origin Access-Control-Allow-Credentials "true"
+    header @cors_origin Access-Control-Max-Age "600"
+    respond @cors_preflight 204
+}
+
 matrix.inblock.io {
     encode zstd gzip
 
@@ -97,15 +116,15 @@ matrix.inblock.io {
     }
 
     handle /_matrix/client/v3/login {
-        header Access-Control-Allow-Origin "https://element.inblock.io"
+        import siwx_cors_allowlist
         reverse_proxy siwx-oidc:8081
     }
     handle /_matrix/client/v3/logout {
-        header Access-Control-Allow-Origin "https://element.inblock.io"
+        import siwx_cors_allowlist
         reverse_proxy siwx-oidc:8081
     }
     handle /_matrix/client/v3/refresh {
-        header Access-Control-Allow-Origin "https://element.inblock.io"
+        import siwx_cors_allowlist
         reverse_proxy siwx-oidc:8081
     }
 
@@ -116,7 +135,7 @@ matrix.inblock.io {
 
 siwx-oidc.inblock.io {
     encode zstd gzip
-    header Access-Control-Allow-Origin "https://element.inblock.io"
+    import siwx_cors_allowlist
     reverse_proxy siwx-oidc:8081
 }
 
