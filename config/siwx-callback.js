@@ -76,6 +76,18 @@
     localStorage.setItem("mx_is_url", "");
     localStorage.setItem("mx_has_access_token", "true");
 
+    // Store OIDC session metadata so Element recognises this as an OIDC
+    // session and sets up its OidcTokenRefresher for automatic renewal.
+    localStorage.setItem("mx_oidc_token_issuer", OIDC_BASE);
+    localStorage.setItem("mx_oidc_client_id", clientId);
+    if (tokenData.id_token) {
+      localStorage.setItem("mx_oidc_id_token", tokenData.id_token);
+    }
+    if (tokenData.refresh_token) {
+      localStorage.setItem("mx_refresh_token", tokenData.refresh_token);
+      localStorage.setItem("mx_has_refresh_token", "true");
+    }
+
     // Clean up OIDC session data
     sessionStorage.removeItem("siwx_code_verifier");
     sessionStorage.removeItem("siwx_state");
