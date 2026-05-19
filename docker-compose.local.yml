@@ -1,0 +1,147 @@
+# Local-only docker-compose for development and testing.
+#
+# Differences from the production docker-compose.yml:
+#   - No external `portal-net` network; everything runs on the implicit
+#     default bridge network plus a host-facing Caddy added inline.
+#   - Caddy is part of this compose file (not a separately-managed
+#     container shared with other services).
+#   - Host ports 8080, 8081, 8088 are published from Caddy (override
+#     via MATRIX_HOST_PORT / SIWEOIDC_HOST_PORT / CLIENT_HOST_PORT in
+#     .env.local).
+#   - HTTP only — no TLS. Element OIDC discovery uses
+#     http://localhost:8081 as the issuer, which OIDC clients accept
+#     for localhost.
+#   - The siwx-oidc build context is `../siwx-oidc` (clone the repo
+#     as a sibling directory of this one).
+#
+# Quick start:
+#
+#   # Generate the two secrets once (chmod 600 it after):
+#   cp .env.example .env.local
+#   echo "MAS_SHARED_SECRET=$(openssl rand -hex 32)" >> .env.local
+#   PEM=$(openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 2>/dev/null)
+#   PEM_LINE=$(printf '%s' "$PEM" | sed ':a;N;$!ba;s/\n/\\n/g')
+#   echo "SIWEOIDC_SIGNING_KEY_PEM=\"${PEM_LINE}\"" >> .env.local
+#   chmod 600 .env.local
+#
+#   # Bring it up:
+#   docker compose -f docker-compose.local.yml --env-file .env.local up --build
+#
+# Visit:
+#   http://localhost:8088              Element Web client
+#   http://localhost:8080              Matrix homeserver (Synapse + MSC3861 routing)
+#   http://localhost:8081              siwx-oidc OIDC provider
+#
+# Point CLI agents at the local stack via:
+#   aqua-matrix-agent \
+#     --siwx-url   http://localhost:8081 \
+#     --matrix-url http://localhost:8080 \
+#     ...
+
+services:
+  redis:
+    image: redis
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+
+  siwx-oidc:
+    build:
+      context: ../siwx-oidc
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      SIWEOIDC_REDIS_URL: redis://redis
+      SIWEOIDC_ADDRESS: 0.0.0.0
+      SIWEOIDC_HOST: ${SIWEOIDC_HOST:-localhost:${SIWEOIDC_HOST_PORT:-8081}}
+      SIWEOIDC_PORT: ${SIWEOIDC_PORT:-8081}
+      SIWEOIDC_BASE_URL: ${SIWEOIDC_BASE_URL:-http://localhost:${SIWEOIDC_HOST_PORT:-8081}}
+      SIWEOIDC_SIGNING_KEY_PEM: ${SIWEOIDC_SIGNING_KEY_PEM}
+      SIWEOIDC_MAS_SHARED_SECRET: ${MAS_SHARED_SECRET}
+      SIWEOIDC_SYNAPSE_ENDPOINT: http://matrix_synapse:${MATRIX_PORT:-8080}
+      SIWEOIDC_REQUIRE_SECRET: "false"
+      SIWEOIDC_SUPPORTED_DID_METHODS: '["pkh","key"]'
+      RUST_LOG: ${RUST_LOG:-siwx_oidc=debug,tower_http=info}
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:${SIWEOIDC_PORT:-8081}/.well-known/openid-configuration"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  matrix_synapse:
+    build:
+      context: .
+      dockerfile: dockerfiles/Dockerfile
+    restart: unless-stopped
+    environment:
+      SYNAPSE_SERVER_NAME: ${MATRIX_HOST:-localhost}
+      SYNAPSE_REPORT_STATS: ${MATRIX_REPORT_STATS:-no}
+      MATRIX_HOST: ${MATRIX_HOST:-localhost}
+      MATRIX_PORT: ${MATRIX_PORT:-8080}
+      MATRIX_BASE_URL: ${MATRIX_BASE_URL:-http://localhost:${MATRIX_HOST_PORT:-8080}}
+      MATRIX_MESSAGE_LIFETIME: ${MATRIX_MESSAGE_LIFETIME:-4w}
+      MATRIX_ADMIN_DID: ${MATRIX_ADMIN_DID:-}
+      MAS_SHARED_SECRET: ${MAS_SHARED_SECRET}
+      SIWEOIDC_PORT: ${SIWEOIDC_PORT:-8081}
+      SIWEOIDC_BASE_URL: ${SIWEOIDC_BASE_URL:-http://localhost:${SIWEOIDC_HOST_PORT:-8081}}
+    depends_on:
+      siwx-oidc:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fSs http://localhost:${MATRIX_PORT:-8080}/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    volumes:
+      - matrix_data:/data
+
+  element-web:
+    build:
+      context: .
+      dockerfile: dockerfiles/Dockerfile.element
+    restart: unless-stopped
+    environment:
+      MATRIX_BASE_URL: ${MATRIX_BASE_URL:-http://localhost:${MATRIX_HOST_PORT:-8080}}
+      MATRIX_HOST: ${MATRIX_HOST:-localhost}
+      SIWEOIDC_BASE_URL: ${SIWEOIDC_BASE_URL:-http://localhost:${SIWEOIDC_HOST_PORT:-8081}}
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:8080/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      matrix_synapse:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "${MATRIX_HOST_PORT:-8080}:8080"
+      - "${SIWEOIDC_HOST_PORT:-8081}:8081"
+      - "${CLIENT_HOST_PORT:-8088}:8088"
+    volumes:
+      - ./Caddyfile.local:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - matrix_synapse
+      - siwx-oidc
+      - element-web
+
+volumes:
+  matrix_data:
+  redis_data:
+  caddy_data:
+  caddy_config:
