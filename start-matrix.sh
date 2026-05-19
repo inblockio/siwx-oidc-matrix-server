@@ -80,9 +80,9 @@ function echoError() {
 
 function startupServer() {
 if [ "$ATTACH" == "true" ]; then
-    docker compose up --build
+    docker compose up --pull always
 else
-  docker compose up --build -d
+  docker compose up --pull always -d
 fi
 }
 

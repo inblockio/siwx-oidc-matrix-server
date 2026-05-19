@@ -6,13 +6,12 @@ set -euo pipefail
 # Usage:
 #   ./deploy.sh <ref>                        # sync repos to <ref>, no build/restart
 #   ./deploy.sh <ref> --build                # sync + pull pre-built images from GHCR
-#   ./deploy.sh <ref> --build-local          # sync + build images on the server
 #   ./deploy.sh <ref> --restart              # sync + restart (no rebuild)
 #   ./deploy.sh <ref> --build --restart      # sync + pull + restart
 #
 # <ref> is any git ref: a tag (fork-stable), branch (main), or commit SHA.
-# Both siwx-oidc-matrix-server and siwx-oidc repos are checked out at <ref>
-# on the server. The ref must exist in both repos.
+# siwx-oidc-matrix-server repo is checked out at <ref> on the server.
+# Docker images are pulled from GHCR (built by GitHub Actions).
 #
 # Prerequisites:
 #   - SSH access to deploy@agentic.inblock.io via ~/.ssh/id_ed25519
@@ -23,13 +22,11 @@ SERVER="deploy@agentic.inblock.io"
 SSH_KEY="$HOME/.ssh/id_ed25519"
 REMOTE_DIR="/home/deploy/matrix"
 MATRIX_REPO="https://github.com/inblockio/siwx-oidc-matrix-server.git"
-OIDC_REPO="https://github.com/inblockio/siwx-oidc.git"
 E2E_TEST_REPO="https://github.com/inblockio/aqua-matrix-agent.git"
 E2E_TEST_LOCAL_PATH="${E2E_TEST_LOCAL_PATH:-}"
 
 REF="${1:-}"
 DO_BUILD=false
-DO_BUILD_LOCAL=false
 DO_RESTART=false
 DO_TEST=false
 
@@ -38,7 +35,6 @@ if [ -z "$REF" ]; then
   echo ""
   echo "  <ref>       Git tag, branch, or commit SHA (must exist in both repos)"
   echo "  --build     Pull pre-built Docker images from GHCR"
-  echo "  --build-local  Build Docker images locally on the server"
   echo "  --restart   Restart containers (implies down + up)"
   echo "  --test      Run E2EE smoke test after deploy (requires --restart)"
   exit 1
@@ -48,7 +44,6 @@ shift
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --build)       DO_BUILD=true;       shift ;;
-    --build-local) DO_BUILD_LOCAL=true; shift ;;
     --restart)     DO_RESTART=true;     shift ;;
     --test)        DO_TEST=true;        shift ;;
     *) echo "Unknown flag: $1"; exit 1 ;;
@@ -60,7 +55,7 @@ SSH_CMD="ssh -i $SSH_KEY $SERVER"
 echo "=== Deploying ref '$REF' to agentic.inblock.io ==="
 
 echo ""
-echo "[1/5] Syncing siwx-oidc-matrix-server repo..."
+echo "[1/4] Syncing siwx-oidc-matrix-server repo..."
 $SSH_CMD bash -s <<REMOTE_MATRIX
 set -euo pipefail
 if [ -d ${REMOTE_DIR}/stack/.git ]; then
@@ -80,27 +75,7 @@ echo "siwx-oidc-matrix-server at \$(git rev-parse --short HEAD)"
 REMOTE_MATRIX
 
 echo ""
-echo "[2/5] Syncing siwx-oidc repo..."
-$SSH_CMD bash -s <<REMOTE_OIDC
-set -euo pipefail
-if [ -d ${REMOTE_DIR}/siwx-oidc/.git ]; then
-  cd ${REMOTE_DIR}/siwx-oidc
-  git fetch origin --tags --force --prune
-else
-  git clone ${OIDC_REPO} ${REMOTE_DIR}/siwx-oidc
-  cd ${REMOTE_DIR}/siwx-oidc
-fi
-# Prefer remote branch over local tag when both exist
-if git rev-parse "origin/${REF}" >/dev/null 2>&1; then
-  git checkout "origin/${REF}" --detach
-else
-  git checkout "${REF}" --
-fi
-echo "siwx-oidc at \$(git rev-parse --short HEAD)"
-REMOTE_OIDC
-
-echo ""
-echo "[3/5] Preparing build context..."
+echo "[2/4] Preparing deploy context..."
 $SSH_CMD bash -s <<REMOTE_FIXUP
 set -euo pipefail
 cd ${REMOTE_DIR}/stack
@@ -122,7 +97,7 @@ echo "Build context ready."
 REMOTE_FIXUP
 
 echo ""
-echo "[4/5] Ensuring Caddy routes..."
+echo "[3/4] Ensuring Caddy routes..."
 $SSH_CMD bash -s <<'CADDYFILE_SCRIPT'
 CADDYFILE="/home/portal/portal/Caddyfile"
 
@@ -173,7 +148,7 @@ fi
 CADDYFILE_SCRIPT
 
 echo ""
-echo "[5/5] Build and restart..."
+echo "[4/4] Pull and restart..."
 
 # Derive IMAGE_TAG from the ref for GHCR image pulls
 IMAGE_TAG="$REF"
@@ -183,11 +158,6 @@ if [ "$DO_BUILD" = true ]; then
   $SSH_CMD "cd ${REMOTE_DIR}/stack && IMAGE_TAG=${IMAGE_TAG} docker compose pull"
 fi
 
-if [ "$DO_BUILD_LOCAL" = true ]; then
-  echo "Building images locally on server..."
-  $SSH_CMD "cd ${REMOTE_DIR}/stack && IMAGE_TAG=${IMAGE_TAG} docker compose build --no-cache"
-fi
-
 if [ "$DO_RESTART" = true ]; then
   echo "Restarting containers..."
   $SSH_CMD "cd ${REMOTE_DIR}/stack && IMAGE_TAG=${IMAGE_TAG} docker compose down && IMAGE_TAG=${IMAGE_TAG} docker compose up -d"
@@ -195,7 +165,7 @@ if [ "$DO_RESTART" = true ]; then
   sleep 5
   $SSH_CMD "cd ${REMOTE_DIR}/stack && docker compose ps --format 'table {{.Name}}\t{{.Status}}'"
 else
-  if [ "$DO_BUILD" = false ] && [ "$DO_BUILD_LOCAL" = false ]; then
+  if [ "$DO_BUILD" = false ]; then
     echo "Repos synced. Use --build and/or --restart to apply."
   fi
 fi

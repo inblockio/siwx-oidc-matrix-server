@@ -49,6 +49,11 @@ deployment you must also edit `/data/homeserver.yaml` directly inside the
   maps `did:pkh:…` subjects to valid Matrix localparts.
 - **OIDC issuer env var**: `SIWEOIDC_BASE_URL` (env prefix kept as `SIWEOIDC_`
   for backward compat even though the crate is now `siwx_oidc`).
+- **Public client support**: `SIWEOIDC_REQUIRE_SECRET` must be `"false"` in
+  docker-compose.yml. Element Web registers as a public OIDC client
+  (`token_endpoint_auth_method: "none"`) and uses PKCE instead of a client secret.
+  The siwx-oidc code also checks per-client auth method, but the env var is a
+  fallback for clients that don't specify one.
 - **Signing key**: EC P-256 PEM stored as `SIWEOIDC_SIGNING_KEY_PEM` in `.env`
   (chmod 600, gitignored). Generated once by `start-matrix.sh`; passed to the container
   via environment variable — no separate file on disk. Do not delete from `.env` —
@@ -110,9 +115,6 @@ a base. To update Element, change the tag in `dockerfiles/Dockerfile.element`.
   --SIWEOIDC_HOST siwx-oidc.example.com \
   --LETSENCRYPT_EMAIL you@example.com
 
-# Rebuild Synapse image after entrypoint changes
-docker compose build matrix_synapse
-
 # Apply a homeserver.yaml fix to a live deployment
 docker compose exec matrix_synapse \
   yq -i '.oidc_providers[0].client_auth_method = "client_secret_post"' /data/homeserver.yaml
@@ -138,13 +140,26 @@ The stack now uses MSC3861 delegated authentication instead of legacy OIDC provi
 - Synapse delegates ALL auth to siwx-oidc via token introspection
 - Opaque tokens: `mat_` (access, 300s TTL), `mcr_` (refresh, 86400s TTL)
 - User provisioning: siwx-oidc calls `/_synapse/mas/` endpoints to create users/devices
-- Device lifecycle: `SIWX_` prefixed device IDs, cross-signing reset on every login
 - Token revocation: `POST /oauth2/revoke` + `POST /_matrix/client/v3/logout`
 
 Key env vars:
 - `MAS_SHARED_SECRET`: Shared between Synapse and siwx-oidc for introspection auth
 - `SIWEOIDC_MAS_SHARED_SECRET`: Same value, consumed by siwx-oidc (figment prefix)
 - `SIWEOIDC_SYNAPSE_ENDPOINT`: How siwx-oidc reaches Synapse (e.g., `http://matrix_synapse:8080`)
+
+### Device lifecycle
+
+- Fresh `SIWX_{uuid}` device_id generated on every login (never recycled)
+- Old device deleted from Synapse before new one is created
+- `allow_cross_signing_reset` fires on every login (new device = needs signing permission)
+- Both logout handlers (`revoke` + `logout`) call `delete_device` on Synapse
+- Redis stores `device_ids/{did}` mapping for cleanup only, not for recycling
+
+**Why no device_id recycling:** Synapse's `delete_device` (MAS API) does not remove
+cross-signing signatures from `e2e_cross_signing_signatures`, and its signature-upload
+handler skips new uploads when a stale one exists. Recycling a device_id with new keys
+creates an unrecoverable verification failure. See `docs/2026-05-19-device-verification-analysis.md`
+for the full root-cause analysis.
 
 ## Security posture
 

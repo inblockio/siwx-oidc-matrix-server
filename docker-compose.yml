@@ -1,9 +1,7 @@
 services:
   matrix_synapse:
+    image: ghcr.io/inblockio/siwx-oidc-matrix-server/synapse:${IMAGE_TAG:-fork-stable}
     restart: unless-stopped
-    build:
-      context: .
-      dockerfile: dockerfiles/Dockerfile
     expose:
       - "${MATRIX_PORT}"
     environment:
@@ -43,8 +41,7 @@ services:
       - default
 
   siwx-oidc:
-    build:
-      context: ../siwx-oidc
+    image: ghcr.io/inblockio/siwx-oidc:${IMAGE_TAG:-fork-stable}
     restart: unless-stopped
     depends_on:
       redis:
@@ -72,9 +69,7 @@ services:
       - default
 
   element-web:
-    build:
-      context: .
-      dockerfile: dockerfiles/Dockerfile.element
+    image: ghcr.io/inblockio/siwx-oidc-matrix-server/element-web:${IMAGE_TAG:-fork-stable}
     restart: unless-stopped
     environment:
       MATRIX_BASE_URL: ${MATRIX_BASE_URL}
