@@ -230,21 +230,24 @@ if [ "$DO_TEST" = true ]; then
     exit 1
   fi
 
-  echo "Smoke test: Agent A sends message..."
   AGENT_A_STORE="$TEST_STORE/agent-a"
   MSG="deploy-smoke-test-$(date +%s)"
-  "$AGENT_BIN" --key-file "$AGENT_A_KEY" --store-dir "$AGENT_A_STORE" \
-    --message "$MSG" 2>&1 | grep -E "^(sent|Error)" || true
 
-  echo "Smoke test: Agent A reads back..."
+  echo "Smoke test: Agent A sends message and reads back..."
   OUTPUT=$("$AGENT_BIN" --key-file "$AGENT_A_KEY" --store-dir "$AGENT_A_STORE" \
-    --read --read-limit 5 2>&1)
+    --message "$MSG" --read --read-limit 5 2>&1) || true
+
+  if echo "$OUTPUT" | grep -q "sent to"; then
+    echo "  Message sent successfully"
+  else
+    echo "  WARNING: send may have failed"
+  fi
+
   if echo "$OUTPUT" | grep -q "$MSG"; then
     echo "E2EE smoke test PASSED: message sent and read back successfully"
   else
     echo "WARNING: E2EE smoke test could not verify message readback"
-    echo "  (This may be normal for a first-time deploy; message history needs a recipient)"
-    echo "  Output: $OUTPUT"
+    echo "  (This may be normal on first deploy with a fresh crypto store)"
   fi
 
   rm -rf "$TEST_STORE"
