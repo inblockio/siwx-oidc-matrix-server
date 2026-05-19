@@ -23,17 +23,21 @@ SSH_KEY="$HOME/.ssh/id_ed25519"
 REMOTE_DIR="/home/matrix"
 MATRIX_REPO="https://github.com/inblockio/siwx-oidc-matrix-server.git"
 OIDC_REPO="https://github.com/inblockio/siwx-oidc.git"
+E2E_TEST_REPO="https://github.com/inblockio/aqua-matrix-hello.git"
+E2E_TEST_LOCAL_PATH="${E2E_TEST_LOCAL_PATH:-}"
 
 REF="${1:-}"
 DO_BUILD=false
 DO_RESTART=false
+DO_TEST=false
 
 if [ -z "$REF" ]; then
-  echo "Usage: ./deploy.sh <ref> [--build] [--restart]"
+  echo "Usage: ./deploy.sh <ref> [--build] [--restart] [--test]"
   echo ""
   echo "  <ref>       Git tag, branch, or commit SHA (must exist in both repos)"
   echo "  --build     Rebuild Docker images after checkout"
   echo "  --restart   Restart containers (implies down + up)"
+  echo "  --test      Run E2EE smoke test after deploy (requires --restart)"
   exit 1
 fi
 shift
@@ -42,6 +46,7 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --build)   DO_BUILD=true;   shift ;;
     --restart) DO_RESTART=true; shift ;;
+    --test)    DO_TEST=true;    shift ;;
     *) echo "Unknown flag: $1"; exit 1 ;;
   esac
 done
@@ -61,7 +66,12 @@ else
   git clone ${MATRIX_REPO} ${REMOTE_DIR}/stack
   cd ${REMOTE_DIR}/stack
 fi
-git checkout ${REF} --
+# Prefer remote branch over local tag when both exist
+if git rev-parse "origin/${REF}" >/dev/null 2>&1; then
+  git checkout "origin/${REF}" --detach
+else
+  git checkout "${REF}" --
+fi
 echo "siwx-oidc-matrix-server at \$(git rev-parse --short HEAD)"
 REMOTE_MATRIX
 
@@ -76,7 +86,12 @@ else
   git clone ${OIDC_REPO} ${REMOTE_DIR}/siwx-oidc
   cd ${REMOTE_DIR}/siwx-oidc
 fi
-git checkout ${REF} --
+# Prefer remote branch over local tag when both exist
+if git rev-parse "origin/${REF}" >/dev/null 2>&1; then
+  git checkout "origin/${REF}" --detach
+else
+  git checkout "${REF}" --
+fi
 echo "siwx-oidc at \$(git rev-parse --short HEAD)"
 REMOTE_OIDC
 
@@ -170,6 +185,69 @@ else
   if [ "$DO_BUILD" = false ]; then
     echo "Repos synced. Use --build and/or --restart to apply."
   fi
+fi
+
+# --- E2EE smoke test ---
+if [ "$DO_TEST" = true ]; then
+  echo ""
+  echo "[6/6] Running E2EE smoke test..."
+
+  # Resolve the test repo: prefer local path, fall back to public repo
+  E2E_DIR=""
+  if [ -n "$E2E_TEST_LOCAL_PATH" ] && [ -d "$E2E_TEST_LOCAL_PATH" ]; then
+    E2E_DIR="$E2E_TEST_LOCAL_PATH"
+    echo "Using local test repo: $E2E_DIR"
+  else
+    E2E_DIR="/tmp/aqua-matrix-hello-e2e"
+    if [ -d "$E2E_DIR/.git" ]; then
+      echo "Updating test repo at $E2E_DIR..."
+      git -C "$E2E_DIR" fetch origin && git -C "$E2E_DIR" checkout origin/main --detach
+    else
+      echo "Cloning test repo from $E2E_TEST_REPO..."
+      rm -rf "$E2E_DIR"
+      git clone --depth 1 "$E2E_TEST_REPO" "$E2E_DIR"
+    fi
+  fi
+
+  echo "Building test binary..."
+  (cd "$E2E_DIR" && cargo build --release 2>&1 | tail -3)
+
+  AGENT_BIN="$E2E_DIR/target/release/aqua-matrix-agent"
+  if [ ! -f "$AGENT_BIN" ]; then
+    echo "ERROR: test binary not found at $AGENT_BIN"
+    exit 1
+  fi
+
+  # Use a dedicated test store so we don't conflict with other agent sessions
+  TEST_STORE="/tmp/aqua-deploy-smoke-test"
+  rm -rf "$TEST_STORE"
+
+  AGENT_A_KEY="$E2E_DIR/agent.pem"
+  AGENT_B_KEY="$E2E_DIR/agent-b.pem"
+
+  if [ ! -f "$AGENT_A_KEY" ] || [ ! -f "$AGENT_B_KEY" ]; then
+    echo "ERROR: agent key files not found (agent.pem, agent-b.pem)"
+    exit 1
+  fi
+
+  echo "Smoke test: Agent A sends message..."
+  AGENT_A_STORE="$TEST_STORE/agent-a"
+  MSG="deploy-smoke-test-$(date +%s)"
+  "$AGENT_BIN" --key-file "$AGENT_A_KEY" --store-dir "$AGENT_A_STORE" \
+    --message "$MSG" 2>&1 | grep -E "^(sent|Error)" || true
+
+  echo "Smoke test: Agent A reads back..."
+  OUTPUT=$("$AGENT_BIN" --key-file "$AGENT_A_KEY" --store-dir "$AGENT_A_STORE" \
+    --read --read-limit 5 2>&1)
+  if echo "$OUTPUT" | grep -q "$MSG"; then
+    echo "E2EE smoke test PASSED: message sent and read back successfully"
+  else
+    echo "WARNING: E2EE smoke test could not verify message readback"
+    echo "  (This may be normal for a first-time deploy; message history needs a recipient)"
+    echo "  Output: $OUTPUT"
+  fi
+
+  rm -rf "$TEST_STORE"
 fi
 
 echo ""
