@@ -87,10 +87,17 @@ set -euo pipefail
 cd ${REMOTE_DIR}/stack
 chmod +x entrypoints/*.sh start-matrix.sh 2>/dev/null || true
 
-# Migrate .env from old flat layout if it exists at the parent level
+# Migrate .env from old flat layout if present at the parent level
 if [ -f ${REMOTE_DIR}/.env ] && [ ! -f ${REMOTE_DIR}/stack/.env ]; then
   mv ${REMOTE_DIR}/.env ${REMOTE_DIR}/stack/.env
   echo "Migrated .env into stack/."
+fi
+
+# Pin compose project name so volumes stay consistent across directory moves
+if [ -f ${REMOTE_DIR}/stack/.env ] && ! grep -q COMPOSE_PROJECT_NAME ${REMOTE_DIR}/stack/.env; then
+  echo "" >> ${REMOTE_DIR}/stack/.env
+  echo "COMPOSE_PROJECT_NAME=matrix" >> ${REMOTE_DIR}/stack/.env
+  echo "Pinned COMPOSE_PROJECT_NAME=matrix."
 fi
 echo "Build context ready."
 REMOTE_FIXUP

@@ -162,13 +162,17 @@ is the inner surface and is treated as trusted.
 | Federation port 8448 | Publicly exposed, by design | Required for Matrix federation |
 | SQLite | In use | Adequate for small deployments; PostgreSQL needed for scale |
 
-**Host firewall note**: Docker manages iptables directly and bypasses UFW rules for
-published ports. To restrict access using UFW, add rules to the `DOCKER-USER` chain:
-```bash
-# Allow federation port only (example — adjust CIDRs as needed)
-ufw route allow in on eth0 to any port 8448
-# Or use iptables DOCKER-USER chain directly for finer control
-```
+## Skills
+
+| Skill | Purpose |
+|---|---|
+| `/siwx-matrix` | Architecture context and how-it-works reference |
+| `/siwx-matrix-setup` | First-time deployment and configuration |
+| `/deploy` | Tag-based deployment to agentic.inblock.io |
+| `/siwx-matrix-troubleshoot` | Debugging login, token, and connectivity issues |
+| `/siwx-matrix-device-verify` | E2EE device verification, cross-signing, and key lifecycle debugging |
+| `/siwx-oidc-mas-matrix` | Deep MSC3861 integration reference |
+| `/set-admin` | Promote a user to server admin by DID |
 
 ## Companion repo
 
