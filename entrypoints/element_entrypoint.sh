@@ -9,6 +9,13 @@ sed -i "s|%%MATRIX_BASE_URL%%|${MATRIX_BASE_URL}|g" /app/siwx-redirect.js
 sed -i "s|%%SIWEOIDC_BASE_URL%%|${SIWEOIDC_BASE_URL}|g" /app/siwx-redirect.js
 sed -i "s|%%SIWEOIDC_BASE_URL%%|${SIWEOIDC_BASE_URL}|g" /app/siwx-callback.js
 
+# Replace Element's vector-icons favicons with inblock.io branding.
+for size in 24 120 144 152 180 512 1024; do
+  for f in /app/vector-icons/${size}*.png; do
+    [ -f "$f" ] && cp "/app/favicon-${size}.png" "$f"
+  done
+done
+
 # Inject a synchronous gate script right after <head> that prevents Element
 # from booting when the user is unauthenticated. This avoids the race where
 # Element calls /_matrix/client/v3/login (disabled under MSC3861) and shows

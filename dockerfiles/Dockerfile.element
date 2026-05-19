@@ -8,6 +8,14 @@ COPY config/siwx-redirect.js /app/siwx-redirect.js
 COPY config/siwx-callback.js /app/siwx-callback.js
 COPY config/siwx-splash.html /app/siwx-splash.html
 COPY config/inblockio_logo_dark.png /app/inblockio_logo_dark.png
+COPY config/favicon.ico /app/favicon.ico
+COPY config/favicon-24.png /app/favicon-24.png
+COPY config/favicon-120.png /app/favicon-120.png
+COPY config/favicon-144.png /app/favicon-144.png
+COPY config/favicon-152.png /app/favicon-152.png
+COPY config/favicon-180.png /app/favicon-180.png
+COPY config/favicon-512.png /app/favicon-512.png
+COPY config/favicon-1024.png /app/favicon-1024.png
 COPY entrypoints/element_entrypoint.sh /docker-entrypoint.sh
 
 ENTRYPOINT ["/docker-entrypoint.sh"]
