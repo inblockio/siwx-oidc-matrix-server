@@ -5,29 +5,31 @@ set -euo pipefail
 #
 # Usage:
 #   ./deploy.sh <ref>                        # sync repos to <ref>, no build/restart
-#   ./deploy.sh <ref> --build                # sync + rebuild images
+#   ./deploy.sh <ref> --build                # sync + pull pre-built images from GHCR
+#   ./deploy.sh <ref> --build-local          # sync + build images on the server
 #   ./deploy.sh <ref> --restart              # sync + restart (no rebuild)
-#   ./deploy.sh <ref> --build --restart      # sync + rebuild + restart
+#   ./deploy.sh <ref> --build --restart      # sync + pull + restart
 #
 # <ref> is any git ref: a tag (fork-stable), branch (main), or commit SHA.
 # Both siwx-oidc-matrix-server and siwx-oidc repos are checked out at <ref>
 # on the server. The ref must exist in both repos.
 #
 # Prerequisites:
-#   - SSH access to root@agentic.inblock.io via ~/.ssh/id_ed25519
+#   - SSH access to deploy@agentic.inblock.io via ~/.ssh/id_ed25519
 #   - portal-caddy-1 running on the server with portal-net network
 #   - DNS records for matrix.inblock.io, siwx-oidc.inblock.io, element.inblock.io
 
-SERVER="root@agentic.inblock.io"
+SERVER="deploy@agentic.inblock.io"
 SSH_KEY="$HOME/.ssh/id_ed25519"
-REMOTE_DIR="/home/matrix"
+REMOTE_DIR="/home/deploy/matrix"
 MATRIX_REPO="https://github.com/inblockio/siwx-oidc-matrix-server.git"
 OIDC_REPO="https://github.com/inblockio/siwx-oidc.git"
-E2E_TEST_REPO="https://github.com/inblockio/aqua-matrix-hello.git"
+E2E_TEST_REPO="https://github.com/inblockio/aqua-matrix-agent.git"
 E2E_TEST_LOCAL_PATH="${E2E_TEST_LOCAL_PATH:-}"
 
 REF="${1:-}"
 DO_BUILD=false
+DO_BUILD_LOCAL=false
 DO_RESTART=false
 DO_TEST=false
 
@@ -35,7 +37,8 @@ if [ -z "$REF" ]; then
   echo "Usage: ./deploy.sh <ref> [--build] [--restart] [--test]"
   echo ""
   echo "  <ref>       Git tag, branch, or commit SHA (must exist in both repos)"
-  echo "  --build     Rebuild Docker images after checkout"
+  echo "  --build     Pull pre-built Docker images from GHCR"
+  echo "  --build-local  Build Docker images locally on the server"
   echo "  --restart   Restart containers (implies down + up)"
   echo "  --test      Run E2EE smoke test after deploy (requires --restart)"
   exit 1
@@ -44,9 +47,10 @@ shift
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --build)   DO_BUILD=true;   shift ;;
-    --restart) DO_RESTART=true; shift ;;
-    --test)    DO_TEST=true;    shift ;;
+    --build)       DO_BUILD=true;       shift ;;
+    --build-local) DO_BUILD_LOCAL=true; shift ;;
+    --restart)     DO_RESTART=true;     shift ;;
+    --test)        DO_TEST=true;        shift ;;
     *) echo "Unknown flag: $1"; exit 1 ;;
   esac
 done
@@ -170,19 +174,28 @@ CADDYFILE_SCRIPT
 
 echo ""
 echo "[5/5] Build and restart..."
+
+# Derive IMAGE_TAG from the ref for GHCR image pulls
+IMAGE_TAG="$REF"
+
 if [ "$DO_BUILD" = true ]; then
-  echo "Building images..."
-  $SSH_CMD "cd ${REMOTE_DIR}/stack && docker compose build --no-cache"
+  echo "Pulling pre-built images from GHCR (tag: ${IMAGE_TAG})..."
+  $SSH_CMD "cd ${REMOTE_DIR}/stack && IMAGE_TAG=${IMAGE_TAG} docker compose pull"
+fi
+
+if [ "$DO_BUILD_LOCAL" = true ]; then
+  echo "Building images locally on server..."
+  $SSH_CMD "cd ${REMOTE_DIR}/stack && IMAGE_TAG=${IMAGE_TAG} docker compose build --no-cache"
 fi
 
 if [ "$DO_RESTART" = true ]; then
   echo "Restarting containers..."
-  $SSH_CMD "cd ${REMOTE_DIR}/stack && docker compose down && docker compose up -d"
+  $SSH_CMD "cd ${REMOTE_DIR}/stack && IMAGE_TAG=${IMAGE_TAG} docker compose down && IMAGE_TAG=${IMAGE_TAG} docker compose up -d"
   echo "Waiting for health checks..."
   sleep 5
   $SSH_CMD "cd ${REMOTE_DIR}/stack && docker compose ps --format 'table {{.Name}}\t{{.Status}}'"
 else
-  if [ "$DO_BUILD" = false ]; then
+  if [ "$DO_BUILD" = false ] && [ "$DO_BUILD_LOCAL" = false ]; then
     echo "Repos synced. Use --build and/or --restart to apply."
   fi
 fi
@@ -198,7 +211,7 @@ if [ "$DO_TEST" = true ]; then
     E2E_DIR="$E2E_TEST_LOCAL_PATH"
     echo "Using local test repo: $E2E_DIR"
   else
-    E2E_DIR="/tmp/aqua-matrix-hello-e2e"
+    E2E_DIR="/tmp/aqua-matrix-agent-e2e"
     if [ -d "$E2E_DIR/.git" ]; then
       echo "Updating test repo at $E2E_DIR..."
       git -C "$E2E_DIR" fetch origin && git -C "$E2E_DIR" checkout origin/main --detach
