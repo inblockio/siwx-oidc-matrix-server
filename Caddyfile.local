@@ -1,0 +1,97 @@
+# Local-only Caddy config for docker-compose.local.yml.
+#
+# HTTP only, port-based virtual hosts (no DNS, no TLS). Each listening
+# port maps to one logical service. The Matrix port intercepts the
+# MSC3861 login/logout/refresh paths and proxies them to siwx-oidc —
+# the same trick the production Caddyfile uses, just over plain HTTP
+# on localhost ports.
+
+# Strip CORS headers from siwx-oidc upstream responses. Without this,
+# siwx-oidc's own tower_http CorsLayer (a665cac) emits
+# Access-Control-Allow-Origin: * and Caddy adds its own value;
+# browsers reject the comma-joined header. Caddy is the single CORS
+# authority for all browser-facing endpoints.
+(strip_upstream_cors) {
+    header_down -Access-Control-Allow-Origin
+    header_down -Access-Control-Allow-Methods
+    header_down -Access-Control-Allow-Headers
+    header_down -Access-Control-Allow-Credentials
+    header_down -Access-Control-Expose-Headers
+    header_down -Access-Control-Max-Age
+    header_down -Vary
+}
+
+# Reusable CORS snippet for browser-facing endpoints proxied to siwx-oidc.
+# Echoes the request Origin if it matches the allowlist. Adds preflight
+# handling and Vary so caches don't pin one origin's CORS for everyone.
+# Extend the regex alternation to admit a new client (Beeper, etc.).
+(siwx_cors_local) {
+    @cors_origin header_regexp Origin "^http://localhost:8088$"
+    @cors_preflight {
+        method OPTIONS
+        header_regexp Origin "^http://localhost:8088$"
+    }
+    header @cors_origin Access-Control-Allow-Origin "{http.request.header.Origin}"
+    header @cors_origin Vary Origin
+    header @cors_origin Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
+    header @cors_origin Access-Control-Allow-Headers "Authorization, Content-Type, X-Requested-With"
+    header @cors_origin Access-Control-Allow-Credentials "true"
+    header @cors_origin Access-Control-Max-Age "600"
+    respond @cors_preflight 204
+}
+
+# Matrix homeserver port.
+:8080 {
+    encode zstd gzip
+
+    # Synapse server discovery (the homeserver delegates federation port to itself).
+    handle /.well-known/matrix/server {
+        respond `{"m.server": "localhost:8080"}`
+    }
+
+    # Client discovery — points Element at the OIDC issuer for MSC3861.
+    handle /.well-known/matrix/client {
+        header Access-Control-Allow-Origin *
+        respond `{"m.homeserver": {"base_url": "http://localhost:8080"}, "m.authentication": {"issuer": "http://localhost:8081"}}`
+    }
+
+    # MSC3861: login/logout/refresh go to siwx-oidc, not Synapse.
+    handle /_matrix/client/v3/login {
+        import siwx_cors_local
+        reverse_proxy siwx-oidc:8081 {
+            import strip_upstream_cors
+        }
+    }
+    handle /_matrix/client/v3/logout {
+        import siwx_cors_local
+        reverse_proxy siwx-oidc:8081 {
+            import strip_upstream_cors
+        }
+    }
+    handle /_matrix/client/v3/refresh {
+        import siwx_cors_local
+        reverse_proxy siwx-oidc:8081 {
+            import strip_upstream_cors
+        }
+    }
+
+    # Everything else → Synapse.
+    handle {
+        reverse_proxy matrix_synapse:8080
+    }
+}
+
+# siwx-oidc port — OIDC provider endpoints (authorize, token, register, .well-known/openid-configuration, etc.).
+:8081 {
+    encode zstd gzip
+    import siwx_cors_local
+    reverse_proxy siwx-oidc:8081 {
+        import strip_upstream_cors
+    }
+}
+
+# Element Web client port.
+:8088 {
+    encode zstd gzip
+    reverse_proxy element-web:8080
+}
