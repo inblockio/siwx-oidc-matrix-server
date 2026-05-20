@@ -177,16 +177,18 @@ is the inner surface and is treated as trusted.
 | Federation port 8448 | Publicly exposed, by design | Required for Matrix federation |
 | SQLite | In use | Adequate for small deployments; PostgreSQL needed for scale |
 
-## Skills
+## Skills (`skills/`)
+
+Skill files live at the repo root in `skills/` (visible to all users).
+Claude Code discovers them via symlinks in `.claude/commands/` (invoke with `/skill-name`).
 
 | Skill | Purpose |
 |---|---|
 | `/siwx-matrix` | Architecture context and how-it-works reference |
 | `/siwx-matrix-setup` | First-time deployment and configuration |
-| `/deploy` | Tag-based deployment to agentic.inblock.io |
 | `/siwx-matrix-troubleshoot` | Debugging login, token, and connectivity issues |
-| `/siwx-matrix-device-verify` | E2EE device verification, cross-signing, and key lifecycle debugging |
-| `/siwx-oidc-mas-matrix` | Deep MSC3861 integration reference |
+| `/siwx-matrix-device-verify` | E2EE device verification, cross-signing, and key lifecycle |
+| `/deploy` | Tag-based deployment to agentic.inblock.io |
 | `/set-admin` | Promote a user to server admin by DID |
 
 ## Companion repo
