@@ -124,7 +124,7 @@ docker compose restart matrix_synapse
 `deploy.sh` clones both repos on the server at a given git ref, then builds and restarts:
 
 ```bash
-./deploy.sh fork-stable --build --restart
+./deploy.sh main --build --restart
 ```
 
 See `/deploy` skill for full usage, tagging workflow, and troubleshooting.

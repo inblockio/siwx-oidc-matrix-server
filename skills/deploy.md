@@ -29,19 +29,19 @@ description: Use when deploying the siwx-oidc-matrix-server stack to agentic.inb
 
 ```bash
 # Full deploy: sync repos, rebuild images, restart containers
-./deploy.sh fork-stable --build --restart
+./deploy.sh main --build --restart
 
 # Rebuild without restart (pre-stage images)
-./deploy.sh fork-stable --build
+./deploy.sh main --build
 
 # Quick restart at a ref (skip rebuild, uses cached images)
 ./deploy.sh main --restart
 
 # Just sync repos (dry run, no build or restart)
-./deploy.sh fork-stable
+./deploy.sh main
 ```
 
-The `<ref>` argument accepts any git ref: a tag (`fork-stable`), branch (`main`), or commit SHA. The ref must exist in **both** repos.
+The `<ref>` argument accepts any git ref: a tag, branch (`main`), or commit SHA. The ref must exist in **both** repos.
 
 ## Deploy steps (what the script does)
 
@@ -108,7 +108,7 @@ $SSH_CMD "cd /home/matrix/siwx-oidc && git log --oneline -1"
 Rolling back is just deploying an older ref:
 
 ```bash
-./deploy.sh fork-stable --build --restart
+./deploy.sh main --build --restart
 ```
 
 ## First-time setup on a fresh server
