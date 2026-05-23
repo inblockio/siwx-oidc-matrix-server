@@ -279,15 +279,15 @@ fi
 The `LIVEKIT_KEY` and `LIVEKIT_SECRET` values must be injected into
 `config/livekit.yaml` at container start. Two approaches:
 
-**Option A (recommended):** LiveKit supports env var overrides:
-```
-LIVEKIT_API_KEY=<key> LIVEKIT_API_SECRET=<secret>
-```
-These override the `keys:` section in the YAML config. Pass them via
-docker-compose environment.
+**The correct env var is `LIVEKIT_KEYS`** (not `LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET`,
+which are client SDK vars). Format: YAML key-value string.
 
-**Option B:** Template the YAML at deploy time in `deploy.sh` or an
-entrypoint script using `sed`/`envsubst`.
+```yaml
+environment:
+  LIVEKIT_KEYS: "${LIVEKIT_KEY}: ${LIVEKIT_SECRET}"
+```
+
+This overrides the `keys:` section in the YAML config.
 
 ## Existing deployment considerations
 
