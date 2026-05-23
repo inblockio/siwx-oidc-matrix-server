@@ -193,6 +193,7 @@ Claude Code discovers them via symlinks in `.claude/commands/` (invoke with `/sk
 | `/deploy` | Tag-based deployment to agentic.inblock.io |
 | `/set-admin` | Promote a user to server admin by DID |
 | `/matrix-rtc-transport-specialist` | Enable/troubleshoot Element Call (MatrixRTC + LiveKit) |
+| `/matrix-custom-themes-specialist` | Add, configure, and troubleshoot custom Element Web themes |
 
 ## Companion repo
 
