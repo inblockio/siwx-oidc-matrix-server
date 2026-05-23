@@ -75,6 +75,14 @@
         }
     }
 
+    # MSC4108: QR code login rendezvous (no compression to preserve ETags).
+    handle /_matrix/client/unstable/org.matrix.msc4108/* {
+        reverse_proxy matrix_synapse:8080
+    }
+    handle /_synapse/client/rendezvous/* {
+        reverse_proxy matrix_synapse:8080
+    }
+
     # Everything else → Synapse.
     handle {
         reverse_proxy matrix_synapse:8080

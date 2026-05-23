@@ -26,6 +26,9 @@ yq -i ".experimental_features.msc3861.client_id = \"0000000000000000000SYNAPSE\"
 yq -i ".experimental_features.msc3861.client_secret = \"${MAS_SHARED_SECRET}\"" /data/homeserver.yaml
 yq -i ".experimental_features.msc3861.admin_token = \"${MAS_SHARED_SECRET}\"" /data/homeserver.yaml
 
+# Enable QR code login rendezvous server (MSC4108 2024 version)
+yq -i ".experimental_features.msc4108_enabled = true" /data/homeserver.yaml
+
 #federation via well-known delegation (Caddy serves .well-known on port 443)
 yq -i ".serve_server_wellknown = false" /data/homeserver.yaml
 
