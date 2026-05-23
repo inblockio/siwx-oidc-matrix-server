@@ -111,6 +111,37 @@ Rolling back is just deploying an older ref:
 ./deploy.sh main --build --restart
 ```
 
+## Single-service test override (no full branch deploy)
+
+When you want to test a change in **one** service without rebuilding the others
+(e.g. iterating on siwx-oidc UI while leaving synapse/element-web on `:main`):
+
+```bash
+# 1. Trigger the docker.yml workflow_dispatch on the changed repo only
+gh workflow run docker.yml --ref <branch> --repo inblockio/siwx-oidc
+
+# 2. Wait for the build, then drop an override file on the server
+ssh -i ~/.ssh/id_ed25519 deploy@agentic.inblock.io 'cat > /home/deploy/matrix/stack/docker-compose.override.yml <<EOF
+services:
+  siwx-oidc:
+    image: ghcr.io/inblockio/siwx-oidc:<branch>
+EOF
+cd /home/deploy/matrix/stack && \
+  docker compose pull siwx-oidc && \
+  docker compose up -d --force-recreate --no-deps siwx-oidc'
+
+# 3. Roll back by removing the override
+ssh -i ~/.ssh/id_ed25519 deploy@agentic.inblock.io \
+  'rm /home/deploy/matrix/stack/docker-compose.override.yml && \
+   cd /home/deploy/matrix/stack && \
+   docker compose up -d --force-recreate --no-deps siwx-oidc'
+```
+
+The override file is untracked by git, so `./deploy.sh <ref>` won't wipe it.
+**Remember to delete it before the next full deploy** or the pinned service
+will stay pinned. Watchtower will not override an explicit `image:` pin in
+the override file.
+
 ## First-time setup on a fresh server
 
 If `.env` does not exist yet, SSH to the server and run `start-matrix.sh` after the first deploy to generate secrets:
