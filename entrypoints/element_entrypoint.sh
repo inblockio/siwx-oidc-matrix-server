@@ -1,6 +1,11 @@
 #!/bin/sh
 set -e
 
+# Use volume-mounted config if available (allows config updates without image rebuild).
+if [ -f /app/config.json.src ]; then
+  cp /app/config.json.src /app/config.json
+fi
+
 # Template environment variables into config and shim files.
 # Placeholders use %% delimiters to avoid clashing with JSON/JS syntax.
 sed -i "s|%%MATRIX_BASE_URL%%|${MATRIX_BASE_URL}|g" /app/config.json

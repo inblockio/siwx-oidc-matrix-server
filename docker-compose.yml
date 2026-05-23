@@ -76,7 +76,8 @@ services:
       MATRIX_HOST: ${MATRIX_HOST}
       SIWEOIDC_BASE_URL: ${SIWEOIDC_BASE_URL}
     volumes:
-      - ./config/element-config.json:/app/config.json
+      - ./config/element-config.json:/app/config.json.src:ro
+      - ./entrypoints/element_entrypoint.sh:/docker-entrypoint.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:8080/ || exit 1"]
       interval: 15s
