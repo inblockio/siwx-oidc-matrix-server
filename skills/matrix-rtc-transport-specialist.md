@@ -90,16 +90,13 @@ lk-jwt-service:
   depends_on:
     matrix_synapse:
       condition: service_healthy
-  healthcheck:
-    test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:8080/healthz || exit 1"]
-    interval: 15s
-    timeout: 5s
-    retries: 3
-    start_period: 5s
   networks:
     - portal-net
     - default
 ```
+
+**Note:** lk-jwt-service uses a scratch/distroless image with no shell, wget, or
+curl. Do not add a Docker healthcheck; monitor via Caddy route (`/livekit/jwt/healthz`).
 
 ### Why these port choices
 
@@ -183,15 +180,15 @@ Add LiveKit proxy routes (before the catch-all `handle`):
 
 ```
 # MatrixRTC: lk-jwt-service (OpenID -> LiveKit JWT exchange)
-handle /livekit/jwt {
+handle_path /livekit/jwt {
     reverse_proxy lk-jwt-service:8080
 }
-handle /livekit/jwt/* {
+handle_path /livekit/jwt/* {
     reverse_proxy lk-jwt-service:8080
 }
 
 # MatrixRTC: LiveKit SFU WebSocket signaling
-handle /livekit/sfu/* {
+handle_path /livekit/sfu/* {
     reverse_proxy livekit:7880
 }
 ```
@@ -206,13 +203,13 @@ handle /.well-known/matrix/client {
     respond `{"m.homeserver": {"base_url": "http://localhost:8080"}, "m.authentication": {"issuer": "http://localhost:8081"}, "org.matrix.msc4143.rtc_foci": [{"type": "livekit", "livekit_service_url": "http://localhost:8080/livekit/jwt"}]}`
 }
 
-handle /livekit/jwt {
+handle_path /livekit/jwt {
     reverse_proxy lk-jwt-service:8080
 }
-handle /livekit/jwt/* {
+handle_path /livekit/jwt/* {
     reverse_proxy lk-jwt-service:8080
 }
-handle /livekit/sfu/* {
+handle_path /livekit/sfu/* {
     reverse_proxy livekit:7880
 }
 ```

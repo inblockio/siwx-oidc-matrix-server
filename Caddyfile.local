@@ -84,15 +84,15 @@
     }
 
     # MatrixRTC: lk-jwt-service (OpenID -> LiveKit JWT exchange)
-    handle /livekit/jwt {
+    handle_path /livekit/jwt {
         reverse_proxy lk-jwt-service:8080
     }
-    handle /livekit/jwt/* {
+    handle_path /livekit/jwt/* {
         reverse_proxy lk-jwt-service:8080
     }
 
     # MatrixRTC: LiveKit SFU WebSocket signaling
-    handle /livekit/sfu/* {
+    handle_path /livekit/sfu/* {
         reverse_proxy livekit:7880
     }
 
