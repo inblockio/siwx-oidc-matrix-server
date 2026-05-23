@@ -249,6 +249,13 @@ else
   echo "#CLIENT-CONFIG" >> .env
   echo "CLIENT_HOST=$CLIENT_HOST" >> .env
 
+  echo "" >> .env
+  echo "#LIVEKIT-CONFIG" >> .env
+  LIVEKIT_KEY="API$(openssl rand -hex 8)"
+  LIVEKIT_SECRET="$(openssl rand -base64 32)"
+  echo "LIVEKIT_KEY=$LIVEKIT_KEY" >> .env
+  echo "LIVEKIT_SECRET=$LIVEKIT_SECRET" >> .env
+
   startupServer
 
 fi

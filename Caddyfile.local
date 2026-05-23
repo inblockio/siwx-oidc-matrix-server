@@ -52,7 +52,7 @@
     # Client discovery — points Element at the OIDC issuer for MSC3861.
     handle /.well-known/matrix/client {
         header Access-Control-Allow-Origin *
-        respond `{"m.homeserver": {"base_url": "http://localhost:8080"}, "m.authentication": {"issuer": "http://localhost:8081"}}`
+        respond `{"m.homeserver": {"base_url": "http://localhost:8080"}, "m.authentication": {"issuer": "http://localhost:8081"}, "org.matrix.msc4143.rtc_foci": [{"type": "livekit", "livekit_service_url": "http://localhost:8080/livekit/jwt"}]}`
     }
 
     # MSC3861: login/logout/refresh go to siwx-oidc, not Synapse.
@@ -81,6 +81,19 @@
     }
     handle /_synapse/client/rendezvous/* {
         reverse_proxy matrix_synapse:8080
+    }
+
+    # MatrixRTC: lk-jwt-service (OpenID -> LiveKit JWT exchange)
+    handle /livekit/jwt {
+        reverse_proxy lk-jwt-service:8080
+    }
+    handle /livekit/jwt/* {
+        reverse_proxy lk-jwt-service:8080
+    }
+
+    # MatrixRTC: LiveKit SFU WebSocket signaling
+    handle /livekit/sfu/* {
+        reverse_proxy livekit:7880
     }
 
     # Everything else → Synapse.

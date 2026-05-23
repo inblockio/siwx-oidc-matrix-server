@@ -10,7 +10,7 @@ matrix.inblock.io {
     }
     handle /.well-known/matrix/client {
         header Access-Control-Allow-Origin *
-        respond `{"m.homeserver": {"base_url": "https://matrix.inblock.io"}, "m.authentication": {"issuer": "https://siwx-oidc.inblock.io"}}`
+        respond `{"m.homeserver": {"base_url": "https://matrix.inblock.io"}, "m.authentication": {"issuer": "https://siwx-oidc.inblock.io"}, "org.matrix.msc4143.rtc_foci": [{"type": "livekit", "livekit_service_url": "https://matrix.inblock.io/livekit/jwt"}]}`
     }
 
     handle /_matrix/client/v3/login {
@@ -44,6 +44,19 @@ matrix.inblock.io {
     }
     handle /_synapse/client/rendezvous/* {
         reverse_proxy matrix_synapse:8080
+    }
+
+    # MatrixRTC: lk-jwt-service (OpenID -> LiveKit JWT exchange)
+    handle /livekit/jwt {
+        reverse_proxy lk-jwt-service:8080
+    }
+    handle /livekit/jwt/* {
+        reverse_proxy lk-jwt-service:8080
+    }
+
+    # MatrixRTC: LiveKit SFU WebSocket signaling
+    handle /livekit/sfu/* {
+        reverse_proxy livekit:7880
     }
 
     handle {

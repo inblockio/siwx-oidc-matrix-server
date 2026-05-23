@@ -8,5 +8,15 @@
   "disable_custom_urls": true,
   "disable_guests": true,
   "disable_login_language_selector": true,
-  "brand": "inblock.io Chat"
+  "brand": "inblock.io Chat",
+  "element_call": {
+    "url": "https://call.element.io",
+    "use_exclusively": true,
+    "brand": "inblock.io Call"
+  },
+  "features": {
+    "feature_group_calls": true,
+    "feature_video_rooms": true,
+    "feature_element_call_video_rooms": true
+  }
 }

@@ -88,6 +88,44 @@ services:
       - portal-net
       - default
 
+  livekit:
+    image: livekit/livekit-server:latest
+    restart: unless-stopped
+    command: --config /etc/livekit.yaml
+    environment:
+      LIVEKIT_API_KEY: "${LIVEKIT_KEY}"
+      LIVEKIT_API_SECRET: "${LIVEKIT_SECRET}"
+    ports:
+      - "7881:7881/tcp"
+      - "50100-50200:50100-50200/udp"
+    volumes:
+      - ./config/livekit.yaml:/etc/livekit.yaml:ro
+    networks:
+      - portal-net
+      - default
+
+  lk-jwt-service:
+    image: ghcr.io/element-hq/lk-jwt-service:latest
+    restart: unless-stopped
+    environment:
+      LIVEKIT_URL: "wss://${MATRIX_HOST}/livekit/sfu"
+      LIVEKIT_KEY: "${LIVEKIT_KEY}"
+      LIVEKIT_SECRET: "${LIVEKIT_SECRET}"
+      LIVEKIT_JWT_BIND: ":8080"
+      LIVEKIT_INSECURE_SKIP_VERIFY_TLS: "${LIVEKIT_INSECURE_SKIP_VERIFY_TLS:-false}"
+    depends_on:
+      matrix_synapse:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:8080/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    networks:
+      - portal-net
+      - default
+
 volumes:
   matrix_data:
   redis_data:

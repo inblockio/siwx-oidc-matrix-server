@@ -29,6 +29,22 @@ yq -i ".experimental_features.msc3861.admin_token = \"${MAS_SHARED_SECRET}\"" /d
 # Enable QR code login rendezvous server (MSC4108 2024 version)
 yq -i ".experimental_features.msc4108_enabled = true" /data/homeserver.yaml
 
+# MatrixRTC: enable experimental features for Element Call
+yq -i ".experimental_features.msc4143_enabled = true" /data/homeserver.yaml
+yq -i ".experimental_features.msc3266_enabled = true" /data/homeserver.yaml
+yq -i ".experimental_features.msc4222_enabled = true" /data/homeserver.yaml
+
+# Delayed events (MSC4140): auto-quit interrupted calls
+yq -i ".max_event_delay_duration = \"24h\"" /data/homeserver.yaml
+
+# Rate limiting for call heartbeats (every 5s per participant)
+yq -i ".rc_delayed_event_mgmt.per_second = 1" /data/homeserver.yaml
+yq -i ".rc_delayed_event_mgmt.burst_count = 20" /data/homeserver.yaml
+
+# MatrixRTC transport: LiveKit SFU
+yq -i ".matrix_rtc.transports[0].type = \"livekit\"" /data/homeserver.yaml
+yq -i ".matrix_rtc.transports[0].livekit_service_url = \"https://${MATRIX_HOST}/livekit/jwt\"" /data/homeserver.yaml
+
 #federation via well-known delegation (Caddy serves .well-known on port 443)
 yq -i ".serve_server_wellknown = false" /data/homeserver.yaml
 

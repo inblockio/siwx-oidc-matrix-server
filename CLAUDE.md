@@ -28,6 +28,8 @@ siwx-oidc-matrix-server/
 | `proxy`          | `nginxproxy/nginx-proxy:alpine`            | 80, 443       | Reverse proxy; aliases both hostnames on the Docker network |
 | `letsencrypt`    | `nginxproxy/acme-companion`                | —             | Auto-provisions TLS for proxy |
 | `element-web`    | `./dockerfiles/Dockerfile.element` (Element Web) | 80 (internal) | SIWX auto-login client, served via proxy at `${CLIENT_HOST}` |
+| `livekit`        | `livekit/livekit-server:latest`                  | 7881/tcp, 50100-50200/udp | LiveKit SFU for MatrixRTC (Element Call) |
+| `lk-jwt-service` | `ghcr.io/element-hq/lk-jwt-service:latest`       | 8080 (internal) | Validates Matrix OpenID tokens, issues LiveKit JWTs |
 
 Volumes: `matrix_data` (Synapse data), `proxy_data_*` (nginx/acme state).
 
@@ -190,6 +192,7 @@ Claude Code discovers them via symlinks in `.claude/commands/` (invoke with `/sk
 | `/siwx-matrix-device-verify` | E2EE device verification, cross-signing, and key lifecycle |
 | `/deploy` | Tag-based deployment to agentic.inblock.io |
 | `/set-admin` | Promote a user to server admin by DID |
+| `/matrix-rtc-transport-specialist` | Enable/troubleshoot Element Call (MatrixRTC + LiveKit) |
 
 ## Companion repo
 
