@@ -9,7 +9,7 @@ set -euo pipefail
 #   ./deploy.sh <ref> --restart              # sync + restart (no rebuild)
 #   ./deploy.sh <ref> --build --restart      # sync + pull + restart
 #
-# <ref> is any git ref: a tag (fork-stable), branch (main), or commit SHA.
+# <ref> is any git ref: a tag, branch (main), or commit SHA.
 # siwx-oidc-matrix-server repo is checked out at <ref> on the server.
 # Docker images are pulled from GHCR (built by GitHub Actions).
 #

@@ -49,32 +49,30 @@
     sessionStorage.setItem("siwx_state", state);
     sessionStorage.setItem("siwx_hs_url", HS_URL);
 
-    // Dynamic client registration (cache client_id in sessionStorage)
-    var clientId = sessionStorage.getItem("siwx_client_id");
-    if (!clientId) {
-      var regResp = await fetch(OIDC_BASE + "/register", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          client_name: "Element Web",
-          redirect_uris: [window.location.origin + "/"],
-          token_endpoint_auth_method: "none",
-          response_types: ["code"],
-          grant_types: ["authorization_code", "refresh_token"],
-        }),
-      });
-      if (!regResp.ok) {
-        console.error(
-          "OIDC client registration failed:",
-          regResp.status,
-          await regResp.text()
-        );
-        return;
-      }
-      var regData = await regResp.json();
-      clientId = regData.client_id;
-      sessionStorage.setItem("siwx_client_id", clientId);
+    // Dynamic client registration (always register fresh to avoid stale
+    // client_id after server redeploys that reset the Redis session store)
+    var regResp = await fetch(OIDC_BASE + "/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        client_name: "Element Web",
+        redirect_uris: [window.location.origin + "/"],
+        token_endpoint_auth_method: "none",
+        response_types: ["code"],
+        grant_types: ["authorization_code", "refresh_token"],
+      }),
+    });
+    if (!regResp.ok) {
+      console.error(
+        "OIDC client registration failed:",
+        regResp.status,
+        await regResp.text()
+      );
+      return;
     }
+    var regData = await regResp.json();
+    var clientId = regData.client_id;
+    sessionStorage.setItem("siwx_client_id", clientId);
 
     // Build authorization URL and redirect
     var authUrl =

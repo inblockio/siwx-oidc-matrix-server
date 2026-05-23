@@ -1,6 +1,6 @@
 services:
   matrix_synapse:
-    image: ghcr.io/inblockio/siwx-oidc-matrix-server/synapse:${IMAGE_TAG:-fork-stable}
+    image: ghcr.io/inblockio/siwx-oidc-matrix-server/synapse:${IMAGE_TAG:-main}
     restart: unless-stopped
     expose:
       - "${MATRIX_PORT}"
@@ -41,7 +41,7 @@ services:
       - default
 
   siwx-oidc:
-    image: ghcr.io/inblockio/siwx-oidc:${IMAGE_TAG:-fork-stable}
+    image: ghcr.io/inblockio/siwx-oidc:${IMAGE_TAG:-main}
     restart: unless-stopped
     depends_on:
       redis:
@@ -69,7 +69,7 @@ services:
       - default
 
   element-web:
-    image: ghcr.io/inblockio/siwx-oidc-matrix-server/element-web:${IMAGE_TAG:-fork-stable}
+    image: ghcr.io/inblockio/siwx-oidc-matrix-server/element-web:${IMAGE_TAG:-main}
     restart: unless-stopped
     environment:
       MATRIX_BASE_URL: ${MATRIX_BASE_URL}
