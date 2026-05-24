@@ -37,7 +37,7 @@
     # Client discovery — points Element at the OIDC issuer for MSC3861.
     handle /.well-known/matrix/client {
         header Access-Control-Allow-Origin *
-        respond `{"m.homeserver": {"base_url": "http://localhost:8080"}, "m.authentication": {"issuer": "http://localhost:8081"}, "org.matrix.msc4143.rtc_foci": [{"type": "livekit", "livekit_service_url": "http://localhost:8080/livekit/jwt"}]}`
+        respond `{"m.homeserver": {"base_url": "http://localhost:8080"}, "m.authentication": {"issuer": "http://localhost:8081"}, "m.authentication.account": "http://localhost:8081/account", "org.matrix.msc4143.rtc_foci": [{"type": "livekit", "livekit_service_url": "http://localhost:8080/livekit/jwt"}]}`
     }
 
     # MSC3861: login/logout/refresh go to siwx-oidc, not Synapse.
