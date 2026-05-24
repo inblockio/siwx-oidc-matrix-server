@@ -63,10 +63,12 @@ Key details:
   siwx-oidc.inblock.io is available on mobile if synced through iCloud Keychain,
   Google Password Manager, or a cross-platform manager (1Password, Bitwarden).
 
-**Prerequisite**: The user must have previously registered a passkey on
-`siwx-oidc.inblock.io`. If they have only used wallet signing, their first
-mobile login must use a wallet (MetaMask mobile, etc.). They can register a
-passkey afterward for subsequent logins.
+**First-time registration supported**: No prior account or passkey is required.
+The siwx-oidc login page includes a "Create one" option that lets users register
+a new passkey inline during the OIDC authorization flow. The passkey's P-256
+public key is used to derive a `did:key`, which becomes the user's Matrix
+identity. Synapse user provisioning happens automatically during sign-in.
+See `docs/2026-05-24-mobile-element-x-passkeyfirst.md` for the full flow analysis.
 
 ## Minor caveats (non-blocking)
 
