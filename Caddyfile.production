@@ -1,3 +1,22 @@
+(strip_upstream_cors) {
+    header_down -Access-Control-Allow-Origin
+    header_down -Access-Control-Allow-Methods
+    header_down -Access-Control-Allow-Headers
+    header_down -Access-Control-Allow-Credentials
+    header_down -Access-Control-Expose-Headers
+    header_down -Access-Control-Max-Age
+    header_down -Vary
+}
+
+(public_cors) {
+    @cors_preflight method OPTIONS
+    header Access-Control-Allow-Origin "*"
+    header Access-Control-Allow-Methods "GET, HEAD, POST, PUT, DELETE, OPTIONS"
+    header Access-Control-Allow-Headers "X-Requested-With, Content-Type, Authorization, Date"
+    header Access-Control-Max-Age "86400"
+    respond @cors_preflight 204
+}
+
 :80 {
     respond "OK" 200
 }
@@ -14,27 +33,21 @@ matrix.inblock.io {
     }
 
     handle /_matrix/client/v3/login {
+        import public_cors
         reverse_proxy siwx-oidc:8081 {
-            header_down -Access-Control-Allow-Origin
-            header_down -Access-Control-Allow-Methods
-            header_down -Access-Control-Allow-Headers
-            header_down -Vary
+            import strip_upstream_cors
         }
     }
     handle /_matrix/client/v3/logout {
+        import public_cors
         reverse_proxy siwx-oidc:8081 {
-            header_down -Access-Control-Allow-Origin
-            header_down -Access-Control-Allow-Methods
-            header_down -Access-Control-Allow-Headers
-            header_down -Vary
+            import strip_upstream_cors
         }
     }
     handle /_matrix/client/v3/refresh {
+        import public_cors
         reverse_proxy siwx-oidc:8081 {
-            header_down -Access-Control-Allow-Origin
-            header_down -Access-Control-Allow-Methods
-            header_down -Access-Control-Allow-Headers
-            header_down -Vary
+            import strip_upstream_cors
         }
     }
 
@@ -66,22 +79,11 @@ matrix.inblock.io {
 
 siwx-oidc.inblock.io {
     encode zstd gzip
-
-    header Access-Control-Allow-Origin "https://element.inblock.io"
-    header Access-Control-Allow-Methods "GET, POST, OPTIONS"
-    header Access-Control-Allow-Headers "Content-Type, Authorization"
-
-    @options method OPTIONS
-    handle @options {
-        respond 204
-    }
+    import public_cors
 
     handle {
         reverse_proxy siwx-oidc:8081 {
-            header_down -Access-Control-Allow-Origin
-            header_down -Access-Control-Allow-Methods
-            header_down -Access-Control-Allow-Headers
-            header_down -Vary
+            import strip_upstream_cors
         }
     }
 }
