@@ -41,7 +41,11 @@ services:
       - default
 
   siwx-oidc:
-    image: ghcr.io/inblockio/siwx-oidc:${IMAGE_TAG:-main}
+    # Built by the separate siwx-oidc repo, so it is versioned independently of
+    # this stack's IMAGE_TAG (which co-versions synapse + element-web). Pin via
+    # SIWX_OIDC_TAG; defaults to main so a stack tag never demands a matching
+    # siwx-oidc tag that does not exist.
+    image: ghcr.io/inblockio/siwx-oidc:${SIWX_OIDC_TAG:-main}
     restart: unless-stopped
     depends_on:
       redis:
