@@ -171,17 +171,35 @@ Key env vars:
 
 ### Device lifecycle
 
-- Fresh `SIWX_{uuid}` device_id generated on every login (never recycled)
-- Old device deleted from Synapse before new one is created
-- `allow_cross_signing_reset` fires on every login (new device = needs signing permission)
-- Both logout handlers (`revoke` + `logout`) call `delete_device` on Synapse
-- Redis stores `device_ids/{did}` mapping for cleanup only, not for recycling
+Provisioning is **idempotent and additive**. A single `provision_synapse_device`
+(in `../siwx-oidc/src/oidc.rs`) handles both Element Web and Element X:
 
-**Why no device_id recycling:** Synapse's `delete_device` (MAS API) does not remove
-cross-signing signatures from `e2e_cross_signing_signatures`, and its signature-upload
-handler skips new uploads when a stale one exists. Recycling a device_id with new keys
-creates an unrecoverable verification failure. See `docs/2026-05-19-device-verification-analysis.md`
-for the full root-cause analysis.
+- The client-supplied device_id from the OAuth scope (`urn:matrix:client:device:`
+  or the MSC2967 variant) is re-used verbatim. Only when the scope carries no
+  device_id is a fresh `SIWX_{uuid}` minted.
+- Provisioning is a plain `provision_user` + `upsert_device`. It never deletes an
+  existing device, so re-login preserves the device's E2EE keys and cross-signing
+  identity.
+- Logout/revoke (`compat.rs`) invalidate the opaque token only; they do NOT delete
+  the Synapse device. Device deletion is reserved for an explicit, user-initiated
+  "sign out this device" flow (not yet built).
+- Cross-signing is never reset by a login. `allow_cross_signing_reset` fires only
+  on the explicit, re-authenticated reset path in `../siwx-oidc/src/account.rs`
+  (`GET /account?action=org.matrix.cross_signing_reset`).
+- There is no Redis `device_ids/{did}` mapping; nothing recycles device_ids.
+
+**Why this avoids the identity-churn bug:** previously siwx-oidc deleted the device
+on every login/logout and reset cross-signing each login, which stranded the user's
+keys and triggered the recurring "reset your digital identity" prompt. Synapse's
+`delete_device` (MAS API) does not clean up `e2e_cross_signing_signatures`, so
+deleting + re-minting a device created an unrecoverable verification failure. Making
+provisioning idempotent removes the churn entirely. See
+`docs/2026-05-19-device-verification-analysis.md` and
+`docs/superpowers/plans/2026-05-29-cross-signing-identity-stability.md`.
+
+**Recovery is mandatory.** `config/element-config.json` sets `force_verification: true`,
+so every fresh login is pushed through a non-dismissible recovery (4S) setup flow.
+Combined with stable devices, a user who loses one device can always recover.
 
 ## Security posture
 
