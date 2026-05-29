@@ -155,7 +155,11 @@ IMAGE_TAG="$REF"
 
 if [ "$DO_BUILD" = true ]; then
   echo "Pulling pre-built images from GHCR (tag: ${IMAGE_TAG})..."
-  $SSH_CMD "cd ${REMOTE_DIR}/stack && IMAGE_TAG=${IMAGE_TAG} docker compose pull"
+  # Pull only the stack's own GHCR images. The external images (redis, livekit,
+  # lk-jwt-service) are pinned/cached and pulled by `up -d` only if missing, so
+  # a deploy never gates on Docker Hub anonymous-token availability (its
+  # parallel token fetches intermittently 404 and abort `compose pull`).
+  $SSH_CMD "cd ${REMOTE_DIR}/stack && IMAGE_TAG=${IMAGE_TAG} docker compose pull matrix_synapse siwx-oidc element-web"
 fi
 
 if [ "$DO_RESTART" = true ]; then
