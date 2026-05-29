@@ -6,6 +6,7 @@
     }
   },
   "disable_custom_urls": true,
+  "sso_redirect_options": { "immediate": true },
   "disable_guests": true,
   "disable_login_language_selector": true,
   "brand": "inblock.io Chat",

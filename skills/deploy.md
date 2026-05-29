@@ -141,15 +141,14 @@ curl -fsS "https://${ELEMENT_HOST}/config.json" \
 
 Open DevTools (Network + Console), filter Network by `token`:
 
-1. **Golden path** (fresh incognito at `https://element.inblock.io`): native OIDC
-   screen (single Continue button, no splash, no blank page) → Continue → siwx-oidc
-   `/authorize` → wallet/passkey auth → back to `/?code=...` →
-   **exactly one** `/token` 200 (not two), **no** repeated `/authorize` 401 loop,
-   lands logged in, console clean of CORS / "issuer mismatch / discovery failed".
+1. **Golden path** (fresh incognito at `https://element.inblock.io`): the page
+   **auto-redirects** straight to siwx-oidc `/authorize` (no welcome page, no
+   Continue screen, no splash, no blank page) via `sso_redirect_options.immediate`
+   → wallet/passkey auth → back to `/?code=...` → **exactly one** `/token` 200 (not
+   two), **no** repeated `/authorize` 401 loop, lands logged in, console clean of
+   CORS / "issuer mismatch / discovery failed".
 2. **Reload while authenticated**: boots straight in, no redirect, no second `/token`.
 3. **Back button to `/?code=...`**: no second token exchange, no error (code is single-use).
-4. **Logout**: Element's own logout clears the session. Do **not** re-introduce any
-   logout interception (hard project rule).
 
 ## Staged rollback / revert model
 
@@ -252,5 +251,5 @@ shared secret on a live server — see the recovery reference for impact.
 - [ ] Immutable tag pushed; CI `Publish Docker` green (GHCR images exist for the tag)
 - [ ] `./deploy.sh <tag> --build --restart` completed; all containers healthy
 - [ ] Automated verify (Stage 3a) all PASS — issuer slash, metadata byte-match, endpoints, CORS, config
-- [ ] Manual browser tests (Stage 3b) pass — one `/token`, no 401 loop, reload/back/logout clean
+- [ ] Manual browser tests (Stage 3b) pass — auto-redirect to `/authorize`, one `/token`, no 401 loop, reload/back clean
 - [ ] Rollback target known: last-good tag recorded

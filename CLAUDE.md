@@ -99,6 +99,13 @@ they re-introduce the callback race (see
 `entrypoints/element_entrypoint.sh` now only templates `config.json` and applies
 favicon branding.
 
+**Auto-redirect to login:** `config/element-config.json` sets
+`"sso_redirect_options": { "immediate": true }` so an unauthenticated visit to
+`${CLIENT_HOST}` bounces straight to siwx-oidc's `/authorize` (no welcome page,
+no Continue screen). This is Element's own native config, not a custom script, so
+it cannot re-introduce the callback race: the redirect is still Element's single
+native OIDC flow, the only OIDC consumer.
+
 **Issuer trailing slash:** the well-known `m.authentication.issuer` must
 byte-match siwx-oidc's canonical metadata issuer (`https://siwx-oidc.inblock.io/`,
 with the trailing slash) per RFC 8414 §3.3, or Element Web's strict discovery
