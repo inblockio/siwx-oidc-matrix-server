@@ -84,13 +84,26 @@ against `^did:[a-z]+:[a-z0-9]+:[a-z0-9]+:0x[0-9a-fA-F]{40}$` before use.
 ## Element Web client
 
 A self-hosted Element Web instance is included in the stack, accessible at
-`https://${CLIENT_HOST}`. It is pre-configured to connect to the local Synapse
-and auto-redirects unauthenticated users to the SIWX OIDC login flow.
+`https://${CLIENT_HOST}`. It is pre-configured (`config/element-config.json`,
+`default_server_config` + `disable_custom_urls`) to connect to the local Synapse.
 
-The redirect logic lives in `config/siwx-redirect.js`. A branded splash screen
-(`config/siwx-splash.html`) displays briefly while the redirect occurs. Both are
-injected into Element's `index.html` at container start by
-`entrypoints/element_entrypoint.sh`.
+Login uses Element Web's **native** OIDC flow (MSC2965 discovery + MSC3861
+delegated auth). Element reads the homeserver's `.well-known/matrix/client`,
+finds `m.authentication`, and makes native OIDC the only login option: it
+dynamically registers, redirects to siwx-oidc's `/authorize`, and exchanges the
+code itself. This is the same flow Element X mobile uses.
+
+Login is native OIDC only. Do NOT add custom auth/redirect/callback scripts;
+they re-introduce the callback race (see
+`docs/superpowers/plans/2026-05-29-native-oidc-callback-race-fix.md`).
+`entrypoints/element_entrypoint.sh` now only templates `config.json` and applies
+favicon branding.
+
+**Issuer trailing slash:** the well-known `m.authentication.issuer` must
+byte-match siwx-oidc's canonical metadata issuer (`https://siwx-oidc.inblock.io/`,
+with the trailing slash) per RFC 8414 §3.3, or Element Web's strict discovery
+rejects it. Keep the slash in `Caddyfile.production`, `Caddyfile.local`, and
+`deploy.sh`.
 
 No Element Web fork is needed. The stock `vectorim/element-web` image is used as
 a base. To update Element, change the tag in `dockerfiles/Dockerfile.element`.

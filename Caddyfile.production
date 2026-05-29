@@ -29,7 +29,7 @@ matrix.inblock.io {
     }
     handle /.well-known/matrix/client {
         header Access-Control-Allow-Origin *
-        respond `{"m.homeserver": {"base_url": "https://matrix.inblock.io"}, "m.authentication": {"issuer": "https://siwx-oidc.inblock.io"}, "m.authentication.account": "https://siwx-oidc.inblock.io/account", "org.matrix.msc4143.rtc_foci": [{"type": "livekit", "livekit_service_url": "https://matrix.inblock.io/livekit/jwt"}]}`
+        respond `{"m.homeserver": {"base_url": "https://matrix.inblock.io"}, "m.authentication": {"issuer": "https://siwx-oidc.inblock.io/"}, "m.authentication.account": "https://siwx-oidc.inblock.io/account", "org.matrix.msc4143.rtc_foci": [{"type": "livekit", "livekit_service_url": "https://matrix.inblock.io/livekit/jwt"}]}`
     }
 
     handle /_matrix/client/v3/login {
