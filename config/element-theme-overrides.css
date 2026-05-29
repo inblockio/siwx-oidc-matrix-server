@@ -1,0 +1,41 @@
+/*
+ * inblock.io Element Web theme overrides.
+ *
+ * Workaround for an upstream Element bug: the custom-theme CSS bundles
+ * (theme-light-custom.css, theme-dark-custom.css) hardcode the selected
+ * settings-tab label to a near-white literal (#fff / #edf3ff) instead of
+ * using a variable. Element's theme JSON can only override CSS variables,
+ * so theme-inblockio-light.json cannot reach this literal: on the light
+ * theme it renders white text on the light selected-tab pill, which is
+ * effectively invisible.
+ *
+ * The built-in (non-custom) themes correctly use var(--cpd-color-text-primary)
+ * here. This rule restores that behavior for the custom themes. The variable
+ * resolves to dark text in light themes and light text in dark themes, so the
+ * single rule is correct for both inblock.io Dark and inblock.io Light.
+ */
+.mx_TabbedView_tabsOnLeft .mx_TabbedView_tabLabel_active,
+.mx_TabbedView_tabsOnLeft .mx_TabbedView_tabLabel_active .mx_TabbedView_tabLabel_text {
+    color: var(--cpd-color-text-primary) !important;
+}
+
+/*
+ * Online presence indicator: force green instead of the brand accent.
+ *
+ * Element colors the "online" presence dot with --cpd-color-icon-accent-primary,
+ * which in stock Element is green (the Element brand accent). Our custom themes
+ * remap the accent to brand orange (#E8611A), so the online dot inherits orange
+ * and reads as yellow. We repaint only the online state to success-green, leaving
+ * away/offline/busy and all other accent icons (e.g. voice/video call buttons)
+ * on the brand orange accent.
+ *
+ * Two render paths exist:
+ *   - mx_PresenceIconView_online: state-specific class (member/user avatars).
+ *   - mx_RoomAvatarView_PresenceDecoration: one class shared by all states, so it
+ *     can only be scoped to online via the localized aria-label (room-list DM
+ *     avatars). English-only deployment; degrades to orange if the label changes.
+ */
+.mx_PresenceIconView_online,
+.mx_RoomAvatarView_PresenceDecoration[aria-label="Online"] {
+    color: var(--cpd-color-icon-success-primary) !important;
+}

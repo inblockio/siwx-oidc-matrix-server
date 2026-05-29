@@ -18,6 +18,13 @@ for size in 24 120 144 152 180 512 1024; do
   done
 done
 
+# Inject the inblock.io theme-override stylesheet into index.html.
+# Idempotent: only insert if the link is not already present, so a container
+# restart (entrypoint re-runs on the same writable layer) cannot duplicate it.
+if ! grep -q "element-theme-overrides.css" /app/index.html; then
+  sed -i 's|<head>|<head><link rel="stylesheet" href="element-theme-overrides.css">|' /app/index.html
+fi
+
 # No auth-script injection. Element Web's native MSC2965/MSC3861 OIDC flow
 # discovers the issuer from the homeserver's .well-known m.authentication and
 # owns login end to end (the same flow Element X mobile uses). Custom redirect/

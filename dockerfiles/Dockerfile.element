@@ -3,6 +3,7 @@ FROM vectorim/element-web:latest
 USER root
 
 COPY config/element-config.json /app/config.json
+COPY config/element-theme-overrides.css /app/element-theme-overrides.css
 COPY config/inblockio_logo_dark.png /app/inblockio_logo_dark.png
 COPY config/favicon.ico /app/favicon.ico
 COPY config/favicon-24.png /app/favicon-24.png
