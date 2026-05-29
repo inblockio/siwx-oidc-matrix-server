@@ -214,6 +214,7 @@ Claude Code discovers them via symlinks in `.claude/commands/` (invoke with `/sk
 | `/set-admin` | Promote a user to server admin by DID |
 | `/matrix-rtc-transport-specialist` | Enable/troubleshoot Element Call (MatrixRTC + LiveKit) |
 | `/matrix-custom-themes-specialist` | Add, configure, and troubleshoot custom Element Web themes |
+| `/element-x-mobile-passkey-first` | Set up and debug passkey-first login on Element X mobile (iOS/Android) |
 
 ## Companion repo
 
