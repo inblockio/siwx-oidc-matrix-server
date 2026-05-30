@@ -1,7 +1,60 @@
-FROM vectorim/element-web:latest
+# Builds Element Web from source at a pinned tag with our vendored
+# force-first-device-recovery patch applied, then serves it with the
+# inblock.io overlay (config, theme, favicons) via the existing entrypoint.
+#
+# Why from source: the prebuilt vectorim/element-web image cannot carry our
+# patch to apps/web/src/components/structures/MatrixChat.tsx, which makes a
+# recoverable identity (4S recovery key) mandatory on first login. The patch
+# in patches/element-web/ is the single source of truth (== the upstream PR).
+# See docs/element-web-source-build.md.
+
+# ---------------------------------------------------------------------------
+# Builder: clone element-web at the pinned tag, apply our patch, build webapp.
+# Node >= 22.18 required by upstream; node:24-bullseye matches their builder.
+# ---------------------------------------------------------------------------
+FROM node:24-bullseye AS builder
+
+ARG ELEMENT_WEB_TAG=v1.12.20
+
+WORKDIR /src
+
+# Shallow clone of the pinned tag. Keep .git: the build/version scripts run
+# `git describe` to stamp the version, and the lockfile install is reproducible.
+RUN git clone --depth 1 --branch "${ELEMENT_WEB_TAG}" \
+      https://github.com/element-hq/element-web.git /src
+
+# Apply our vendored patch. Fail the build loudly if it does not apply cleanly,
+# so a tag bump that breaks the patch is caught here, not at runtime.
+COPY patches/element-web/force-first-device-recovery.patch /tmp/ew.patch
+RUN git apply --verbose /tmp/ew.patch
+
+# Install exactly what the lockfile pins.
+RUN corepack enable && pnpm install --frozen-lockfile
+
+# Build the web app. The nx target for the element-web app produces the full
+# bundle at apps/web/webapp/ (index.html, bundles, vector-icons/, themes, i18n,
+# config.sample.json). 6 GiB heap headroom for the bundler.
+ENV NODE_OPTIONS=--max-old-space-size=6144
+RUN pnpm --filter element-web build
+
+# Provide a default config.json in the bundle (upstream ships none). Our runtime
+# overlay overwrites /app/config.json, but this keeps the bundle self-consistent
+# and the /config.json healthcheck path populated if the overlay is ever absent.
+RUN cp /src/apps/web/config.sample.json /src/apps/web/webapp/config.json
+
+# ---------------------------------------------------------------------------
+# Runtime: unprivileged nginx (same base family as vectorim/element-web), with
+# the inblock.io overlay applied exactly as the previous config-only image did.
+# nginx-unprivileged serves on 8080 as the `nginx` user.
+# ---------------------------------------------------------------------------
+FROM nginxinc/nginx-unprivileged:alpine-slim
 
 USER root
 
+# Source-built web app bundle.
+COPY --from=builder /src/apps/web/webapp /app
+
+# inblock.io overlay (identical to the previous Dockerfile.element).
 COPY config/element-config.json /app/config.json
 COPY config/element-theme-overrides.css /app/element-theme-overrides.css
 COPY config/inblockio_logo_dark.png /app/inblockio_logo_dark.png
@@ -14,5 +67,16 @@ COPY config/favicon-180.png /app/favicon-180.png
 COPY config/favicon-512.png /app/favicon-512.png
 COPY config/favicon-1024.png /app/favicon-1024.png
 COPY entrypoints/element_entrypoint.sh /docker-entrypoint.sh
+
+# nginx-unprivileged's default server serves /usr/share/nginx/html. Point that
+# at /app via a symlink (same as upstream element-web's app Dockerfile) so the
+# source-built bundle is served without touching the nginx config, and the
+# entrypoint can keep writing to /app.
+RUN rm -rf /usr/share/nginx/html && ln -s /app /usr/share/nginx/html
+
+# The entrypoint mutates /app/index.html and /app/config.json at runtime
+# (sed -i) and serves as the `nginx` user, so /app must be writable+readable by
+# that user. Make the entrypoint executable and grant nginx ownership of /app.
+RUN chmod +x /docker-entrypoint.sh && chown -R nginx:nginx /app
 
 ENTRYPOINT ["/docker-entrypoint.sh"]

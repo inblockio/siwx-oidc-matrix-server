@@ -112,8 +112,20 @@ with the trailing slash) per RFC 8414 §3.3, or Element Web's strict discovery
 rejects it. Keep the slash in `Caddyfile.production`, `Caddyfile.local`, and
 `deploy.sh`.
 
-No Element Web fork is needed. The stock `vectorim/element-web` image is used as
-a base. To update Element, change the tag in `dockerfiles/Dockerfile.element`.
+**Element Web is built from source (not the prebuilt image).**
+`dockerfiles/Dockerfile.element` is a multi-stage build that clones
+`element-hq/element-web` at a pinned tag (`ARG ELEMENT_WEB_TAG`, currently
+`v1.12.20`), applies the vendored patch
+`patches/element-web/force-first-device-recovery.patch`, runs
+`pnpm --filter element-web build`, then serves the bundle via
+`nginxinc/nginx-unprivileged` with the inblock.io overlay + existing entrypoint
+(no entrypoint change; a `/usr/share/nginx/html -> /app` symlink restores serving).
+v1.12.20 is a pnpm + nx monorepo needing Node >=22.18; the builder uses
+`node:24-bullseye`. The patch is the single source of truth (== the upstream PR);
+`git apply` fails the build loudly if a tag bump breaks it. To bump Element,
+update `ELEMENT_WEB_TAG` and refresh the patch per
+`docs/element-web-source-build.md`. No separate fork is vendored (the source is
+cloned at build time). See `docs/superpowers/plans/2026-05-30-force-first-device-recovery.md`.
 
 ## Common operations
 
@@ -171,17 +183,54 @@ Key env vars:
 
 ### Device lifecycle
 
-- Fresh `SIWX_{uuid}` device_id generated on every login (never recycled)
-- Old device deleted from Synapse before new one is created
-- `allow_cross_signing_reset` fires on every login (new device = needs signing permission)
-- Both logout handlers (`revoke` + `logout`) call `delete_device` on Synapse
-- Redis stores `device_ids/{did}` mapping for cleanup only, not for recycling
+Provisioning is **idempotent and additive**. A single `provision_synapse_device`
+(in `../siwx-oidc/src/oidc.rs`) handles both Element Web and Element X:
 
-**Why no device_id recycling:** Synapse's `delete_device` (MAS API) does not remove
-cross-signing signatures from `e2e_cross_signing_signatures`, and its signature-upload
-handler skips new uploads when a stale one exists. Recycling a device_id with new keys
-creates an unrecoverable verification failure. See `docs/2026-05-19-device-verification-analysis.md`
-for the full root-cause analysis.
+- The client-supplied device_id from the OAuth scope (`urn:matrix:client:device:`
+  or the MSC2967 variant) is re-used verbatim. Only when the scope carries no
+  device_id is a fresh `SIWX_{uuid}` minted.
+- Provisioning is a plain `provision_user` + `upsert_device`. It never deletes an
+  existing device, so re-login preserves the device's E2EE keys and cross-signing
+  identity.
+- Logout/revoke (`compat.rs`) invalidate the opaque token only; they do NOT delete
+  the Synapse device. Device deletion is reserved for an explicit, user-initiated
+  "sign out this device" flow (not yet built).
+- Cross-signing is never reset by a login. `allow_cross_signing_reset` fires only
+  on the explicit, re-authenticated reset path in `../siwx-oidc/src/account.rs`
+  (`GET /account?action=org.matrix.cross_signing_reset`).
+- There is no Redis `device_ids/{did}` mapping; nothing recycles device_ids.
+
+**Why this avoids the identity-churn bug:** previously siwx-oidc deleted the device
+on every login/logout and reset cross-signing each login, which stranded the user's
+keys and triggered the recurring "reset your digital identity" prompt. Synapse's
+`delete_device` (MAS API) does not clean up `e2e_cross_signing_signatures`, so
+deleting + re-minting a device created an unrecoverable verification failure. Making
+provisioning idempotent removes the churn entirely. See
+`docs/2026-05-19-device-verification-analysis.md` and
+`docs/superpowers/plans/2026-05-29-cross-signing-identity-stability.md`.
+
+**Recovery is mandatory (enforced by patch, not config alone).**
+`config/element-config.json` sets `force_verification: true`, but stock Element
+v1.12.20 only gates `force_verification` on cross-signing readiness — the
+transparent first-device bootstrap makes cross-signing ready without ever creating
+a recovery key, so the config alone let users reach the app with no 4S. The
+vendored patch `patches/element-web/force-first-device-recovery.patch` closes this:
+`shouldForceVerification()` now also requires secret-storage (4S) readiness, and
+`onCompleteSecurityE2eSetupFinished` drives Element's recovery-key creation flow
+(`accessSecretStorage(..., { forceReset })`) on a first device with no 4S. The
+reset is gated on `cli.secretStorage.hasKey()` (`forceReset: !hasExisting4S`) so a
+returning user whose 4S exists server-side but isn't locally cached is driven to
+*unlock* (enter existing key), never destructively reset — their recovery key and
+message backup are preserved. Cross-signing is never regenerated. If the user
+cancels or the attempt fails, the patch loops on a non-dismissible Retry / Sign out
+dialog (any dismissal is treated as sign out, dispatching `{action:"logout"}`)
+instead of silently stranding them on the inert setup screen — so the requirement
+cannot be slipped past and there is no dead-end. Behavior is unchanged when
+`force_verification` is unset. Validated on `element.inblock.io` 2026-05-30 (fresh
+first-login forced recovery; device-removal re-login recovered via existing key).
+Combined with stable devices, a user who loses one device can always recover. The
+vendored patch is also the upstream PR to `element-hq/element-web` (with Jest
+tests); see [[project_force_first_device_recovery]] in memory.
 
 ## Security posture
 
