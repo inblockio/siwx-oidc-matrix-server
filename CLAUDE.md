@@ -112,8 +112,20 @@ with the trailing slash) per RFC 8414 §3.3, or Element Web's strict discovery
 rejects it. Keep the slash in `Caddyfile.production`, `Caddyfile.local`, and
 `deploy.sh`.
 
-No Element Web fork is needed. The stock `vectorim/element-web` image is used as
-a base. To update Element, change the tag in `dockerfiles/Dockerfile.element`.
+**Element Web is built from source (not the prebuilt image).**
+`dockerfiles/Dockerfile.element` is a multi-stage build that clones
+`element-hq/element-web` at a pinned tag (`ARG ELEMENT_WEB_TAG`, currently
+`v1.12.20`), applies the vendored patch
+`patches/element-web/force-first-device-recovery.patch`, runs
+`pnpm --filter element-web build`, then serves the bundle via
+`nginxinc/nginx-unprivileged` with the inblock.io overlay + existing entrypoint
+(no entrypoint change; a `/usr/share/nginx/html -> /app` symlink restores serving).
+v1.12.20 is a pnpm + nx monorepo needing Node >=22.18; the builder uses
+`node:24-bullseye`. The patch is the single source of truth (== the upstream PR);
+`git apply` fails the build loudly if a tag bump breaks it. To bump Element,
+update `ELEMENT_WEB_TAG` and refresh the patch per
+`docs/element-web-source-build.md`. No separate fork is vendored (the source is
+cloned at build time). See `docs/superpowers/plans/2026-05-30-force-first-device-recovery.md`.
 
 ## Common operations
 
@@ -197,9 +209,23 @@ provisioning idempotent removes the churn entirely. See
 `docs/2026-05-19-device-verification-analysis.md` and
 `docs/superpowers/plans/2026-05-29-cross-signing-identity-stability.md`.
 
-**Recovery is mandatory.** `config/element-config.json` sets `force_verification: true`,
-so every fresh login is pushed through a non-dismissible recovery (4S) setup flow.
-Combined with stable devices, a user who loses one device can always recover.
+**Recovery is mandatory (enforced by patch, not config alone).**
+`config/element-config.json` sets `force_verification: true`, but stock Element
+v1.12.20 only gates `force_verification` on cross-signing readiness — the
+transparent first-device bootstrap makes cross-signing ready without ever creating
+a recovery key, so the config alone let users reach the app with no 4S. The
+vendored patch `patches/element-web/force-first-device-recovery.patch` closes this:
+`shouldForceVerification()` now also requires secret-storage (4S) readiness, and
+`onCompleteSecurityE2eSetupFinished` drives Element's recovery-key creation flow
+(`accessSecretStorage(..., { forceReset })`) on a first device with no 4S. The
+reset is gated on `cli.secretStorage.hasKey()` (`forceReset: !hasExisting4S`) so a
+returning user whose 4S exists server-side but isn't locally cached is driven to
+*unlock* (enter existing key), never destructively reset — their recovery key and
+message backup are preserved. Cross-signing is never regenerated. Behavior is
+unchanged when `force_verification` is unset. Validated on `element.inblock.io`
+2026-05-30 (fresh first-login forced recovery; device-removal re-login recovered
+via existing key). Combined with stable devices, a user who loses one device can
+always recover.
 
 ## Security posture
 
