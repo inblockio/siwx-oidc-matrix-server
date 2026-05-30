@@ -1,5 +1,5 @@
 diff --git a/apps/web/src/components/structures/MatrixChat.tsx b/apps/web/src/components/structures/MatrixChat.tsx
-index 0dbc2af2e4..cd752be15c 100644
+index 0dbc2af..9926936 100644
 --- a/apps/web/src/components/structures/MatrixChat.tsx
 +++ b/apps/web/src/components/structures/MatrixChat.tsx
 @@ -35,6 +35,7 @@ import { DecryptionFailureTracker } from "../../DecryptionFailureTracker";
@@ -28,7 +28,7 @@ index 0dbc2af2e4..cd752be15c 100644
      }
  
      /**
-@@ -2133,11 +2141,40 @@ export default class MatrixChat extends React.PureComponent<IProps, IState> {
+@@ -2133,13 +2141,61 @@ export default class MatrixChat extends React.PureComponent<IProps, IState> {
  
      /** Called when {@link Views.E2E_SETUP} or {@link Views.COMPLETE_SECURITY} have completed. */
      private onCompleteSecurityE2eSetupFinished = async (): Promise<void> => {
@@ -43,34 +43,68 @@ index 0dbc2af2e4..cd752be15c 100644
 +            const crossSigningReady = await crypto?.isCrossSigningReady();
 +            if (!crossSigningReady) {
 +                // We must verify but cross-signing isn't ready yet - don't continue logging in.
-+                return;
-+            }
+                 return;
+             }
 +
 +            // Cross-signing is ready but `shouldForceVerification` is still true, which means
 +            // secret storage (4S) has not been set up. The transparent InitialCryptoSetup
 +            // (E2E_SETUP) deliberately does not create a recovery key, and the COMPLETE_SECURITY
 +            // body only offers device-to-device verification / existing-recovery-key entry - it
-+            // cannot mint a recovery key on a lone first device. Drive Element's existing
-+            // recovery-key creation flow (CreateSecretStorageDialog via forceReset) so the user
-+            // cannot reach the app without a recoverable identity. The dialog bootstraps secret
-+            // storage; once it completes, `shouldForceVerification` returns false and we proceed.
-+            try {
-+                // Distinguish "4S genuinely absent" (must create a recovery key) from "4S exists
-+                // server-side but isn't unlocked on this device" (must unlock, never reset - resetting
-+                // orphans the user's existing recovery key and message-key backup). hasKey() reflects
-+                // server-side default-key presence.
-+                const hasExisting4S = await cli.secretStorage.hasKey();
-+                // forceReset only when no 4S exists at all; otherwise accessSecretStorage drives the
-+                // non-destructive unlock/bootstrap branch (idempotent bootstrapCrossSigning +
-+                // bootstrapSecretStorage), which never mints a new key, never resets backup, and never
-+                // regenerates cross-signing.
-+                await accessSecretStorage(async () => {}, { forceReset: !hasExisting4S });
-+            } catch (e) {
-+                logger.warn("Forced recovery-key setup was not completed; not continuing login", e);
-+            }
++            // cannot mint a recovery key on a lone first device. Drive Element's recovery-key
++            // creation flow until a recovery key exists, or let the user sign out - we must never
++            // trap them on the (now inert) setup screen if they cancel.
++            let recoverySetUp = false;
++            while (!recoverySetUp) {
++                try {
++                    // Distinguish "4S genuinely absent" (must create a recovery key) from "4S
++                    // exists server-side but isn't unlocked on this device" (must unlock, never
++                    // reset - resetting orphans the user's existing recovery key and message-key
++                    // backup). hasKey() reflects server-side default-key presence; recompute it
++                    // every pass so a retry after a partial attempt still does the right thing.
++                    const hasExisting4S = await cli.secretStorage.hasKey();
++                    await accessSecretStorage(async () => {}, { forceReset: !hasExisting4S });
++                    // Re-check readiness inside the try: if a transient crypto error throws here
++                    // too, fall through to the Retry/Sign out choice rather than escaping as an
++                    // unhandled rejection (this handler is fire-and-forget) that would re-strand
++                    // the user on the inert setup screen.
++                    recoverySetUp = !(await this.shouldForceVerification());
++                } catch (e) {
++                    logger.warn("Forced recovery-key setup was not completed", e);
++                    recoverySetUp = false;
++                }
 +
-+            if (await this.shouldForceVerification()) {
-+                // Recovery key still not set up (user cancelled the dialog) - don't continue.
-                 return;
-             }
++                if (recoverySetUp) break;
++
++                // Recovery still isn't set up - the user cancelled, or the attempt failed. Rather
++                // than silently stranding them on the inert setup screen, force an explicit choice:
++                // try again, or sign out. Any dismissal of this dialog (cancel/Esc/background) is
++                // treated as "sign out", so the requirement cannot be slipped past, and the user
++                // can never be trapped with no way forward.
++                const { finished } = Modal.createDialog(QuestionDialog, {
++                    title: _t("encryption|force_recovery_setup_title"),
++                    description: _t("encryption|force_recovery_setup_description"),
++                    button: _t("action|retry"),
++                    cancelButton: _t("action|logout"),
++                });
++                const [retry] = await finished;
++                if (!retry) {
++                    dis.dispatch({ action: "logout" });
++                    return;
++                }
++            }
          }
+ 
+         this.onShowPostLoginScreen();
+diff --git a/apps/web/src/i18n/strings/en_EN.json b/apps/web/src/i18n/strings/en_EN.json
+index 4ed51db..0c69655 100644
+--- a/apps/web/src/i18n/strings/en_EN.json
++++ b/apps/web/src/i18n/strings/en_EN.json
+@@ -972,6 +972,8 @@
+         "event_shield_reason_unsigned_device": "Encrypted by a device not verified by its owner.",
+         "event_shield_reason_unverified_identity": "Encrypted by an unverified user.",
+         "export_unsupported": "Your browser does not support the required cryptography extensions",
++        "force_recovery_setup_description": "To keep access to your messages, you need to set up recovery before continuing. This protects your chat history if you lose this device.",
++        "force_recovery_setup_title": "Set up recovery to continue",
+         "forgot_recovery_key": "Forgot recovery key?",
+         "identity_needs_reset_description": "You have to reset your digital identity in order to ensure access to your chat history",
+         "import_invalid_keyfile": "Not a valid %(brand)s keyfile",

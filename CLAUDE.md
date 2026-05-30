@@ -221,11 +221,16 @@ vendored patch `patches/element-web/force-first-device-recovery.patch` closes th
 reset is gated on `cli.secretStorage.hasKey()` (`forceReset: !hasExisting4S`) so a
 returning user whose 4S exists server-side but isn't locally cached is driven to
 *unlock* (enter existing key), never destructively reset — their recovery key and
-message backup are preserved. Cross-signing is never regenerated. Behavior is
-unchanged when `force_verification` is unset. Validated on `element.inblock.io`
-2026-05-30 (fresh first-login forced recovery; device-removal re-login recovered
-via existing key). Combined with stable devices, a user who loses one device can
-always recover.
+message backup are preserved. Cross-signing is never regenerated. If the user
+cancels or the attempt fails, the patch loops on a non-dismissible Retry / Sign out
+dialog (any dismissal is treated as sign out, dispatching `{action:"logout"}`)
+instead of silently stranding them on the inert setup screen — so the requirement
+cannot be slipped past and there is no dead-end. Behavior is unchanged when
+`force_verification` is unset. Validated on `element.inblock.io` 2026-05-30 (fresh
+first-login forced recovery; device-removal re-login recovered via existing key).
+Combined with stable devices, a user who loses one device can always recover. The
+vendored patch is also the upstream PR to `element-hq/element-web` (with Jest
+tests); see [[project_force_first_device_recovery]] in memory.
 
 ## Security posture
 
