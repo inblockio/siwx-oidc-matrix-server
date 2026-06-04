@@ -1,5 +1,9 @@
 # Custom Themes for Element Web: Design Spec
 
+> **SUPERSEDED 2026-06-04.** The standalone `config/theme-*.json` files were
+> deleted; themes are authored only inline in `config/element-config.json`. See
+> `docs/element-theme-customization.md`. Kept for history.
+
 ## Goal
 
 Enable custom theme selection in the self-hosted Element Web instance. Pre-load

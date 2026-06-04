@@ -1,5 +1,10 @@
 # Custom Matrix Themes: Deploy Pipeline
 
+> **SUPERSEDED 2026-06-04.** The standalone `config/theme-*.json` files this
+> pipeline creates were deleted; themes are authored only inline in
+> `config/element-config.json`. See `docs/element-theme-customization.md`. Kept
+> for history.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Enable three custom themes (inblock.io Dark as default, inblock.io Light, Nord Dark) in Element Web at element.inblock.io so all users see them in Settings > Appearance.
