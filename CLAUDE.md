@@ -4,6 +4,26 @@ Docker Compose deployment stack that runs a Synapse Matrix homeserver fronted by
 siwx-oidc (CAIP-122 OIDC provider) so agents and wallets can authenticate with
 EIP-191, Ed25519, or P-256 keys.
 
+## Build and deployment model
+
+**Images are built by GitHub Actions and published to GHCR. Do NOT build images
+locally for deployment.** Per the global DevOps rule, public repos build via the CI/CD
+pipeline, not on a developer machine.
+
+- **Running images come from CI:** `ghcr.io/inblockio/siwx-oidc-matrix-server/synapse`,
+  `.../element-web`, and `ghcr.io/inblockio/siwx-oidc`, tag `:main`, built on push to `main`.
+- **Production** is `deploy@agentic.inblock.io` (stack at `/home/deploy/matrix/stack`),
+  running the `:main` GHCR images. `deploy.sh` does `docker compose pull` + `up`; a
+  `watchtower` container auto-pulls new `:main`. `config/element-config.json` is
+  bind-mounted, so theme/config edits apply on an `element-web` restart with no image
+  rebuild.
+- **`docker-compose.local.yml`** (the `build:` sections) is for **local dev iteration
+  only**. The images it builds are not what runs in production and go stale quickly. Never
+  treat a locally-run stack as "live", and never deploy a locally-built image.
+- **To verify what is actually deployed, inspect production** (read-only SSH to
+  `agentic.inblock.io`: `docker compose ps`, plus the `element-web` container's `/app`),
+  not the local Docker daemon.
+
 ## Repository structure
 
 ```
