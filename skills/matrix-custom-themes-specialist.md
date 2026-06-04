@@ -131,12 +131,16 @@ array in `config/element-config.json`.
 
 ## inblock.io Brand Themes
 
-Two brand-aligned themes are provided in the repo, mapping the inblock.io design
-system to Element's theme keys.
+Two brand-aligned themes (inblock.io Dark, inblock.io Light), plus a Nord control
+theme, map the inblock.io design system to Element's theme keys.
 
-**Files:**
-- `config/theme-inblockio-dark.json` -- inblock.io Dark
-- `config/theme-inblockio-light.json` -- inblock.io Light
+**Single source of truth:** the themes are authored inline in
+`config/element-config.json` under `setting_defaults.custom_themes` (a bind-mounted
+file, applied on an `element-web` restart). There are no standalone `theme-*.json`
+files; edit the inline array directly. See `docs/element-theme-customization.md` for
+the palette-vs-routing ownership contract and the protected-token discipline (never
+override `--cpd-color-icon-accent-primary` or any success/green token, or the online
+presence dot and success icons stop being green).
 
 ### Brand color mapping
 
@@ -156,21 +160,23 @@ system to Element's theme keys.
 - Light theme accent text uses `#D4570F` (accent-hover) for better contrast
 - Selected reactions use the brand's subtle accent tint (`--accent-glow` / `--accent-soft`)
 
-### Applying the brand themes
+### Editing the brand themes
 
-Read the theme files and embed them in `element-config.json`:
-
-```bash
-# Show the JSON to embed
-cat config/theme-inblockio-dark.json
-cat config/theme-inblockio-light.json
-```
-
-Add both objects to the `setting_defaults.custom_themes` array, then restart:
+Edit the theme objects in place in `config/element-config.json`
+(`setting_defaults.custom_themes`), then restart:
 
 ```bash
+# Validate before restarting -- a JSON parse error blanks all of Element.
+./verify-theme.sh
 docker compose restart element-web
 ```
+
+Keep each theme's `compound` map to two intentional groups only: the neutral palette
+(surfaces + text/icon greys) and the brand-orange accents (`bg-action-primary-rest`,
+`bg-accent-rest`, `text-action-accent`, `icon-accent-tertiary`,
+`border-interactive-primary`). Do NOT pin success/critical/green tokens: on the pinned
+Element version they are already correct by Compound default, and pinning them is the
+phantom-fix trap that this skill's themes were cleaned up to avoid.
 
 ---
 
