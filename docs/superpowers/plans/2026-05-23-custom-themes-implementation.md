@@ -1,5 +1,10 @@
 # Handover: Implement and Deploy Custom Themes for Element Web
 
+> **SUPERSEDED 2026-06-04.** The standalone `config/theme-*.json` files this doc
+> creates/reads were deleted; themes are now authored only inline in
+> `config/element-config.json`. See `docs/element-theme-customization.md`. Kept
+> for history.
+
 **Date:** 2026-05-23
 **Branch:** `matrix-custom-themes` (create from `main`)
 **Target:** agentic.inblock.io (element.inblock.io)

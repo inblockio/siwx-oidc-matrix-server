@@ -52,20 +52,15 @@
           "--cpd-color-bg-subtle-secondary": "#1a1a20",
           "--cpd-color-bg-subtle-primary": "#22222a",
           "--cpd-color-bg-action-primary-rest": "#E8611A",
-          "--cpd-color-bg-critical-primary": "#dc2626",
           "--cpd-color-bg-accent-rest": "#E8611A",
           "--cpd-color-text-primary": "#e4e4e7",
           "--cpd-color-text-secondary": "#a1a1aa",
           "--cpd-color-text-action-accent": "#E8611A",
-          "--cpd-color-text-critical-primary": "#dc2626",
-          "--cpd-color-text-success-primary": "#16a34a",
           "--cpd-color-icon-primary": "#e4e4e7",
           "--cpd-color-icon-secondary": "#a1a1aa",
           "--cpd-color-icon-tertiary": "#71717a",
           "--cpd-color-icon-accent-tertiary": "#E8611A",
-          "--cpd-color-border-interactive-primary": "#E8611A",
-          "--cpd-color-border-critical-primary": "#dc2626",
-          "--cpd-color-border-success-subtle": "#2a8a5a"
+          "--cpd-color-border-interactive-primary": "#E8611A"
         }
       },
       {
@@ -95,20 +90,15 @@
           "--cpd-color-bg-subtle-secondary": "#f5f5f4",
           "--cpd-color-bg-subtle-primary": "#dfd9d6",
           "--cpd-color-bg-action-primary-rest": "#E8611A",
-          "--cpd-color-bg-critical-primary": "#dc2626",
           "--cpd-color-bg-accent-rest": "#E8611A",
           "--cpd-color-text-primary": "#1c1917",
           "--cpd-color-text-secondary": "#292524",
           "--cpd-color-text-action-accent": "#D4570F",
-          "--cpd-color-text-critical-primary": "#dc2626",
-          "--cpd-color-text-success-primary": "#16a34a",
           "--cpd-color-icon-primary": "#1c1917",
           "--cpd-color-icon-secondary": "#292524",
           "--cpd-color-icon-tertiary": "#78716c",
           "--cpd-color-icon-accent-tertiary": "#E8611A",
-          "--cpd-color-border-interactive-primary": "#E8611A",
-          "--cpd-color-border-critical-primary": "#dc2626",
-          "--cpd-color-border-success-subtle": "#2a8a5a"
+          "--cpd-color-border-interactive-primary": "#E8611A"
         }
       },
       {

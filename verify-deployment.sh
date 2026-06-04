@@ -114,9 +114,39 @@ else
   fi
 fi
 
-# -- 5. Optional E2EE round-trip smoke test -----------------------------------
+# -- 5. Element Web theme integrity (served) ----------------------------------
+# Mirror of verify-theme.sh against the LIVE instance: the served themes must
+# paint none of the protected tokens, and the injected override stylesheet must
+# keep the tab-label fix while no longer carrying the removed online-dot rule.
+# See docs/element-theme-customization.md.
+echo "[5] Element Web theme"
+if [ -n "$ELEMENT_CFG" ] && command -v jq >/dev/null 2>&1; then
+  THEME_OFFENDERS=$(echo "$ELEMENT_CFG" \
+    | jq -r '.setting_defaults.custom_themes[]? | select(.name|test("^inblock";"i")) | (.compound // {}) | keys[]' 2>/dev/null \
+    | grep -iE 'icon-accent-primary|success|green-' || true)
+  if [ -z "$THEME_OFFENDERS" ]; then
+    pass "served inblock.io themes paint no protected token (dot/success stay green)"
+  else
+    fail "served themes override protected tokens: $(echo "$THEME_OFFENDERS" | tr '\n' ' ')"
+  fi
+elif ! command -v jq >/dev/null 2>&1; then
+  echo "  SKIP: jq not available for served-theme token check"
+fi
+OVERRIDE_CSS=$(curl -sS "https://${CLIENT_HOST}/element-theme-overrides.css" 2>/dev/null || echo "")
+if echo "$OVERRIDE_CSS" | grep -q "mx_TabbedView_tabLabel_active"; then
+  pass "served override CSS keeps the settings-tab-label rule"
+else
+  fail "served override CSS missing the settings-tab-label rule"
+fi
+if echo "$OVERRIDE_CSS" | grep -q "mx_PresenceIconView_online"; then
+  fail "served override CSS still carries the removed online-dot rule (stale image?)"
+else
+  pass "served override CSS has no online-dot rule"
+fi
+
+# -- 6. Optional E2EE round-trip smoke test -----------------------------------
 if [ "$DO_E2EE" = true ]; then
-  echo "[5] E2EE round-trip smoke test"
+  echo "[6] E2EE round-trip smoke test"
   E2E_DIR=""
   if [ -n "$E2E_TEST_LOCAL_PATH" ] && [ -d "$E2E_TEST_LOCAL_PATH" ]; then
     E2E_DIR="$E2E_TEST_LOCAL_PATH"
