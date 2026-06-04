@@ -1,18 +1,19 @@
 /*
- * inblock.io Element Web theme overrides.
+ * inblock.io Element Web theme override.
  *
- * Workaround for an upstream Element bug: the custom-theme CSS bundles
- * (theme-light-custom.css, theme-dark-custom.css) hardcode the selected
- * settings-tab label to a near-white literal (#fff / #edf3ff) instead of
- * using a variable. Element's theme JSON can only override CSS variables,
- * so theme-inblockio-light.json cannot reach this literal: on the light
- * theme it renders white text on the light selected-tab pill, which is
- * effectively invisible.
+ * This stylesheet exists for ONE reason: a value that Element's custom-theme
+ * JSON cannot express. Everything expressible as a Compound design token lives
+ * in config/element-config.json (setting_defaults.custom_themes); this file is
+ * reserved strictly for compiled-literal fixes. See
+ * docs/element-theme-customization.md for the palette-vs-routing contract.
  *
- * The built-in (non-custom) themes correctly use var(--cpd-color-text-primary)
- * here. This rule restores that behavior for the custom themes. The variable
- * resolves to dark text in light themes and light text in dark themes, so the
- * single rule is correct for both inblock.io Dark and inblock.io Light.
+ * The fix: Element's custom-theme stylesheets drive the selected settings-tab
+ * label from a compiled SCSS value ($accent / $tab-label-active-fg-color), not
+ * a runtime CSS variable, so theme JSON cannot reach it. On the light theme the
+ * label can render near-invisible against the selected-tab pill. The built-in
+ * (non-custom) themes use var(--cpd-color-text-primary) here; this rule restores
+ * that for the custom themes. The variable resolves to dark text in light themes
+ * and light text in dark themes, so the single rule is correct for both.
  */
 .mx_TabbedView_tabsOnLeft .mx_TabbedView_tabLabel_active,
 .mx_TabbedView_tabsOnLeft .mx_TabbedView_tabLabel_active .mx_TabbedView_tabLabel_text {
@@ -20,22 +21,11 @@
 }
 
 /*
- * Online presence indicator: force green instead of the brand accent.
- *
- * Element colors the "online" presence dot with --cpd-color-icon-accent-primary,
- * which in stock Element is green (the Element brand accent). Our custom themes
- * remap the accent to brand orange (#E8611A), so the online dot inherits orange
- * and reads as yellow. We repaint only the online state to success-green, leaving
- * away/offline/busy and all other accent icons (e.g. voice/video call buttons)
- * on the brand orange accent.
- *
- * Two render paths exist:
- *   - mx_PresenceIconView_online: state-specific class (member/user avatars).
- *   - mx_RoomAvatarView_PresenceDecoration: one class shared by all states, so it
- *     can only be scoped to online via the localized aria-label (room-list DM
- *     avatars). English-only deployment; degrades to orange if the label changes.
+ * NOTE: there is deliberately no online-presence-dot rule here.
+ * The dot reads --cpd-color-icon-accent-primary, which we never override, so it
+ * stays Compound green by construction (verified against element-web v1.12.20,
+ * res/css/views/rooms/_PresenceIconView.pcss). A previous rule routed the dot to
+ * the success token to fight an "orange dot" that only existed under v1.12.18's
+ * theming; on v1.12.20 it was redundant and was removed. Do not re-add a
+ * dot/success/green override here or in the theme JSON (see verify-theme.sh).
  */
-.mx_PresenceIconView_online,
-.mx_RoomAvatarView_PresenceDecoration[aria-label="Online"] {
-    color: var(--cpd-color-icon-success-primary) !important;
-}
