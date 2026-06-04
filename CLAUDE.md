@@ -87,6 +87,13 @@ A self-hosted Element Web instance is included in the stack, accessible at
 `https://${CLIENT_HOST}`. It is pre-configured (`config/element-config.json`,
 `default_server_config` + `disable_custom_urls`) to connect to the local Synapse.
 
+**Theming:** the three custom themes are authored inline in
+`config/element-config.json` (`setting_defaults.custom_themes`); there are no
+standalone theme files. Semantic colors (success green, critical red, the online
+presence dot) are left at Compound defaults and must not be pinned. See
+`docs/element-theme-customization.md` for the contract and run `./verify-theme.sh`
+before changing a theme.
+
 Login uses Element Web's **native** OIDC flow (MSC2965 discovery + MSC3861
 delegated auth). Element reads the homeserver's `.well-known/matrix/client`,
 finds `m.authentication`, and makes native OIDC the only login option: it

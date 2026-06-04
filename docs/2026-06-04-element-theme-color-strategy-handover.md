@@ -1,5 +1,13 @@
 # Handover: rethink the Element custom-theme color strategy
 
+> **RESOLVED 2026-06-04.** Outcome and contract: `docs/element-theme-customization.md`.
+> The root cause stated below (accent-color regenerates `--cpd-color-green-*`)
+> does **not** exist on the pinned v1.12.20: `colors` only writes legacy
+> `--<name>` vars, never `--cpd-*` (`apps/web/src/theme.ts:246-269`). The online
+> dot reads `icon-accent-primary` = `green-900`, which we never override, so it
+> is green by construction. The semantic pins were removed (use Compound
+> defaults) and a `verify-theme.sh` guard added. Kept below for history.
+
 Date: 2026-06-04
 Branch in flight: `fix/element-success-icon-token` (commit `4beb281`, NOT merged, NOT deployed)
 Skill to load first: `/matrix-custom-themes-specialist`

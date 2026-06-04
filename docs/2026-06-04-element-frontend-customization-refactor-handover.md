@@ -1,5 +1,15 @@
 # Handover: refactor the Element front-end customization (review of 4 commits)
 
+> **RESOLVED 2026-06-04.** The refactor is done; see
+> `docs/element-theme-customization.md` for the outcome and contract. The
+> central premise below (that `colors.accent-color` regenerates the green scale,
+> requiring ~20 pinned tokens) was **disproved against the v1.12.20 source**:
+> there is no accent-to-green regeneration, the online dot is green by
+> construction, and the fix was to remove pins, not add them. The dead theme
+> files were deleted, the inblock.io compound maps collapsed (20 -> 14 tokens),
+> the `4beb281` stopgap and the online-dot CSS rule removed, and a regression
+> guard (`verify-theme.sh`) added. Kept below for history.
+
 Date: 2026-06-04
 Branch: `fix/element-success-icon-token` (holds the stopgap + both handovers)
 Companion doc: `docs/2026-06-04-element-theme-color-strategy-handover.md` (deep dive on the
