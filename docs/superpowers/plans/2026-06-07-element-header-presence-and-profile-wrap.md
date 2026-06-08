@@ -88,3 +88,28 @@ divergent perspectives add real value.
 - Final correctness for AC1/AC3/AC4 uses the project's established **human visual gate**
   (same as `docs/element-theme-customization.md` verification step 4), since login is
   OIDC-gated and the change is purely visual.
+
+## Phase 3 — Audit trace (2026-06-07)
+
+Three parallel adversarial auditors (Explore agents) tried to refute correctness
+against the v1.12.20 clone + the live bundle rules. All returned **confirmed**.
+
+| ID | Status | Evidence |
+|----|--------|----------|
+| H1 | Confirmed | SSH: served override CSS has tab rule, no PresenceIconView rule; image built post-merge |
+| H2 | Confirmed | live bundle: custom-theme `WithPresenceIndicator_icon_online::before` reads `text-action-accent` (#E8611A); other two paths read `icon-accent-primary` (green) |
+| H3 | Confirmed (code) | cascade audit: `!important` beats the non-important bundle rule at equal specificity; `icon-accent-primary` unoverridden→green; only ONE other rule targets the selector. Live visual gate pending |
+| H4 | Confirmed | source: `UserInfoHeaderView.tsx:87` already wraps MXID in native `CopyableText` |
+| H5 | Confirmed (code) | flex audit: `overflow-wrap:anywhere` shrinks the anonymous text item's min-content→wraps; `height:auto !important` beats `28px`; `width:100%` makes it deterministic. Live visual gate pending |
+| H6 | Confirmed | `./verify-theme.sh` 6/6 + `--self-test` OK; `verify-deployment.sh` syntax + stdin-strip simulation OK; awk multi-line comment strip tested |
+| H7 | Pending | deploy + `verify-deployment.sh` against live |
+
+**Acceptance criteria:** AC1 code-confirmed (live pending), AC2 confirmed (away/busy/
+offline use separate classes; `text-action-accent` unchanged so brand links/buttons
+intact; `WithPresenceIndicator` is header-only; profile selector scoped 0,3,0 matches
+only the intended MXID), AC3 code-confirmed (live pending), AC4 confirmed (native copy
+button), AC5 confirmed, AC6 confirmed. AC7 pending deploy.
+
+**Auditor minors actioned:** added explicit `width:100%` (deterministic wrap). Left as
+Element-intended: button centered vertically + non-sticky in this view (minimal override
+surface; reachability unaffected).
