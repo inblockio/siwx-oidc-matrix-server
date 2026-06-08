@@ -65,10 +65,12 @@
  */
 .mx_UserInfo_profile .mx_UserInfo_profile_mxid {
     height: auto !important;
+    width: 100%;
     max-width: 100%;
     min-width: 0;
 }
 .mx_UserInfo_profile .mx_UserInfo_profile_mxid .mx_CopyableText {
+    width: 100%;
     max-width: 100%;
     min-width: 0;
     overflow-wrap: anywhere;
