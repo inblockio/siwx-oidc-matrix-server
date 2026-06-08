@@ -28,10 +28,40 @@ green-900 = #007a61 (light) / #129a78 (dark);  red-900 = #d51928 / #fd3e3c
 
 Therefore **orange appears only where we explicitly paint it.** Setting
 `colors.accent-color` to brand orange does not bleed into green; it only feeds
-old non-Compound SCSS views. The "orange online dot" that the `7b14141` /
-`4beb281` commits chased was a v1.12.18-era observation that did not survive the
-bump to v1.12.20 and was never re-verified. The fix was to stop pinning, not to
-pin more.
+old non-Compound SCSS views. The `7b14141` / `4beb281` commits over-corrected:
+they pinned *every* presence/success token to fight a single orange dot, when
+two of the three presence paths are green by construction and never needed it.
+Dropping those redundant pins was right. But "stop pinning, do not pin more" was
+itself an over-correction: one presence path genuinely *is* orange on v1.12.20,
+through a different mechanism, and does need a single scoped pin (see next).
+
+### The online presence dot has THREE render paths (load-bearing)
+
+Element draws the "online" dot in three places, by two different mechanisms:
+
+| Path | Component | Colour mechanism | Result |
+|---|---|---|---|
+| Member list | `PresenceIconView` (`_PresenceIconView.pcss:20`) | `color: var(--cpd-color-icon-accent-primary)` | **green by construction** |
+| Room-list DM avatar | `RoomAvatarView` (`RoomAvatarView.tsx:64`) | inline SVG `color="var(--cpd-color-icon-accent-primary)"` | **green by construction** |
+| **Room-header DM avatar** | `WithPresenceIndicator` (`RoomHeader.tsx:465`, `_WithPresenceIndicator.pcss:35`) | `::before { background-color: $accent }` | **brand orange on custom themes** |
+
+The first two read `--cpd-color-icon-accent-primary`, which we never override, so
+they are green by construction (this is the fact the refactor verified, correctly,
+for *those two paths*). The third is the exception: `WithPresenceIndicator` colours
+its dot with the **compiled SCSS variable `$accent`**, and on the custom themes
+Element compiles `$accent` to `var(--cpd-color-text-action-accent)` — which we
+deliberately paint brand orange (`#E8611A`) for links and buttons. So the
+room-header online dot inherits brand orange. (Built-in Element themes compile
+`$accent` to green `#0dbd8b`, which is why this only bites custom themes.)
+
+`$accent` is a **compiled-SCSS literal that theme JSON cannot reach** — exactly the
+settings-tab-label category. So it is fixed in `config/element-theme-overrides.css`
+by repainting only the online `::before` to `--cpd-color-icon-accent-primary` (the
+same green the other two paths use), leaving brand accents and the away/busy/offline
+states untouched. Do **not** "fix" this by pinning `icon-accent-primary` / success /
+green tokens in the theme JSON — that would also recolour the two green-by-
+construction paths and re-enter the phantom-fix trap. `verify-theme.sh` asserts the
+header rule is present and the member-list pin is absent.
 
 Direct `compound` overrides DO apply: Element emits them into
 `@layer compound-tokens`, appended last, so they win by source order
@@ -66,24 +96,36 @@ case** that never showed the bug. It is exempt from the protected-token rule.
 |---|---|
 | Palette (surfaces, text, icons) + deliberate brand-orange accents | theme JSON `compound` map in `element-config.json` |
 | Semantic colors (success green, critical red) | nobody -- Compound defaults are correct; do not pin them |
-| Online presence dot color | nobody -- it reads `icon-accent-primary`, left at its green default |
-| Values theme JSON cannot express (compiled SCSS literals) | `config/element-theme-overrides.css` (one rule today) |
+| Online dot: member list + room-list DM avatar | nobody -- they read `icon-accent-primary`, left at its green default |
+| Online dot: room-header DM avatar (`WithPresenceIndicator`) | `element-theme-overrides.css` -- it reads compiled `$accent` -> brand orange, repainted green there |
+| Values theme JSON cannot express (compiled SCSS literals; layout) | `config/element-theme-overrides.css` |
 
 The CSS side-channel (`element-theme-overrides.css`, `COPY`'d in
 `Dockerfile.element` and injected into `index.html` by
-`entrypoints/element_entrypoint.sh`) is reserved strictly for the last row. Its
-sole current rule restores the selected settings-tab label, which Element drives
-from a compiled SCSS value (`$accent` / `$tab-label-active-fg-color` in
-`apps/web/res/css/structures/_TabbedView.pcss`) that the runtime theme JSON
-cannot reach.
+`entrypoints/element_entrypoint.sh`) is reserved strictly for the last three
+rows. It currently carries three rules:
+
+1. **settings-tab label** -- restores the selected tab label, which Element drives
+   from a compiled SCSS value (`$accent` / `$tab-label-active-fg-color` in
+   `apps/web/res/css/structures/_TabbedView.pcss`) the runtime theme JSON cannot
+   reach.
+2. **room-header online dot** -- repaints `.mx_WithPresenceIndicator_icon_online`
+   from compiled `$accent` (brand orange on custom themes) to
+   `--cpd-color-icon-accent-primary` (green), matching the other two dot paths.
+3. **profile MXID wrap** -- lets a long DID MXID wrap inside the right-panel user
+   profile (frees the fixed `mx_UserInfo_profile_mxid` height and adds
+   `overflow-wrap: anywhere` to its `CopyableText`). Layout, which theme JSON
+   cannot express; the native copy button already exists.
 
 ## The discipline (one rule)
 
 **Never override `--cpd-color-icon-accent-primary`, any `*success*` token, or any
 `--cpd-color-green-*` token in the inblock.io themes.** Leaving them at Compound
-defaults is what keeps the online dot and success semantics green by
-construction. Painting any of them (especially orange) is the phantom-fix trap
-this refactor removed. Nord is exempt (it owns its palette).
+defaults is what keeps the member-list + room-list online dots and the success
+semantics green by construction. Painting any of them (especially orange) is the
+phantom-fix trap this refactor removed. The room-header dot is the one exception
+and is handled by a scoped CSS rule (not a theme-JSON token); do not "promote" it
+to a token pin. Nord is exempt (it owns its palette).
 
 `verify-theme.sh` enforces this statically.
 
@@ -105,13 +147,20 @@ this refactor removed. Nord is exempt (it owns its palette).
 3. **Version-bump tripwire (run in CI after a tag bump):** confirm the dot token
    and green value have not moved under a new Element/Compound version:
    ```bash
+   # member-list dot: must still read icon-accent-primary
    docker exec matrix-element-web-1 sh -c \
      'grep -rhoE "\.mx_PresenceIconView_online[^{]*\{[^}]*\}" /app/bundles/*/*.css | sort -u'
+   # room-header dot: must still be the $accent ::before our override repaints
+   docker exec matrix-element-web-1 sh -c \
+     'grep -rhoE "\.mx_WithPresenceIndicator_icon_online[^{]*\{[^}]*\}" /app/bundles/*/*.css | sort -u'
    docker exec matrix-element-web-1 sh -c \
      'grep -rhoE "\-\-cpd-color-(icon-accent-primary|green-900):[^;}]*" /app/bundles/*/*.css | sort -u'
    ```
-   Expect the dot to read `icon-accent-primary` and that to resolve to a green
-   `green-900`. If either changed, re-evaluate before shipping.
+   Expect the member-list dot to read `icon-accent-primary` (green `green-900`),
+   and the room-header dot rule (`mx_WithPresenceIndicator_icon_online::before`)
+   to still exist as the selector our override targets. If the header selector or
+   its `$accent` mechanism moved, update `element-theme-overrides.css` before
+   shipping.
 4. **Visual gate (human, before any deploy):** on a v1.12.20 instance confirm the
    online dot is green, success is green, critical is red, brand buttons/links/
    focus are orange, the settings-tab label is readable, across Dark, Light, Nord.
@@ -119,7 +168,15 @@ this refactor removed. Nord is exempt (it owns its palette).
 ## References
 
 - `apps/web/src/theme.ts:205-213, 246-269` -- custom-theme application.
-- `apps/web/res/css/views/rooms/_PresenceIconView.pcss:20-21` -- dot uses
+- `apps/web/res/css/views/rooms/_PresenceIconView.pcss:20` -- member-list dot uses
   `icon-accent-primary`.
+- `apps/web/src/components/views/avatars/RoomAvatarView.tsx:64-72` -- room-list DM
+  avatar dot, inline `color="var(--cpd-color-icon-accent-primary)"`.
+- `apps/web/res/css/views/avatars/_WithPresenceIndicator.pcss:35` -- room-header dot
+  uses `background-color: $accent` (compiles to `text-action-accent` on custom
+  themes); rendered from `RoomHeader.tsx:465`.
+- `apps/web/src/components/views/right_panel/user_info/UserInfoHeaderView.tsx:86-89`
+  -- MXID rendered via native `CopyableText` (the copy button already exists);
+  `apps/web/res/css/views/right_panel/_UserInfo.pcss` (`mx_UserInfo_profile_mxid`).
 - `@vector-im/compound-design-tokens@10.1.1` `cpd-common-semantic.css:78,80,9` and
   `cpd-theme-{light,dark}-base.css:81,25` -- semantic-to-scale mappings and hexes.
