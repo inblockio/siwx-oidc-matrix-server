@@ -109,10 +109,15 @@ A self-hosted Element Web instance is included in the stack, accessible at
 
 **Theming:** the three custom themes are authored inline in
 `config/element-config.json` (`setting_defaults.custom_themes`); there are no
-standalone theme files. Semantic colors (success green, critical red, the online
-presence dot) are left at Compound defaults and must not be pinned. See
-`docs/element-theme-customization.md` for the contract and run `./verify-theme.sh`
-before changing a theme.
+standalone theme files. Semantic colors (success green, critical red) and the
+member-list + room-list online dots are left at Compound defaults and must not be
+pinned. The **room-header** online dot is the one exception: it is drawn by
+`WithPresenceIndicator` via compiled `$accent` → `--cpd-color-text-action-accent`
+(our brand orange), which theme JSON cannot reach, so it is forced green by a
+scoped rule in `config/element-theme-overrides.css` (do not "clean this up" as
+redundant — that is the recurring trap). See
+`docs/element-theme-customization.md` for the three-path contract and run
+`./verify-theme.sh` before changing a theme.
 
 Login uses Element Web's **native** OIDC flow (MSC2965 discovery + MSC3861
 delegated auth). Element reads the homeserver's `.well-known/matrix/client`,
