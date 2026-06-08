@@ -117,7 +117,9 @@ fi
 # -- 5. Element Web theme integrity (served) ----------------------------------
 # Mirror of verify-theme.sh against the LIVE instance: the served themes must
 # paint none of the protected tokens, and the injected override stylesheet must
-# keep the tab-label fix while no longer carrying the removed online-dot rule.
+# carry the rules it must (tab-label, room-header online-dot, profile-MXID wrap)
+# and none it must not (the redundant member-list dot rule). The override file
+# documents class names in comments, so we strip comments and inspect the rules.
 # See docs/element-theme-customization.md.
 echo "[5] Element Web theme"
 if [ -n "$ELEMENT_CFG" ] && command -v jq >/dev/null 2>&1; then
@@ -133,15 +135,28 @@ elif ! command -v jq >/dev/null 2>&1; then
   echo "  SKIP: jq not available for served-theme token check"
 fi
 OVERRIDE_CSS=$(curl -sS "https://${CLIENT_HOST}/element-theme-overrides.css" 2>/dev/null || echo "")
-if echo "$OVERRIDE_CSS" | grep -q "mx_TabbedView_tabLabel_active"; then
+# Inspect CSS rules, not comment prose (the override file names classes in comments
+# that would otherwise false-trigger the absence check). incmt is awk's cross-line flag.
+OVERRIDE_RULES=$(printf '%s' "$OVERRIDE_CSS" | awk '{ s=$0; out=""; i=1; n=length(s); while(i<=n){ two=substr(s,i,2); if(incmt){if(two=="*/"){incmt=0;i+=2}else{i++}} else {if(two=="/*"){incmt=1;i+=2}else{out=out substr(s,i,1);i++}} } print out }')
+if echo "$OVERRIDE_RULES" | grep -q "mx_TabbedView_tabLabel_active"; then
   pass "served override CSS keeps the settings-tab-label rule"
 else
   fail "served override CSS missing the settings-tab-label rule"
 fi
-if echo "$OVERRIDE_CSS" | grep -q "mx_PresenceIconView_online"; then
-  fail "served override CSS still carries the removed online-dot rule (stale image?)"
+if echo "$OVERRIDE_RULES" | grep -q "mx_PresenceIconView_online"; then
+  fail "served override CSS re-introduced the redundant member-list dot rule (stale image?)"
 else
-  pass "served override CSS has no online-dot rule"
+  pass "served override CSS has no member-list dot rule"
+fi
+if echo "$OVERRIDE_RULES" | grep -q "mx_WithPresenceIndicator_icon_online"; then
+  pass "served override CSS carries the room-header online-dot rule (header dot green)"
+else
+  fail "served override CSS missing the room-header online-dot rule (stale image? header dot orange)"
+fi
+if echo "$OVERRIDE_RULES" | grep -q "mx_UserInfo_profile_mxid"; then
+  pass "served override CSS carries the profile-MXID wrap rule"
+else
+  fail "served override CSS missing the profile-MXID wrap rule (stale image? MXID overflows)"
 fi
 
 # -- 6. Optional E2EE round-trip smoke test -----------------------------------
