@@ -49,17 +49,17 @@ The first two read `--cpd-color-icon-accent-primary`, which we never override, s
 they are green by construction (this is the fact the refactor verified, correctly,
 for *those two paths*). The third is the exception: `WithPresenceIndicator` colours
 its dot with the **compiled SCSS variable `$accent`**, and on the custom themes
-Element compiles `$accent` to `var(--cpd-color-text-action-accent)` — which we
+Element compiles `$accent` to `var(--cpd-color-text-action-accent)` -- which we
 deliberately paint brand orange (`#E8611A`) for links and buttons. So the
 room-header online dot inherits brand orange. (Built-in Element themes compile
 `$accent` to green `#0dbd8b`, which is why this only bites custom themes.)
 
-`$accent` is a **compiled-SCSS literal that theme JSON cannot reach** — exactly the
+`$accent` is a **compiled-SCSS literal that theme JSON cannot reach** -- exactly the
 settings-tab-label category. So it is fixed in `config/element-theme-overrides.css`
 by repainting only the online `::before` to `--cpd-color-icon-accent-primary` (the
 same green the other two paths use), leaving brand accents and the away/busy/offline
 states untouched. Do **not** "fix" this by pinning `icon-accent-primary` / success /
-green tokens in the theme JSON — that would also recolour the two green-by-
+green tokens in the theme JSON -- that would also recolour the two green-by-
 construction paths and re-enter the phantom-fix trap. `verify-theme.sh` asserts the
 header rule is present and the member-list pin is absent.
 

@@ -115,7 +115,7 @@ pinned. The **room-header** online dot is the one exception: it is drawn by
 `WithPresenceIndicator` via compiled `$accent` → `--cpd-color-text-action-accent`
 (our brand orange), which theme JSON cannot reach, so it is forced green by a
 scoped rule in `config/element-theme-overrides.css` (do not "clean this up" as
-redundant — that is the recurring trap). See
+redundant; that is the recurring trap). See
 `docs/element-theme-customization.md` for the three-path contract and run
 `./verify-theme.sh` before changing a theme.
 

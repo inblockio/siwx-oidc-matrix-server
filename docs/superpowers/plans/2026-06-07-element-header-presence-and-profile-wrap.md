@@ -5,12 +5,12 @@ the baked `config/element-theme-overrides.css` (no source patch, no theme-JSON c
 
 ## Context / findings (verified, not assumed)
 
-**Deployment state (task 1 step 1 — already answered):** the prior "online dot"
+**Deployment state (task 1 step 1 -- already answered):** the prior "online dot"
 refactor (`4a3d434`, merged 2026-06-04, which *removed* the green override on the
 premise the dot is "green by construction") **IS deployed.** Production `element-web`
 runs `:main` built `2026-06-07T01:06`; served `element-theme-overrides.css` has the
 tab-label rule and **no** `mx_PresenceIconView_online` rule. So this is **case 3**:
-deployed, yet the room-header dot is still orange — the "green by construction" claim
+deployed, yet the room-header dot is still orange -- the "green by construction" claim
 was incomplete.
 
 **Three presence render paths in element-web v1.12.20 (all read from source + live bundle):**
@@ -23,14 +23,14 @@ was incomplete.
 
 `WithPresenceIndicator` renders **only** in the room header. Built-in Element themes
 compile `$accent`→`#0dbd8b` (green), so this only breaks because *our* brand accent is
-orange. It is a compiled-SCSS-literal value theme JSON cannot reach — the same class of
+orange. It is a compiled-SCSS-literal value theme JSON cannot reach -- the same class of
 fix as the existing settings-tab-label rule.
 
 **Task 2 collapse:** `UserInfoHeaderView.tsx:86-89` **already** wraps the MXID in
-Element-native `<CopyableText>` — the clipboard copy button already exists in v1.12.20.
+Element-native `<CopyableText>` -- the clipboard copy button already exists in v1.12.20.
 It is merely pushed out of view: `.mx_UserInfo_profile_mxid` is fixed at `height:28px`
 and `.mx_CopyableText` is `width:max-content` with no `overflow-wrap`, so the unbroken
-`0x…` hex run overflows the panel. **No source patch needed** — a CSS wrap fix brings the
+`0x…` hex run overflows the panel. **No source patch needed** -- a CSS wrap fix brings the
 existing copy button into view. (The copy button is `flex-shrink:0; position:sticky`, so
 it stays reachable as the MXID wraps to multiple lines.)
 
@@ -55,20 +55,20 @@ it stays reachable as the MXID wraps to multiple lines.)
 | AC3 | Profile panel: long DID/wallet MXID wraps fully inside the panel (no overflow past wrapper) | H5,H7 |
 | AC4 | Clipboard copy button present at the MXID and usable | H4,H5 |
 | AC5 | `verify-theme.sh` + `verify-deployment.sh` encode regression guards for AC1/AC3 | H6 |
-| AC6 | `docs/element-theme-customization.md` corrected to the 3-path model | — |
+| AC6 | `docs/element-theme-customization.md` corrected to the 3-path model | -- |
 | AC7 | Deployed to production and verified live | H7 |
 
 ## Tasks (branch `fix/element-header-presence-and-profile-wrap`)
 
-- **Task A** [H3,H5] — `config/element-theme-overrides.css`: add the room-header online-dot
+- **Task A** [H3,H5] -- `config/element-theme-overrides.css`: add the room-header online-dot
   rule and the profile-MXID wrap rules; rewrite the header comment to the 3-path model.
-- **Task B** [H6] — `verify-theme.sh`: require `mx_WithPresenceIndicator_icon_online` +
+- **Task B** [H6] -- `verify-theme.sh`: require `mx_WithPresenceIndicator_icon_online` +
   the profile wrap rule; keep forbidding `mx_PresenceIconView_online`. Run it + `--self-test`.
-- **Task C** [H6] — `verify-deployment.sh` [5]: mirror the new served-CSS assertions.
-- **Task D** [AC6] — `docs/element-theme-customization.md`: correct the mental model
+- **Task C** [H6] -- `verify-deployment.sh` [5]: mirror the new served-CSS assertions.
+- **Task D** [AC6] -- `docs/element-theme-customization.md`: correct the mental model
   (3 paths; header path routes through `$accent`/`text-action-accent`), ownership row,
   references.
-- **Task E** [H7] — staged commits; merge to main; **push (gated)**; CI build; deploy
+- **Task E** [H7] -- staged commits; merge to main; **push (gated)**; CI build; deploy
   `./deploy.sh main --build --restart`; run `verify-deployment.sh`; request human visual gate.
 
 ## Execution note
@@ -89,7 +89,7 @@ divergent perspectives add real value.
   (same as `docs/element-theme-customization.md` verification step 4), since login is
   OIDC-gated and the change is purely visual.
 
-## Phase 3 — Audit trace (2026-06-07)
+## Phase 3 -- Audit trace (2026-06-07)
 
 Three parallel adversarial auditors (Explore agents) tried to refute correctness
 against the v1.12.20 clone + the live bundle rules. All returned **confirmed**.
