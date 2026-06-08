@@ -1,11 +1,12 @@
 /*
  * inblock.io Element Web theme override.
  *
- * This stylesheet exists for ONE reason: a value that Element's custom-theme
- * JSON cannot express. Everything expressible as a Compound design token lives
- * in config/element-config.json (setting_defaults.custom_themes); this file is
- * reserved strictly for compiled-literal fixes. See
- * docs/element-theme-customization.md for the palette-vs-routing contract.
+ * This stylesheet exists for values that Element's custom-theme JSON cannot
+ * express: compiled-SCSS literals and layout. Everything expressible as a
+ * Compound design token lives in config/element-config.json
+ * (setting_defaults.custom_themes); this file is reserved strictly for what
+ * theme JSON cannot reach. See docs/element-theme-customization.md for the
+ * palette-vs-routing contract.
  *
  * The fix: Element's custom-theme stylesheets drive the selected settings-tab
  * label from a compiled SCSS value ($accent / $tab-label-active-fg-color), not
@@ -21,11 +22,54 @@
 }
 
 /*
- * NOTE: there is deliberately no online-presence-dot rule here.
- * The dot reads --cpd-color-icon-accent-primary, which we never override, so it
- * stays Compound green by construction (verified against element-web v1.12.20,
- * res/css/views/rooms/_PresenceIconView.pcss). A previous rule routed the dot to
- * the success token to fight an "orange dot" that only existed under v1.12.18's
- * theming; on v1.12.20 it was redundant and was removed. Do not re-add a
- * dot/success/green override here or in the theme JSON (see verify-theme.sh).
+ * Online presence dot: room-header path only.
+ *
+ * Element draws the "online" presence dot through THREE paths. Two read
+ * --cpd-color-icon-accent-primary (which we never override) and so are Compound
+ * green BY CONSTRUCTION -- do NOT add a rule for them, and do NOT pin the
+ * success/green/icon-accent-primary tokens in the theme JSON (verify-theme.sh
+ * forbids it):
+ *   - mx_PresenceIconView_online            -- member list (_PresenceIconView.pcss)
+ *   - mx_RoomAvatarView_PresenceDecoration  -- room-list DM avatar (inline SVG color)
+ *
+ * The THIRD path is the exception this rule fixes. The room-header DM avatar dot
+ * is drawn by WithPresenceIndicator (used only in RoomHeader.tsx) via
+ *   .mx_WithPresenceIndicator_icon_online::before { background-color: $accent; }
+ * On the custom themes Element compiles $accent to var(--cpd-color-text-action-accent),
+ * which we deliberately paint brand orange (#E8611A) for links/buttons. So the
+ * header "online" dot inherits brand orange even though online should read green.
+ * $accent is a compiled-SCSS literal the theme JSON cannot reach (same class of
+ * fix as the settings-tab-label rule above), so we repaint ONLY the online state
+ * to the same green the other two paths already use. Built-in Element themes
+ * compile $accent to green, so this only bites because our accent is orange.
+ * Away/busy/offline keep their own tokens; brand accents elsewhere are untouched.
  */
+.mx_WithPresenceIndicator_icon_online::before {
+    background-color: var(--cpd-color-icon-accent-primary) !important;
+}
+
+/*
+ * Right-panel user profile: wrap long Matrix user IDs inside the panel.
+ *
+ * DID-based MXIDs (e.g. @did-pkh-eip155-1-0x<40 hex>:matrix.inblock.io) carry a
+ * long unbroken 0x... hex run. Element renders the MXID as
+ *   <Text class=mx_UserInfo_profile_mxid><CopyableText>{mxid}</CopyableText></Text>
+ * (UserInfoHeaderView.tsx) -- CopyableText already provides the clipboard copy
+ * button. But mx_UserInfo_profile_mxid is a fixed height:28px and .mx_CopyableText
+ * is width:max-content with no overflow-wrap, so the hex run overflows the panel
+ * edge and the copy button is pushed out of view. Free the height and let the id
+ * wrap; overflow-wrap:anywhere (not break-word) shrinks the text's min-content so
+ * the flex item wraps the unbroken hex. The copy button is flex-shrink:0 +
+ * position:sticky, so it stays reachable at the top-right across the wrapped lines.
+ * Theme JSON cannot express layout, so this belongs here.
+ */
+.mx_UserInfo_profile .mx_UserInfo_profile_mxid {
+    height: auto !important;
+    max-width: 100%;
+    min-width: 0;
+}
+.mx_UserInfo_profile .mx_UserInfo_profile_mxid .mx_CopyableText {
+    max-width: 100%;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
