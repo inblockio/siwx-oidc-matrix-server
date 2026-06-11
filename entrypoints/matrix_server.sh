@@ -41,6 +41,11 @@ yq -i ".max_event_delay_duration = \"24h\"" /data/homeserver.yaml
 yq -i ".rc_delayed_event_mgmt.per_second = 1" /data/homeserver.yaml
 yq -i ".rc_delayed_event_mgmt.burst_count = 20" /data/homeserver.yaml
 
+# Rate limiting for in-call E2EE key sharing (bursty room messages); values from
+# Element Call docs/self_hosting.md. Synapse defaults (0.2/10) can rate-limit calls.
+yq -i ".rc_message.per_second = 0.5" /data/homeserver.yaml
+yq -i ".rc_message.burst_count = 30" /data/homeserver.yaml
+
 # MatrixRTC transport: LiveKit SFU
 yq -i ".matrix_rtc.transports[0].type = \"livekit\"" /data/homeserver.yaml
 yq -i ".matrix_rtc.transports[0].livekit_service_url = \"https://${MATRIX_HOST}/livekit/jwt\"" /data/homeserver.yaml

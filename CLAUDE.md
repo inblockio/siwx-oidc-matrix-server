@@ -48,7 +48,7 @@ siwx-oidc-matrix-server/
 | `proxy`          | `nginxproxy/nginx-proxy:alpine`            | 80, 443       | Reverse proxy; aliases both hostnames on the Docker network |
 | `letsencrypt`    | `nginxproxy/acme-companion`                | —             | Auto-provisions TLS for proxy |
 | `element-web`    | `./dockerfiles/Dockerfile.element` (Element Web) | 80 (internal) | SIWX auto-login client, served via proxy at `${CLIENT_HOST}` |
-| `livekit`        | `livekit/livekit-server:latest`                  | 7881/tcp, 50100-50200/udp | LiveKit SFU for MatrixRTC (Element Call) |
+| `livekit`        | `livekit/livekit-server:v1.12.0` (pinned, no `:latest`) | 7881/tcp, 50100-50200/udp | LiveKit SFU for MatrixRTC (Element Call) |
 | `lk-jwt-service` | `ghcr.io/element-hq/lk-jwt-service:latest`       | 8080 (internal) | Validates Matrix OpenID tokens, issues LiveKit JWTs |
 
 Volumes: `matrix_data` (Synapse data), `proxy_data_*` (nginx/acme state).
@@ -81,6 +81,13 @@ deployment you must also edit `/data/homeserver.yaml` directly inside the
   via environment variable — no separate file on disk. Do not delete from `.env` —
   tokens become invalid if the key changes. Docker Compose (godotenv) handles the
   `\n`-escaped single-line PEM format and passes actual newlines to the container.
+- **MatrixRTC call rate limits**: `homeserver.yaml` carries `rc_delayed_event_mgmt`
+  (1 / 20) and `rc_message` (0.5 / 30) per Element Call `docs/self_hosting.md`;
+  the entrypoint writes them on first boot only. 1:1 call drops where LiveKit
+  shows `CLIENT_REQUEST_LEAVE` are usually the MSC4140 delayed-leave dead-man's
+  switch firing after a client-side network gap > 18s, which is by design and not
+  server-configurable; diagnosis recipe in `docs/2026-06-11-call-drop-analysis.md`
+  and the `/matrix-rtc-transport-specialist` skill.
 
 ## Admin promotion
 
