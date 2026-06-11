@@ -66,7 +66,7 @@ Two new services are added to `docker-compose.yml`:
 
 ```yaml
 livekit:
-  image: livekit/livekit-server:latest
+  image: livekit/livekit-server:v1.12.0   # pin; do not use :latest (deploy pulls would jump SFU versions)
   restart: unless-stopped
   command: --config /etc/livekit.yaml
   ports:
@@ -159,6 +159,11 @@ yq -i ".max_event_delay_duration = \"24h\"" /data/homeserver.yaml
 # Rate limiting for call heartbeats (every 5s per participant)
 yq -i ".rc_delayed_event_mgmt.per_second = 1" /data/homeserver.yaml
 yq -i ".rc_delayed_event_mgmt.burst_count = 20" /data/homeserver.yaml
+
+# Rate limiting for in-call E2EE key sharing (bursty room messages); values from
+# Element Call docs/self_hosting.md. Synapse defaults (0.2/10) can rate-limit calls.
+yq -i ".rc_message.per_second = 0.5" /data/homeserver.yaml
+yq -i ".rc_message.burst_count = 30" /data/homeserver.yaml
 
 # MatrixRTC transport: LiveKit SFU
 yq -i ".matrix_rtc.transports[0].type = \"livekit\"" /data/homeserver.yaml
@@ -307,6 +312,8 @@ $SSH_CMD "cd /home/matrix/stack && docker compose exec matrix_synapse sh -c '
   yq -i \".max_event_delay_duration = \\\"24h\\\"\" /data/homeserver.yaml &&
   yq -i \".rc_delayed_event_mgmt.per_second = 1\" /data/homeserver.yaml &&
   yq -i \".rc_delayed_event_mgmt.burst_count = 20\" /data/homeserver.yaml &&
+  yq -i \".rc_message.per_second = 0.5\" /data/homeserver.yaml &&
+  yq -i \".rc_message.burst_count = 30\" /data/homeserver.yaml &&
   yq -i \".matrix_rtc.transports[0].type = \\\"livekit\\\"\" /data/homeserver.yaml &&
   yq -i \".matrix_rtc.transports[0].livekit_service_url = \\\"https://matrix.inblock.io/livekit/jwt\\\"\" /data/homeserver.yaml
 '"
@@ -368,6 +375,7 @@ docker compose ps
 | Symptom | Cause | Fix |
 |---|---|---|
 | MISSING_MATRIX_RTC_TRANSPORT | `msc4143_enabled` not set, or Synapse < 1.140.0 | Enable MSC4143 in homeserver.yaml; verify Synapse version |
+| 1:1 call ends for both ~18s after one side's network blips, even though LiveKit logged a successful resume ("ice reconnected or switched pair") | MSC4140 delayed-leave dead-man's switch fired: that client's heartbeat (`POST .../delayed_events/<id>/restart`, every ~4-5s) stopped for >18s, so Synapse sent its scheduled `m.call.member` leave; the peer's client then hangs up cleanly (`CLIENT_REQUEST_LEAVE` in LiveKit + its own `/send`) | Not server-configurable: the 18s expiry is chosen by the client SDK, and Element Call v0.15.0 removed the `membership_server_side_expiry_timeout` config. Root cause is client connectivity; see "Diagnosing call drops" below |
 | MISSING_MATRIX_RTC_FOCUS | `.well-known/matrix/client` missing `rtc_foci` | Add `org.matrix.msc4143.rtc_foci` to well-known response |
 | Call connects but no audio/video | UDP ports blocked by firewall | Open 50100-50200/udp on the host |
 | "Failed to get SFU config" | lk-jwt-service unreachable or misconfigured | Check Caddy route for `/livekit/jwt`; check lk-jwt-service logs |
@@ -375,6 +383,34 @@ docker compose ps
 | Calls stuck / never end | MSC4140 (delayed events) not configured | Set `max_event_delay_duration: 24h` in homeserver.yaml |
 | "Room not found" in LiveKit | `room.auto_create: true` but LIVEKIT_FULL_ACCESS_HOMESERVERS not set | Either set `auto_create: false` (lk-jwt-service creates rooms) or set LIVEKIT_FULL_ACCESS_HOMESERVERS |
 | WebSocket 502 on /livekit/sfu/ | Caddy not routing to LiveKit container | Check Caddy handle block; ensure LiveKit container is on `portal-net` network |
+
+## Diagnosing call drops
+
+Worked example: 2026-06-11, five 1:1 drops in 15 min, root-caused to one
+participant's mobile connectivity (see `docs/2026-06-11-call-drop-analysis.md`).
+Recipe (read-only SSH to production):
+
+```bash
+# 1. Who left, and why? CLIENT_REQUEST_LEAVE = deliberate client hangup;
+#    DISCONNECTED/JOIN_TIMEOUT = media-layer failure.
+docker compose logs --since <window> livekit | grep -E "participant closing|resuming RTC session|ice reconnected"
+
+# 2. Did a delayed leave fire? Heartbeats are POST .../delayed_events/<syd_id>/restart
+#    every ~4-5s per participant. A gap > 18s (the client-chosen expiry, visible as
+#    ?org.matrix.msc4140.delay=18000 on the membership PUT) means Synapse sent that
+#    user's scheduled m.call.member leave and ended the call for everyone.
+docker compose logs --since <window> matrix_synapse | grep "delayed_events/syd_"
+
+# 3. Explicit POST .../delayed_events/<syd_id>/send = clean hangup by that client
+#    (it saw the call end or the user pressed hang-up), not a failure.
+```
+
+Interpretation: LiveKit media survives network blips and IP changes (resume /
+ICE restart), but the MatrixRTC membership keep-alive is the stricter layer; an
+outage longer than ~18s drops the call by design (MSC4140 dead-man's switch).
+There is no supported server-side knob to lengthen it. If heartbeat restarts
+return 429/M_LIMIT_EXCEEDED instead of gapping, fix `rc_delayed_event_mgmt`;
+if in-call key sharing is rate-limited, fix `rc_message` (values above).
 
 ## Known limitations
 
