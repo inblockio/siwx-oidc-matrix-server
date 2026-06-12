@@ -13,10 +13,14 @@ pipeline, not on a developer machine.
 - **Running images come from CI:** `ghcr.io/inblockio/siwx-oidc-matrix-server/synapse`,
   `.../element-web`, and `ghcr.io/inblockio/siwx-oidc`, tag `:main`, built on push to `main`.
 - **Production** is `deploy@agentic.inblock.io` (stack at `/home/deploy/matrix/stack`),
-  running the `:main` GHCR images. `deploy.sh` does `docker compose pull` + `up`; a
-  `watchtower` container auto-pulls new `:main`. `config/element-config.json` is
-  bind-mounted, so theme/config edits apply on an `element-web` restart with no image
-  rebuild.
+  running the `:main` GHCR images. **Deploys are MANUAL**: `deploy.sh` (or by hand)
+  `docker compose pull <svc> && docker compose up -d <svc>`. There is a `matrix-watchtower-1`
+  container, but it runs with `WATCHTOWER_SCOPE=matrix` and the only container carrying that
+  scope label is watchtower itself, so it updates NOTHING in the stack (verified 2026-06-12).
+  A push to `main` builds + publishes `:main` to GHCR but does NOT reach prod until you pull
+  + up the service yourself. (The previous "watchtower auto-pulls new :main" claim was wrong
+  and left B3/B2 undeployed after a push.) `config/element-config.json` is bind-mounted, so
+  theme/config edits apply on an `element-web` restart with no image rebuild.
 - **`docker-compose.local.yml`** (the `build:` sections) is for **local dev iteration
   only**. The images it builds are not what runs in production and go stale quickly. Never
   treat a locally-run stack as "live", and never deploy a locally-built image.
