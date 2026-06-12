@@ -231,9 +231,12 @@ Provisioning is **idempotent and additive**. A single `provision_synapse_device`
 - Provisioning is a plain `provision_user` + `upsert_device`. It never deletes an
   existing device, so re-login preserves the device's E2EE keys and cross-signing
   identity.
-- Logout/revoke (`compat.rs`) invalidate the opaque token only; they do NOT delete
-  the Synapse device. Device deletion is reserved for an explicit, user-initiated
-  "sign out this device" flow (not yet built).
+- Device deletion on teardown is gated by intent (`compat::TeardownPolicy`), not by
+  transport. A bare `/oauth2/revoke` (RFC 7009) invalidates the opaque token only and
+  NEVER deletes the Synapse device (token hygiene must not be destructive; deleting
+  here wedged users in the 2026-06-12 login incident). Explicit
+  `/_matrix/client/v3/logout` and the MSC4191 `device_delete` / `session_end` actions
+  in `account.rs` DO delete the ending session's device.
 - Cross-signing is never reset by a login. `allow_cross_signing_reset` fires only
   on the explicit, re-authenticated reset path in `../siwx-oidc/src/account.rs`
   (`GET /account?action=org.matrix.cross_signing_reset`).
