@@ -113,7 +113,7 @@ matrix.inblock.io {
     }
     handle /.well-known/matrix/client {
         header Access-Control-Allow-Origin *
-        respond `{"m.homeserver": {"base_url": "https://matrix.inblock.io"}, "m.authentication": {"issuer": "https://siwx-oidc.inblock.io/"}, "m.authentication.account": "https://siwx-oidc.inblock.io/account"}`
+        respond `{"m.homeserver": {"base_url": "https://matrix.inblock.io"}, "m.authentication": {"issuer": "https://siwx-oidc.inblock.io/", "account": "https://siwx-oidc.inblock.io/account"}}`
     }
 
     handle /_matrix/client/v3/login {
@@ -124,6 +124,13 @@ matrix.inblock.io {
     }
     handle /_matrix/client/v3/refresh {
         reverse_proxy siwx-oidc:8081
+    }
+
+    handle /_synapse/admin/* {
+        respond 404
+    }
+    handle /_synapse/mas/* {
+        respond 404
     }
 
     handle {

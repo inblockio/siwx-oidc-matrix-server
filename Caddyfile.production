@@ -29,7 +29,7 @@ matrix.inblock.io {
     }
     handle /.well-known/matrix/client {
         header Access-Control-Allow-Origin *
-        respond `{"m.homeserver": {"base_url": "https://matrix.inblock.io"}, "m.authentication": {"issuer": "https://siwx-oidc.inblock.io/"}, "m.authentication.account": "https://siwx-oidc.inblock.io/account", "org.matrix.msc4143.rtc_foci": [{"type": "livekit", "livekit_service_url": "https://matrix.inblock.io/livekit/jwt"}]}`
+        respond `{"m.homeserver": {"base_url": "https://matrix.inblock.io"}, "m.authentication": {"issuer": "https://siwx-oidc.inblock.io/", "account": "https://siwx-oidc.inblock.io/account"}, "org.matrix.msc4143.rtc_foci": [{"type": "livekit", "livekit_service_url": "https://matrix.inblock.io/livekit/jwt"}]}`
     }
 
     handle /_matrix/client/v3/login {
@@ -70,6 +70,17 @@ matrix.inblock.io {
     # MatrixRTC: LiveKit SFU WebSocket signaling
     handle_path /livekit/sfu/* {
         reverse_proxy livekit:7880
+    }
+
+    # SEC-0003: the Synapse admin + MAS provisioning surfaces must never be reachable
+    # from the internet. siwx-oidc reaches them over the Docker network
+    # (http://matrix_synapse:8080), bypassing Caddy, so denying them here breaks
+    # nothing. Without this, a leak of the MAS bearer becomes remote full admin.
+    handle /_synapse/admin/* {
+        respond 404
+    }
+    handle /_synapse/mas/* {
+        respond 404
     }
 
     handle {

@@ -21,7 +21,12 @@ yq -i "del(.listeners[1])" /data/homeserver.yaml
 #msc3861 delegated auth
 yq -i ".experimental_features.msc3861.enabled = true" /data/homeserver.yaml
 yq -i ".experimental_features.msc3861.issuer = \"${SIWEOIDC_BASE_URL}\"" /data/homeserver.yaml
-yq -i ".experimental_features.msc3861.account_management_url = \"${SIWEOIDC_BASE_URL}\"" /data/homeserver.yaml
+# Account-management deep link must point at the /account page, NOT the bare issuer
+# root. Synapse echoes this verbatim into the cross-signing-reset UIA 401 it hands
+# clients (rest/client/keys.py, msc3861 branch); a bare root dead-ends Element Web at
+# the sign-in SPA (/client/null) so the reset approval is never reached. `${VAR%/}/account`
+# is correct whether or not SIWEOIDC_BASE_URL carries a trailing slash.
+yq -i ".experimental_features.msc3861.account_management_url = \"${SIWEOIDC_BASE_URL%/}/account\"" /data/homeserver.yaml
 yq -i ".experimental_features.msc3861.client_id = \"0000000000000000000SYNAPSE\"" /data/homeserver.yaml
 yq -i ".experimental_features.msc3861.client_secret = \"${MAS_SHARED_SECRET}\"" /data/homeserver.yaml
 yq -i ".experimental_features.msc3861.admin_token = \"${MAS_SHARED_SECRET}\"" /data/homeserver.yaml
