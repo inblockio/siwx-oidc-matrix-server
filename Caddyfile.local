@@ -81,6 +81,16 @@
         reverse_proxy livekit:7880
     }
 
+    # SEC-0003: never expose the Synapse admin / MAS provisioning surfaces at the
+    # edge. siwx-oidc reaches them directly over the Docker network, so the deny
+    # breaks nothing. Kept in parity with Caddyfile.production.
+    handle /_synapse/admin/* {
+        respond 404
+    }
+    handle /_synapse/mas/* {
+        respond 404
+    }
+
     # Everything else → Synapse.
     handle {
         reverse_proxy matrix_synapse:8080

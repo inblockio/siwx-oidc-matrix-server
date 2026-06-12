@@ -126,6 +126,13 @@ matrix.inblock.io {
         reverse_proxy siwx-oidc:8081
     }
 
+    handle /_synapse/admin/* {
+        respond 404
+    }
+    handle /_synapse/mas/* {
+        respond 404
+    }
+
     handle {
         reverse_proxy matrix_synapse:8080
     }
