@@ -75,3 +75,31 @@
     min-width: 0;
     overflow-wrap: anywhere;
 }
+
+/*
+ * Top-left UserMenu dropdown (avatar menu): wrap long DID MXIDs.
+ *
+ * DISTINCT from the right-panel UserInfo rule above. The avatar menu in the
+ * top-left is a DIFFERENT component: in element-web v1.12.20 it is the
+ * shared-components UserMenu
+ * (packages/shared-components/src/menus/UserMenu/UserMenu.tsx), which renders the
+ * MXID as <Text data-testid="userId" as="span">{userId}</Text> -- NO className and
+ * NO overflow handling -- inside a max-width:300px Compound Menu. The long unbroken
+ * 0x<40 hex> run can't break (default overflow-wrap:normal) and spills past the
+ * right edge of the menu (the "wallet address out of bounds" screenshot).
+ *
+ * The right-panel fix's selector (.mx_UserInfo_profile_mxid) cannot reach this:
+ * UserMenu styles itself with CSS Modules (hashed local class names like
+ * styles.profile), so there is NO stable mx_* class to target. The only stable
+ * hook on the MXID node is its data-testid, which is unique to this component
+ * (verified against the v1.12.20 tree). overflow-wrap:anywhere shrinks the span's
+ * min-content so it wraps; max-width:100% + min-width:0 keep it inside the menu;
+ * text-align:center matches the centered displayname directly above it. Layout
+ * that theme JSON cannot express, so it belongs here.
+ */
+[data-testid="userId"] {
+    overflow-wrap: anywhere;
+    max-width: 100%;
+    min-width: 0;
+    text-align: center;
+}
