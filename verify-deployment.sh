@@ -117,8 +117,9 @@ fi
 # -- 5. Element Web theme integrity (served) ----------------------------------
 # Mirror of verify-theme.sh against the LIVE instance: the served themes must
 # paint none of the protected tokens, and the injected override stylesheet must
-# carry the rules it must (tab-label, room-header online-dot, profile-MXID wrap)
-# and none it must not (the redundant member-list dot rule). The override file
+# carry the rules it must (tab-label, room-header online-dot, right-panel
+# profile-MXID wrap, UserMenu-MXID wrap) and none it must not (the redundant
+# member-list dot rule). The override file
 # documents class names in comments, so we strip comments and inspect the rules.
 # See docs/element-theme-customization.md.
 echo "[5] Element Web theme"
@@ -154,9 +155,14 @@ else
   fail "served override CSS missing the room-header online-dot rule (stale image? header dot orange)"
 fi
 if echo "$OVERRIDE_RULES" | grep -q "mx_UserInfo_profile_mxid"; then
-  pass "served override CSS carries the profile-MXID wrap rule"
+  pass "served override CSS carries the right-panel profile-MXID wrap rule"
 else
-  fail "served override CSS missing the profile-MXID wrap rule (stale image? MXID overflows)"
+  fail "served override CSS missing the right-panel profile-MXID wrap rule (stale image? MXID overflows)"
+fi
+if echo "$OVERRIDE_RULES" | grep -q 'data-testid="userId"'; then
+  pass "served override CSS carries the UserMenu-MXID wrap rule"
+else
+  fail "served override CSS missing the UserMenu-MXID wrap rule (stale image? avatar-menu MXID overflows)"
 fi
 
 # -- 6. Optional E2EE round-trip smoke test -----------------------------------
