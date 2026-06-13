@@ -25,7 +25,10 @@ set -uo pipefail
 #            it is colored by compiled $accent -> text-action-accent, brand orange
 #            on custom themes, so it must be repainted green here)
 #        - .mx_UserInfo_profile_mxid wrap rule        PRESENT (long DID MXID must
-#            wrap inside the profile panel)
+#            wrap inside the right-panel profile)
+#        - [data-testid="userId"] wrap rule           PRESENT (long DID MXID must
+#            wrap inside the top-left UserMenu dropdown; that component is CSS-
+#            Modules-scoped, so data-testid is the only stable hook)
 #
 # Usage:
 #   ./verify-theme.sh              # verify the repo
@@ -137,11 +140,20 @@ else
   fail "override CSS lost the room-header online-dot rule (header dot would go orange)"
 fi
 
-# Long DID MXIDs must wrap inside the profile panel.
+# Long DID MXIDs must wrap inside the right-panel user-info profile.
 if echo "$RULES" | grep -q "mx_UserInfo_profile_mxid"; then
-  pass "override CSS carries the profile-MXID wrap rule"
+  pass "override CSS carries the right-panel profile-MXID wrap rule"
 else
-  fail "override CSS lost the profile-MXID wrap rule (long MXID would overflow)"
+  fail "override CSS lost the right-panel profile-MXID wrap rule (long MXID would overflow)"
+fi
+
+# Long DID MXIDs must also wrap inside the top-left UserMenu dropdown. That menu
+# (shared-components UserMenu, v1.12.20) is CSS-Modules-scoped, so the MXID node
+# has no stable mx_* class; data-testid="userId" is the only stable hook.
+if echo "$RULES" | grep -q 'data-testid="userId"'; then
+  pass "override CSS carries the UserMenu-MXID wrap rule"
+else
+  fail "override CSS lost the UserMenu-MXID wrap rule (long MXID would overflow the avatar menu)"
 fi
 
 echo ""

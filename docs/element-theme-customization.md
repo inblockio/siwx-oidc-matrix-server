@@ -103,7 +103,7 @@ case** that never showed the bug. It is exempt from the protected-token rule.
 The CSS side-channel (`element-theme-overrides.css`, `COPY`'d in
 `Dockerfile.element` and injected into `index.html` by
 `entrypoints/element_entrypoint.sh`) is reserved strictly for the last three
-rows. It currently carries three rules:
+rows. It currently carries four rules:
 
 1. **settings-tab label** -- restores the selected tab label, which Element drives
    from a compiled SCSS value (`$accent` / `$tab-label-active-fg-color` in
@@ -112,10 +112,20 @@ rows. It currently carries three rules:
 2. **room-header online dot** -- repaints `.mx_WithPresenceIndicator_icon_online`
    from compiled `$accent` (brand orange on custom themes) to
    `--cpd-color-icon-accent-primary` (green), matching the other two dot paths.
-3. **profile MXID wrap** -- lets a long DID MXID wrap inside the right-panel user
-   profile (frees the fixed `mx_UserInfo_profile_mxid` height and adds
-   `overflow-wrap: anywhere` to its `CopyableText`). Layout, which theme JSON
+3. **right-panel profile MXID wrap** -- lets a long DID MXID wrap inside the
+   right-panel user profile (frees the fixed `mx_UserInfo_profile_mxid` height and
+   adds `overflow-wrap: anywhere` to its `CopyableText`). Layout, which theme JSON
    cannot express; the native copy button already exists.
+4. **UserMenu (avatar dropdown) MXID wrap** -- the top-left avatar menu is a
+   *different* component from row 3: the shared-components `UserMenu`
+   (`packages/shared-components/src/menus/UserMenu/UserMenu.tsx`), which renders the
+   MXID as `<Text data-testid="userId" as="span">` with **no className and no
+   overflow handling** inside a `max-width:300px` Compound Menu, so the long
+   `0x…` hex run overflowed the menu edge. Because `UserMenu` is styled with **CSS
+   Modules** (hashed local class names), there is no stable `mx_*` class to target;
+   the rule keys off `[data-testid="userId"]` (unique to this component on
+   v1.12.20) and applies `overflow-wrap: anywhere; max-width: 100%`. Row 3's
+   selector cannot reach it -- the two profile surfaces need two separate rules.
 
 ## The discipline (one rule)
 
@@ -176,7 +186,12 @@ to a token pin. Nord is exempt (it owns its palette).
   uses `background-color: $accent` (compiles to `text-action-accent` on custom
   themes); rendered from `RoomHeader.tsx:465`.
 - `apps/web/src/components/views/right_panel/user_info/UserInfoHeaderView.tsx:86-89`
-  -- MXID rendered via native `CopyableText` (the copy button already exists);
-  `apps/web/res/css/views/right_panel/_UserInfo.pcss` (`mx_UserInfo_profile_mxid`).
+  -- right-panel MXID rendered via native `CopyableText` (the copy button already
+  exists); `apps/web/res/css/views/right_panel/_UserInfo.pcss`
+  (`mx_UserInfo_profile_mxid`).
+- `packages/shared-components/src/menus/UserMenu/UserMenu.tsx:138-140` -- top-left
+  avatar-menu MXID rendered as `<Text data-testid="userId" as="span">` with no
+  className; `packages/shared-components/src/menus/UserMenu/UserMenu.module.css`
+  (CSS Modules, `max-width:300px` container, no overflow handling on the MXID).
 - `@vector-im/compound-design-tokens@10.1.1` `cpd-common-semantic.css:78,80,9` and
   `cpd-theme-{light,dark}-base.css:81,25` -- semantic-to-scale mappings and hexes.
