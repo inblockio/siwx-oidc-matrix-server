@@ -1,0 +1,16 @@
+[Unit]
+Description=Run the Matrix storage controller hourly
+Documentation=https://github.com/inblockio/siwx-oidc-matrix-server
+
+[Timer]
+# Fire at the top of every hour (wall-clock, predictable in `list-timers`).
+# RandomizedDelaySec jitters to avoid a thundering herd; Persistent re-runs a
+# tick missed during downtime. OnCalendar is used instead of OnBootSec/
+# OnUnitActiveSec so the schedule is anchored to the clock, not to an in-the-past
+# boot time (which leaves NEXT unscheduled on a long-running host).
+OnCalendar=hourly
+RandomizedDelaySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

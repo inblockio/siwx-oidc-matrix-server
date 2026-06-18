@@ -1,0 +1,22 @@
+[Unit]
+Description=Matrix storage controller (dynamic media retention + storage alerts)
+Documentation=https://github.com/inblockio/siwx-oidc-matrix-server
+# The controller talks to Synapse over docker, and reads the bounded volume.
+After=docker.service
+Requires=docker.service
+RequiresMountsFor=/mnt/volume_matrix_service
+
+[Service]
+Type=oneshot
+User=deploy
+# deploy is in the docker group; make sure the oneshot inherits it so
+# `docker compose exec` works without a TTY or sudo.
+SupplementaryGroups=docker
+WorkingDirectory=/home/deploy/matrix/stack
+# systemd creates /var/lib/matrix-storage-controller owned by deploy and exports
+# it as $STATE_DIRECTORY; the script keeps its alert-level state there.
+StateDirectory=matrix-storage-controller
+ExecStart=/home/deploy/matrix/stack/scripts/matrix-storage-controller.sh tick
+Nice=10
+# Tunables can be overridden here or via a drop-in, e.g.:
+# Environment=WARN_PCT=80 CRIT_PCT=90 CURVE_K=2
