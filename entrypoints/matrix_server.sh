@@ -62,6 +62,14 @@ yq -i ".serve_server_wellknown = false" /data/homeserver.yaml
 yq -i ".retention.enabled=true" /data/homeserver.yaml
 yq -i ".retention.default_policy.allowed_lifetime_max= \"${MATRIX_MESSAGE_LIFETIME}\"" /data/homeserver.yaml
 
+# Server notices: the channel the storage controller (scripts/matrix-storage-controller.sh)
+# pushes WARN/CRIT storage alerts through. Synapse force-creates @notices and a
+# "Server Alerts" room and posts via POST /_synapse/admin/v1/send_server_notice
+# (authed by the msc3861 admin_token). Verified to work under MSC3861.
+yq -i ".server_notices.system_mxid_localpart = \"notices\"" /data/homeserver.yaml
+yq -i ".server_notices.system_mxid_display_name = \"${MATRIX_HOST} storage alerts\"" /data/homeserver.yaml
+yq -i ".server_notices.room_name = \"Server Alerts\"" /data/homeserver.yaml
+
 echo "First boot: Synapse configured with MSC3861 delegated auth."
 
 else
