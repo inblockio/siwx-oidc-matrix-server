@@ -1,0 +1,22 @@
+# PROD-ONLY override template — copy to docker-compose.override.yml ON THE
+# PRODUCTION HOST ONLY (it is gitignored so it never reaches local dev).
+#
+# Why: Synapse's /data (SQLite DB + media_store + signing key) must live on the
+# dedicated 100 GB DO volume, not the root disk, so unbounded Matrix growth can
+# never fill root and kill the host. Compose v2 merges a service's `volumes` list
+# by target path, so the bind below REPLACES the base file's `matrix_data:/data`
+# named-volume mount. The base docker-compose.yml stays generic (local dev keeps
+# the plain named volume). The old `matrix_matrix_data` named volume is left
+# intact on root as a one-command rollback (delete this file, `up -d`).
+#
+# Pairs with:
+#   - /etc/fstab entry mounting the volume at /mnt/volume_matrix_service (nofail,discard,noatime)
+#   - /etc/systemd/system/docker.service.d/10-matrix-volume.conf
+#       RequiresMountsFor=/mnt/volume_matrix_service   (Docker won't start before the volume mounts)
+#
+# See docs/2026-06-18-storage-bound-volume-controller.md for the full runbook.
+
+services:
+  matrix_synapse:
+    volumes:
+      - /mnt/volume_matrix_service/matrix_data:/data

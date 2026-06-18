@@ -4,3 +4,6 @@
 /proxy/
 /siwx-oidc-config/
 /.env.local
+# Prod-only volume-bind override (see docker-compose.override.yml.example); must
+# never reach local dev, where /mnt/volume_matrix_service does not exist.
+/docker-compose.override.yml

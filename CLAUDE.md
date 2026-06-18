@@ -57,6 +57,36 @@ siwx-oidc-matrix-server/
 
 Volumes: `matrix_data` (Synapse data), `proxy_data_*` (nginx/acme state).
 
+## Storage architecture: bounded volume + self-regulating controller
+
+**Production confines all Synapse state to a dedicated 100 GB DO volume so Matrix
+can never fill the host root disk.** (Verified deployed 2026-06-18; see
+`docs/2026-06-18-storage-bound-volume-controller.md`.)
+
+- **Bind, not named volume (prod only):** `docker-compose.override.yml` (gitignored;
+  template `docker-compose.override.yml.example`) binds
+  `/mnt/volume_matrix_service/matrix_data:/data`. Compose v2 merges service `volumes`
+  by target path, so the bind replaces the base `matrix_data:/data` mount **without
+  touching the base compose** (local dev keeps the plain named volume). The old
+  `matrix_matrix_data` named volume is preserved on root as a one-command rollback.
+- **Boot safety:** the volume is in `/etc/fstab` (`nofail,discard,noatime`, by-id
+  device path), and `/etc/systemd/system/docker.service.d/10-matrix-volume.conf` sets
+  `RequiresMountsFor=/mnt/volume_matrix_service` so Docker (hence Synapse) will **not
+  start before the volume mounts** — no silent fallback to root.
+- **Dynamic media retention (one closed loop):** `scripts/matrix-storage-controller.sh`,
+  run hourly by `matrix-storage-controller.timer` (`User=deploy`), measures volume
+  utilization and drives Synapse media pruning along a convex bonding curve via the
+  Admin API (`purge_media_cache` for remote cache; `media/<server>/delete?keep_profiles=true`
+  for local), **no restart**. Off below activation (40% remote / 50% local), tightening
+  toward floors (1 d remote / 7 d local) as the volume fills; expanding the volume
+  auto-relaxes it (capacity is read live each tick). Treats Matrix as a stream service,
+  not permanent storage. Alerts WARN/CRIT (80%/90%) via Matrix **server notices** to
+  `MATRIX_ADMIN_DID`. Inspect with `scripts/matrix-storage-controller.sh status` and
+  `journalctl -u matrix-storage-controller`.
+- **Server notices** work under MSC3861 (`POST /_synapse/admin/v1/send_server_notice`,
+  authed by the msc3861 `admin_token`). The operator must **accept the "Server Alerts"
+  room invite once** in Element (MSC3861 invites rather than force-joins).
+
 ## First-boot vs. restart behaviour
 
 `entrypoints/matrix_server.sh` only runs the `yq` configuration block when
