@@ -7,3 +7,8 @@
 # Prod-only volume-bind override (see docker-compose.override.yml.example); must
 # never reach local dev, where /mnt/volume_matrix_service does not exist.
 /docker-compose.override.yml
+# Local secrets — never commit. signing_key.pem is the OIDC signing key; .env.real
+# is a real prod env file. They sat untracked-but-not-ignored, so a `git add -A`
+# could have leaked them. (`/.env` above does not match `.env.real`.)
+/signing_key.pem
+/.env.real
