@@ -1,0 +1,22 @@
+# LiveKit SFU config for the hermetic LOCAL e2e harness (siwx-e2eh-livekit).
+# Based on config/livekit.yaml, with two WSL-specific deviations:
+#   - rtc.use_external_ip: false  — external-IP autodetect breaks on the WSL
+#     single-host bridge; e2e clients connect via localhost, so no external IP.
+#   - room.auto_create: true      — lets the later AV-establishment check
+#     (A6.5) create rooms without an admin/management call.
+# API keys are injected via the LIVEKIT_KEYS env var (see docker-compose.e2e.yml),
+# so the static `keys:` block from prod is intentionally omitted.
+port: 7880
+bind_addresses:
+  - "0.0.0.0"
+rtc:
+  tcp_port: 7881
+  port_range_start: 50100
+  port_range_end: 50200
+  use_external_ip: false
+room:
+  auto_create: true
+logging:
+  level: info
+turn:
+  enabled: false

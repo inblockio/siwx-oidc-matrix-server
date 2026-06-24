@@ -1,0 +1,176 @@
+# Hermetic LOCAL e2e harness — declarative spec (siwx-e2eh-*).
+#
+# Canonical declarative artifact for activity A1. NOTE: this box has NO working
+# docker-compose-compatible plugin and NO podman-compose, so the live bring-up is
+# done by e2e-harness/up.sh (raw `podman run` on network siwx-e2eh-net, mirroring
+# the siwx-real-* pattern). This file is kept in lockstep with up.sh as the
+# portable spec and for any host where a compose engine is available.
+#
+# Distinct host ports vs siwx-real-* (8081/8448/8450) and the mock (8080/8090):
+#   caddy edge 18080, siwx-oidc 18081 (via caddy), synapse 18448,
+#   livekit 7880 + 7881/tcp + 50100-50200/udp.
+#
+# Run (where a compose engine exists):
+#   scripts/gen-e2e-env.sh
+#   podman compose -f docker-compose.e2e.yml --env-file .env.e2e up -d
+services:
+  siwx-e2eh-redis:
+    image: docker.io/library/redis:7-alpine
+    container_name: siwx-e2eh-redis
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - siwx-e2eh-redis-data:/data
+    networks:
+      - siwx-e2eh-net
+
+  siwx-e2eh-oidc:
+    # Reuse the proven alpine static-musl image == siwx-oidc main@3f40485.
+    image: localhost/siwx-oidc:local-grace
+    container_name: siwx-e2eh-oidc
+    restart: unless-stopped
+    depends_on:
+      siwx-e2eh-redis:
+        condition: service_healthy
+    environment:
+      SIWEOIDC_ADDRESS: "0.0.0.0"
+      SIWEOIDC_PORT: "8081"
+      SIWEOIDC_BASE_URL: "${SIWEOIDC_BASE_URL}"            # http://localhost:18081
+      SIWEOIDC_MATRIX_SERVER_NAME: "${MATRIX_SERVER_NAME}"
+      SIWEOIDC_REQUIRE_SECRET: "false"
+      SIWEOIDC_SUPPORTED_DID_METHODS: '["pkh","key"]'
+      SIWEOIDC_REDIS_URL: "${REDIS_INTERNAL_URL}"          # redis://siwx-e2eh-redis:6379
+      SIWEOIDC_SYNAPSE_ENDPOINT: "${SYNAPSE_INTERNAL_ENDPOINT}"  # http://siwx-e2eh-synapse:8008
+      SIWEOIDC_MAS_SHARED_SECRET: "${MAS_SHARED_SECRET}"
+      SIWEOIDC_SIGNING_KEY_PEM: "${SIWEOIDC_SIGNING_KEY_PEM}"
+      RUST_LOG: "${RUST_LOG}"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:8081/.well-known/openid-configuration"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - siwx-e2eh-net
+
+  siwx-e2eh-synapse:
+    # Reuse the proven MSC3861 local Synapse image (real-stack/Dockerfile.synapse
+    # + synapse_entrypoint.sh). FRESH volume so the harness boots clean.
+    image: localhost/siwx-real-synapse:local
+    container_name: siwx-e2eh-synapse
+    restart: unless-stopped
+    depends_on:
+      siwx-e2eh-oidc:
+        condition: service_healthy
+    environment:
+      # Upstream Synapse start.py `generate` needs these two; the entrypoint's own
+      # yq block then uses MATRIX_HOST/MATRIX_PORT/... below.
+      SYNAPSE_SERVER_NAME: "${MATRIX_SERVER_NAME}"
+      SYNAPSE_REPORT_STATS: "no"
+      MATRIX_HOST: "${MATRIX_SERVER_NAME}"
+      MATRIX_PORT: "8008"
+      MATRIX_BASE_URL: "${MATRIX_BASE_URL}"                # http://localhost:18080
+      SIWEOIDC_PUBLIC_ISSUER: "${SIWEOIDC_PUBLIC_ISSUER}"  # http://localhost:18081/
+      SIWEOIDC_INTERNAL_URL: "${SIWEOIDC_INTERNAL_URL}"    # http://siwx-e2eh-oidc:8081
+      MAS_SHARED_SECRET: "${MAS_SHARED_SECRET}"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fSs http://localhost:8008/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    volumes:
+      - siwx-e2eh-matrix-data:/data
+    networks:
+      - siwx-e2eh-net
+
+  siwx-e2eh-livekit:
+    image: livekit/livekit-server:v1.12.0
+    container_name: siwx-e2eh-livekit
+    restart: unless-stopped
+    command: --config /etc/livekit.yaml
+    environment:
+      LIVEKIT_KEYS: "${LIVEKIT_KEY}: ${LIVEKIT_SECRET}"
+    ports:
+      - "7880:7880"
+      - "7881:7881/tcp"
+      - "50100-50200:50100-50200/udp"
+    volumes:
+      - ./config/livekit.e2e.yaml:/etc/livekit.yaml:ro
+    networks:
+      - siwx-e2eh-net
+
+  siwx-e2eh-lk-jwt:
+    image: ghcr.io/element-hq/lk-jwt-service:latest
+    container_name: siwx-e2eh-lk-jwt
+    restart: unless-stopped
+    environment:
+      LIVEKIT_URL: "ws://siwx-e2eh-livekit:7880"
+      LIVEKIT_KEY: "${LIVEKIT_KEY}"
+      LIVEKIT_SECRET: "${LIVEKIT_SECRET}"
+      LIVEKIT_JWT_BIND: ":8080"
+      # Required by recent lk-jwt-service builds: homeservers allowed to create
+      # rooms. "*" = any (fine for a hermetic single-homeserver harness).
+      LIVEKIT_FULL_ACCESS_HOMESERVERS: "*"
+      # MUST be this EXACT magic string ("true" is silently ignored) so lk-jwt
+      # accepts the self-signed cert the federation TLS shim presents on
+      # localhost:8448 (see siwx-e2eh-fed-proxy below + R3 root-cause notes).
+      LIVEKIT_INSECURE_SKIP_VERIFY_TLS: "YES_I_KNOW_WHAT_I_AM_DOING"
+    depends_on:
+      - siwx-e2eh-livekit
+    networks:
+      - siwx-e2eh-net
+
+  # Federation TLS shim for lk-jwt (R3). lk-jwt validates Matrix OpenID tokens by
+  # dialing matrix://localhost:8448 (TLS) — gomatrixserverlib resolves the
+  # "localhost" server-name to LOOPBACK inside lk-jwt's own netns (ignores
+  # /etc/hosts), and the e2eh Synapse serves federation as PLAIN HTTP on :8008.
+  # This Caddy shares lk-jwt's network namespace, so its localhost:8448 IS that
+  # loopback; it TLS-terminates with a self-signed cert and reverse-proxies to
+  # siwx-e2eh-synapse:8008. The cert is generated by scripts/gen-e2e-fed-cert.sh
+  # into e2e-harness/certs/ (run scripts/gen-e2e-env.sh first). See
+  # config/fed-proxy.e2e.Caddyfile.
+  siwx-e2eh-fed-proxy:
+    image: docker.io/library/caddy:2-alpine
+    container_name: siwx-e2eh-fed-proxy
+    restart: unless-stopped
+    # Share lk-jwt's netns so localhost:8448 here == lk-jwt's loopback. This also
+    # means NO `networks:`/`ports:` here — the namespace (and its siwx-e2eh-net
+    # membership, hence Synapse DNS) comes entirely from lk-jwt.
+    network_mode: "service:siwx-e2eh-lk-jwt"
+    depends_on:
+      - siwx-e2eh-lk-jwt
+    volumes:
+      - ./config/fed-proxy.e2e.Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./e2e-harness/certs/fed.crt:/certs/fed.crt:ro
+      - ./e2e-harness/certs/fed.key:/certs/fed.key:ro
+
+  siwx-e2eh-caddy:
+    image: docker.io/library/caddy:2-alpine
+    container_name: siwx-e2eh-caddy
+    restart: unless-stopped
+    depends_on:
+      - siwx-e2eh-oidc
+      - siwx-e2eh-synapse
+      - siwx-e2eh-lk-jwt
+      - siwx-e2eh-livekit
+    ports:
+      - "18080:18080"
+      - "18081:18081"
+    volumes:
+      - ./Caddyfile.e2e:/etc/caddy/Caddyfile:ro
+    networks:
+      - siwx-e2eh-net
+
+volumes:
+  siwx-e2eh-redis-data:
+  siwx-e2eh-matrix-data:
+
+networks:
+  siwx-e2eh-net:
+    name: siwx-e2eh-net

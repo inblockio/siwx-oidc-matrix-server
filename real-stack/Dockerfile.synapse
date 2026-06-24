@@ -1,0 +1,9 @@
+# Local real-stack Synapse image: base Synapse + yq + custom entrypoint that
+# writes homeserver.yaml with MSC3861 + issuer_metadata on first boot.
+FROM matrixdotorg/synapse:latest
+USER root
+RUN apt-get update && apt-get install -y wget curl && apt-get clean
+RUN wget -q https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/bin/yq && chmod +x /usr/bin/yq
+COPY synapse_entrypoint.sh /synapse_entrypoint.sh
+RUN chmod +x /synapse_entrypoint.sh
+ENTRYPOINT ["/synapse_entrypoint.sh"]

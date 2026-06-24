@@ -1,0 +1,57 @@
+# Federation TLS-terminating shim for the hermetic LOCAL e2e harness.
+#
+# WHY THIS EXISTS
+# ---------------
+# lk-jwt-service (ghcr.io/element-hq/lk-jwt-service) validates a Matrix OpenID
+# token by calling the homeserver's federation endpoint
+#   /_matrix/federation/v1/openid/userinfo
+# It resolves the token's `matrix_server_name` (here = "localhost", the e2eh
+# Synapse's server_name) with gomatrixserverlib's federation resolver
+# (fclient.NewClient(WithWellKnownSRVLookups(true)) -> LookupUserInfo). For a bare
+# name with no port and no .well-known, that resolver falls back to
+#   matrix://<name>:8448   (TLS on port 8448)
+# and Go resolves "localhost" to LOOPBACK *inside lk-jwt's own netns* (it ignores
+# /etc/hosts and --add-host for localhost — proven empirically), so the dial lands
+# on 127.0.0.1:8448 in lk-jwt's container and is refused. The e2eh Synapse serves
+# federation as PLAIN HTTP on :8008, not TLS on :8448, so even a host alias would
+# not help (scheme + port both differ).
+#
+# THE FIX
+# -------
+# Run THIS Caddy in lk-jwt's network namespace (podman: --network
+# container:siwx-e2eh-lk-jwt; compose: network_mode "service:siwx-e2eh-lk-jwt").
+# Then lk-jwt's loopback IS this proxy's loopback, so the federation dial to
+# 127.0.0.1:8448 hits this listener. We TLS-terminate with a self-signed
+# `localhost` cert and reverse-proxy plain HTTP to the e2eh Synapse federation
+# port (siwx-e2eh-synapse:8008 resolves because we share lk-jwt's siwx-e2eh-net
+# membership). lk-jwt must run with
+#   LIVEKIT_INSECURE_SKIP_VERIFY_TLS=YES_I_KNOW_WHAT_I_AM_DOING
+# (the EXACT magic string — "true" is silently ignored) so it accepts the
+# self-signed cert.
+#
+# This is a harness-only shim. It never runs in prod, where the homeserver has a
+# real federation name + cert and lk-jwt resolves it normally.
+
+{
+	# No ACME / auto-HTTPS; we present an explicit static cert. Disable the admin
+	# API (nothing drives it) and keep HTTP/3 off so the listener is plain TLS/TCP.
+	auto_https off
+	admin off
+	servers {
+		protocols h1 h2
+	}
+}
+
+# Federation TLS endpoint, on the loopback:8448 that gomatrixserverlib dials for
+# the `localhost` server-name. Only the federation API is forwarded.
+https://localhost:8448 {
+	tls /certs/fed.crt /certs/fed.key
+	handle /_matrix/federation/* {
+		reverse_proxy http://siwx-e2eh-synapse:8008
+	}
+	# Anything else federation-resolution might probe (e.g. /_matrix/key/v2) also
+	# goes to Synapse, so the shim is a faithful federation front for localhost.
+	handle {
+		reverse_proxy http://siwx-e2eh-synapse:8008
+	}
+}

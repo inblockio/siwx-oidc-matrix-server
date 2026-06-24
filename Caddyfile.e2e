@@ -1,0 +1,131 @@
+# Edge Caddyfile for the hermetic LOCAL e2e harness (siwx-e2eh-* containers).
+#
+# Single public entrypoint on :18080. HTTP only, no TLS, no DNS. Models on:
+#   - Caddyfile.local           — .well-known/matrix/client (issuer + rtc_foci),
+#                                 /livekit/jwt + /livekit/sfu reverse proxies.
+#   - the running siwx-real-caddy — the MSC3861 method-route split that forwards
+#                                 the CS-API endpoints siwx-oidc owns
+#                                 (src/axum_lib.rs route table) to siwx-oidc,
+#                                 while Synapse 404s them under delegated auth.
+#
+# Topology (podman network siwx-e2eh-net):
+#   - siwx-oidc       : siwx-e2eh-oidc:8081
+#   - Synapse         : siwx-e2eh-synapse:8008   (Synapse internal HTTP port)
+#   - lk-jwt-service  : siwx-e2eh-lk-jwt:8080
+#   - LiveKit SFU     : siwx-e2eh-livekit:7880
+# This edge listens on :18080 inside the container, published 0.0.0.0:18080.
+
+(strip_upstream_cors) {
+	header_down -Access-Control-Allow-Origin
+	header_down -Access-Control-Allow-Methods
+	header_down -Access-Control-Allow-Headers
+	header_down -Access-Control-Allow-Credentials
+	header_down -Access-Control-Expose-Headers
+	header_down -Access-Control-Max-Age
+	header_down -Vary
+}
+
+(public_cors) {
+	@cors_preflight method OPTIONS
+	header Access-Control-Allow-Origin "*"
+	header Access-Control-Allow-Methods "GET, HEAD, POST, PUT, DELETE, OPTIONS"
+	header Access-Control-Allow-Headers "X-Requested-With, Content-Type, Authorization, Date"
+	header Access-Control-Max-Age "86400"
+	respond @cors_preflight 204
+}
+
+# Matrix homeserver edge + MatrixRTC focus advertisement.
+:18080 {
+	encode zstd gzip
+
+	# Synapse server discovery.
+	handle /.well-known/matrix/server {
+		respond `{"m.server": "localhost:18080"}`
+	}
+
+	# Client discovery — points clients at the LOCAL OIDC issuer (MSC3861) and
+	# the LOCAL LiveKit JWT focus (MSC4143). Issuer carries the trailing slash to
+	# byte-match siwx-oidc's metadata + Synapse's msc3861.issuer per RFC 8414.
+	handle /.well-known/matrix/client {
+		header Access-Control-Allow-Origin *
+		respond `{"m.homeserver": {"base_url": "http://localhost:18080"}, "m.authentication": {"issuer": "http://localhost:18081/", "account": "http://localhost:18081/account"}, "org.matrix.msc4143.rtc_foci": [{"type": "livekit", "livekit_service_url": "http://localhost:18080/livekit/jwt"}]}`
+	}
+
+	# --- MSC3861-owned endpoints → siwx-e2eh-oidc -------------------------------
+	# Endpoints siwx-oidc registers (login flow, logout, logout/all, refresh,
+	# delete_devices, devices/{id}). Synapse 404s them under MSC3861; the edge
+	# routes them to siwx-oidc, exactly as the real stack / prod does.
+	handle /_matrix/client/v3/login {
+		import public_cors
+		reverse_proxy siwx-e2eh-oidc:8081 {
+			import strip_upstream_cors
+		}
+	}
+	handle /_matrix/client/v3/logout {
+		import public_cors
+		reverse_proxy siwx-e2eh-oidc:8081 {
+			import strip_upstream_cors
+		}
+	}
+	handle /_matrix/client/v3/logout/all {
+		import public_cors
+		reverse_proxy siwx-e2eh-oidc:8081 {
+			import strip_upstream_cors
+		}
+	}
+	handle /_matrix/client/v3/delete_devices {
+		import public_cors
+		reverse_proxy siwx-e2eh-oidc:8081 {
+			import strip_upstream_cors
+		}
+	}
+	# Prefix-match also covers DELETE /_matrix/client/v3/devices/{device_id}.
+	handle /_matrix/client/v3/devices/* {
+		import public_cors
+		reverse_proxy siwx-e2eh-oidc:8081 {
+			import strip_upstream_cors
+		}
+	}
+	handle /_matrix/client/v3/refresh {
+		import public_cors
+		reverse_proxy siwx-e2eh-oidc:8081 {
+			import strip_upstream_cors
+		}
+	}
+
+	# --- MatrixRTC: lk-jwt-service (Matrix OpenID -> LiveKit JWT exchange) -------
+	handle_path /livekit/jwt {
+		reverse_proxy siwx-e2eh-lk-jwt:8080
+	}
+	handle_path /livekit/jwt/* {
+		reverse_proxy siwx-e2eh-lk-jwt:8080
+	}
+
+	# --- MatrixRTC: LiveKit SFU WebSocket signaling -----------------------------
+	handle_path /livekit/sfu/* {
+		reverse_proxy siwx-e2eh-livekit:7880
+	}
+
+	# SEC-0003 parity: never expose Synapse admin / MAS provisioning at the edge.
+	handle /_synapse/admin/* {
+		respond 404
+	}
+	handle /_synapse/mas/* {
+		respond 404
+	}
+
+	# Everything else (sync, rooms, keys, whoami, auth_metadata, versions, …) → Synapse.
+	handle {
+		reverse_proxy siwx-e2eh-synapse:8008
+	}
+}
+
+# siwx-oidc edge — OIDC provider endpoints (authorize, token, register,
+# .well-known/openid-configuration, /account, /health, etc.) on :18081.
+:18081 {
+	encode zstd gzip
+	import public_cors
+	reverse_proxy siwx-e2eh-oidc:8081 {
+		import strip_upstream_cors
+	}
+}
