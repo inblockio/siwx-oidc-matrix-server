@@ -113,6 +113,10 @@ FULL_CHECKS=(
   # ---- siwx-oidc msc4191 live + session teardown (now green: R2 test updates) ----
   "siwx-oidc.msc4191_live.device_management_live|siwx-oidc|oidc|e2e_msc4191_live|msc4191_device_management_live"
   "siwx-oidc.msc4191_live.cross_signing_reset_round_trip_live|siwx-oidc|oidc|e2e_msc4191_live|cross_signing_reset_round_trip_live"
+  # ---- siwx-oidc cross-signing-reset CONTRACT-LOCK (B2: regression locks for the honesty fix) ----
+  "siwx-oidc.cross_signing_reset.legA_roundtrip|siwx-oidc|oidc|e2e_msc4191_live|cross_signing_reset_leg_a_roundtrip_completed_live"
+  "siwx-oidc.cross_signing_reset.stale_window_wedge|siwx-oidc|oidc|e2e_msc4191_live|cross_signing_reset_stale_window_wedge_live"
+  "siwx-oidc.cross_signing_reset.no_master_completed|siwx-oidc|oidc|e2e_msc4191_live|cross_signing_reset_no_master_completed_live"
   "siwx-oidc.session_teardown|siwx-oidc|oidc|e2e_session_teardown"
   # ---- siwx-oidc (known-flagged: Synapse 1.154 re-export limitation, documented) ----
   "FLAG:siwx-oidc.msc3861.msc4191_metadata_advertised_and_forwarded|siwx-oidc|oidc|e2e_msc3861|msc4191_metadata_advertised_and_forwarded"
