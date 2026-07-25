@@ -47,7 +47,7 @@ index 0dbc2af..cb23d44 100644
      }
  
      /**
-@@ -2133,13 +2160,61 @@ export default class MatrixChat extends React.PureComponent<IProps, IState> {
+@@ -2133,13 +2160,79 @@ export default class MatrixChat extends React.PureComponent<IProps, IState> {
  
      /** Called when {@link Views.E2E_SETUP} or {@link Views.COMPLETE_SECURITY} have completed. */
      private onCompleteSecurityE2eSetupFinished = async (): Promise<void> => {
@@ -78,9 +78,27 @@ index 0dbc2af..cb23d44 100644
 +                    // Distinguish "4S genuinely absent" (must create a recovery key) from "4S
 +                    // exists server-side but isn't unlocked on this device" (must unlock, never
 +                    // reset - resetting orphans the user's existing recovery key and message-key
-+                    // backup). hasKey() reflects server-side default-key presence; recompute it
-+                    // every pass so a retry after a partial attempt still does the right thing.
-+                    const hasExisting4S = await cli.secretStorage.hasKey();
++                    // backup). Recompute every pass so a retry after a partial attempt still
++                    // does the right thing.
++                    //
++                    // Probe the SERVER, not `secretStorage.hasKey()`: that reads the local
++                    // account_data cache, which on session restore is exactly as cold as
++                    // isSecretStorageReady() (the finding that forced the gate above onto
++                    // getAccountDataFromServer). A cold false here would mean forceReset:true -
++                    // silently minting a new 4S key and orphaning the user's existing recovery
++                    // key and message-key backup, while reporting success.
++                    //
++                    // Note the fallback direction is the OPPOSITE of the gate's. The gate fails
++                    // toward `false` because that merely enforces the wizard - inconvenient but
++                    // recoverable. Here `false` triggers an IRREVERSIBLE reset, so an
++                    // indeterminate probe must assume 4S EXISTS and unlock instead. Assuming
++                    // existence when there is none costs a failed unlock and another loop pass
++                    // (or sign-out); assuming absence when 4S exists destroys message history.
++                    // Never take the destructive branch on uncertainty.
++                    const hasExisting4S = await cli
++                        .getAccountDataFromServer("m.secret_storage.default_key")
++                        .then((ev) => !!ev)
++                        .catch(() => true);
 +                    await accessSecretStorage(async () => {}, { forceReset: !hasExisting4S });
 +                    // Re-check readiness inside the try: if a transient crypto error throws here
 +                    // too, fall through to the Retry/Sign out choice rather than escaping as an
