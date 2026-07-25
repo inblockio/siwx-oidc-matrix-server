@@ -20,16 +20,41 @@ yq -i "del(.listeners[1])" /data/homeserver.yaml
 
 #msc3861 delegated auth
 yq -i ".experimental_features.msc3861.enabled = true" /data/homeserver.yaml
-yq -i ".experimental_features.msc3861.issuer = \"${SIWEOIDC_BASE_URL}\"" /data/homeserver.yaml
+# Public issuer clients see (must byte-match siwx-oidc metadata / .well-known).
+# Prefer SIWEOIDC_PUBLIC_ISSUER when set (local/e2e), else SIWEOIDC_BASE_URL.
+PUBLIC_ISSUER="${SIWEOIDC_PUBLIC_ISSUER:-${SIWEOIDC_BASE_URL}}"
+# Ensure trailing slash for RFC 8414 issuer byte-match with siwx metadata.
+case "${PUBLIC_ISSUER}" in
+  */) ;;
+  *) PUBLIC_ISSUER="${PUBLIC_ISSUER}/" ;;
+esac
+yq -i ".experimental_features.msc3861.issuer = \"${PUBLIC_ISSUER}\"" /data/homeserver.yaml
 # Account-management deep link must point at the /account page, NOT the bare issuer
 # root. Synapse echoes this verbatim into the cross-signing-reset UIA 401 it hands
 # clients (rest/client/keys.py, msc3861 branch); a bare root dead-ends Element Web at
 # the sign-in SPA (/client/null) so the reset approval is never reached. `${VAR%/}/account`
-# is correct whether or not SIWEOIDC_BASE_URL carries a trailing slash.
-yq -i ".experimental_features.msc3861.account_management_url = \"${SIWEOIDC_BASE_URL%/}/account\"" /data/homeserver.yaml
+# is correct whether or not the issuer carries a trailing slash.
+yq -i ".experimental_features.msc3861.account_management_url = \"${PUBLIC_ISSUER%/}/account\"" /data/homeserver.yaml
 yq -i ".experimental_features.msc3861.client_id = \"0000000000000000000SYNAPSE\"" /data/homeserver.yaml
+yq -i ".experimental_features.msc3861.client_auth_method = \"client_secret_post\"" /data/homeserver.yaml
 yq -i ".experimental_features.msc3861.client_secret = \"${MAS_SHARED_SECRET}\"" /data/homeserver.yaml
 yq -i ".experimental_features.msc3861.admin_token = \"${MAS_SHARED_SECRET}\"" /data/homeserver.yaml
+
+# When SIWEOIDC_INTERNAL_URL is set (local/e2e compose), pin issuer_metadata so
+# Synapse reaches siwx-oidc on the docker network for introspection while still
+# advertising the public issuer to clients. Without this, issuer=http://localhost:N
+# is unreachable from inside the Synapse container and every whoami returns 503.
+if [ -n "${SIWEOIDC_INTERNAL_URL:-}" ]; then
+  INTERNAL="${SIWEOIDC_INTERNAL_URL%/}"
+  yq -i ".experimental_features.msc3861.issuer_metadata.issuer = \"${PUBLIC_ISSUER}\"" /data/homeserver.yaml
+  yq -i ".experimental_features.msc3861.issuer_metadata.authorization_endpoint = \"${INTERNAL}/authorize\"" /data/homeserver.yaml
+  yq -i ".experimental_features.msc3861.issuer_metadata.token_endpoint = \"${INTERNAL}/token\"" /data/homeserver.yaml
+  yq -i ".experimental_features.msc3861.issuer_metadata.introspection_endpoint = \"${INTERNAL}/oauth2/introspect\"" /data/homeserver.yaml
+  yq -i ".experimental_features.msc3861.issuer_metadata.revocation_endpoint = \"${INTERNAL}/oauth2/revoke\"" /data/homeserver.yaml
+  yq -i ".experimental_features.msc3861.issuer_metadata.registration_endpoint = \"${INTERNAL}/register\"" /data/homeserver.yaml
+  yq -i ".experimental_features.msc3861.issuer_metadata.jwks_uri = \"${INTERNAL}/jwk\"" /data/homeserver.yaml
+  yq -i ".experimental_features.msc3861.issuer_metadata.account_management_uri = \"${PUBLIC_ISSUER%/}/account\"" /data/homeserver.yaml
+fi
 
 # Enable QR code login rendezvous server (MSC4108 2024 version)
 yq -i ".experimental_features.msc4108_enabled = true" /data/homeserver.yaml

@@ -67,6 +67,9 @@ services:
       SIWEOIDC_SIGNING_KEY_PEM: ${SIWEOIDC_SIGNING_KEY_PEM}
       SIWEOIDC_MAS_SHARED_SECRET: ${MAS_SHARED_SECRET}
       SIWEOIDC_SYNAPSE_ENDPOINT: http://matrix_synapse:${MATRIX_PORT:-8080}
+      # Required for MSC4191 device_delete / CS-API DELETE devices/* to call
+      # Synapse MAS delete_device (not just Redis token revoke).
+      SIWEOIDC_MATRIX_SERVER_NAME: ${MATRIX_HOST:-localhost}
       SIWEOIDC_REQUIRE_SECRET: "false"
       SIWEOIDC_SUPPORTED_DID_METHODS: '["pkh","key"]'
       RUST_LOG: ${RUST_LOG:-siwx_oidc=debug,tower_http=info}
@@ -93,6 +96,10 @@ services:
       MAS_SHARED_SECRET: ${MAS_SHARED_SECRET}
       SIWEOIDC_PORT: ${SIWEOIDC_PORT:-8081}
       SIWEOIDC_BASE_URL: ${SIWEOIDC_BASE_URL:-http://localhost:${SIWEOIDC_HOST_PORT:-8081}}
+      # Public issuer clients see (host-facing). Internal URL is what Synapse
+      # uses for introspection via msc3861.issuer_metadata (docker DNS).
+      SIWEOIDC_PUBLIC_ISSUER: ${SIWEOIDC_BASE_URL:-http://localhost:${SIWEOIDC_HOST_PORT:-8081}}/
+      SIWEOIDC_INTERNAL_URL: http://siwx-oidc:${SIWEOIDC_PORT:-8081}
     depends_on:
       siwx-oidc:
         condition: service_healthy
@@ -131,6 +138,11 @@ services:
       - "${MATRIX_HOST_PORT:-8080}:8080"
       - "${SIWEOIDC_HOST_PORT:-8081}:8081"
       - "${CLIENT_HOST_PORT:-8088}:8088"
+    environment:
+      # Host-facing URLs embedded in .well-known (must match published ports).
+      MATRIX_PUBLIC_BASE: ${MATRIX_BASE_URL:-http://localhost:${MATRIX_HOST_PORT:-8080}}
+      MATRIX_PUBLIC_HOST: ${MATRIX_PUBLIC_HOST:-localhost:${MATRIX_HOST_PORT:-8080}}
+      SIWX_PUBLIC_BASE: ${SIWEOIDC_BASE_URL:-http://localhost:${SIWEOIDC_HOST_PORT:-8081}}
     volumes:
       - ./Caddyfile.local:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
