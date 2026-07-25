@@ -29,18 +29,24 @@
 :8080 {
     encode zstd gzip
 
+    # Public host URLs (set via caddy container env; defaults match compose ports).
+    # When remapping host ports (e.g. portal owns :8080), set MATRIX_PUBLIC_BASE
+    # and SIWX_PUBLIC_BASE so discovery matches what the browser can reach.
     # Synapse server discovery (the homeserver delegates federation port to itself).
     handle /.well-known/matrix/server {
-        respond `{"m.server": "localhost:8080"}`
+        respond `{"m.server": "{$MATRIX_PUBLIC_HOST:localhost:8080}"}`
     }
 
     # Client discovery — points Element at the OIDC issuer for MSC3861.
     handle /.well-known/matrix/client {
         header Access-Control-Allow-Origin *
-        respond `{"m.homeserver": {"base_url": "http://localhost:8080"}, "m.authentication": {"issuer": "http://localhost:8081/", "account": "http://localhost:8081/account"}, "org.matrix.msc4143.rtc_foci": [{"type": "livekit", "livekit_service_url": "http://localhost:8080/livekit/jwt"}]}`
+        respond `{"m.homeserver": {"base_url": "{$MATRIX_PUBLIC_BASE:http://localhost:8080}"}, "m.authentication": {"issuer": "{$SIWX_PUBLIC_BASE:http://localhost:8081}/", "account": "{$SIWX_PUBLIC_BASE:http://localhost:8081}/account"}, "org.matrix.msc4143.rtc_foci": [{"type": "livekit", "livekit_service_url": "{$MATRIX_PUBLIC_BASE:http://localhost:8080}/livekit/jwt"}]}`
     }
 
-    # MSC3861: login/logout/refresh go to siwx-oidc, not Synapse.
+    # MSC3861: login/logout/refresh + in-client device teardown go to siwx-oidc.
+    # Synapse returns 404 for these under delegated auth; Element "Sign out this
+    # session" / remove-device must hit siwx-oidc (parity with e2e/real-stack/Caddyfile
+    # and production method-routes).
     handle /_matrix/client/v3/login {
         import public_cors
         reverse_proxy siwx-oidc:8081 {
@@ -48,6 +54,26 @@
         }
     }
     handle /_matrix/client/v3/logout {
+        import public_cors
+        reverse_proxy siwx-oidc:8081 {
+            import strip_upstream_cors
+        }
+    }
+    handle /_matrix/client/v3/logout/all {
+        import public_cors
+        reverse_proxy siwx-oidc:8081 {
+            import strip_upstream_cors
+        }
+    }
+    handle /_matrix/client/v3/delete_devices {
+        import public_cors
+        reverse_proxy siwx-oidc:8081 {
+            import strip_upstream_cors
+        }
+    }
+    # Prefix match covers DELETE /devices/{id} (owned by siwx). GET list may also
+    # hit this path; compat handlers or fall-through — keep parity with real-stack edge.
+    handle /_matrix/client/v3/devices/* {
         import public_cors
         reverse_proxy siwx-oidc:8081 {
             import strip_upstream_cors

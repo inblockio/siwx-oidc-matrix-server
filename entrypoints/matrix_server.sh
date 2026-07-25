@@ -20,16 +20,59 @@ yq -i "del(.listeners[1])" /data/homeserver.yaml
 
 #msc3861 delegated auth
 yq -i ".experimental_features.msc3861.enabled = true" /data/homeserver.yaml
-yq -i ".experimental_features.msc3861.issuer = \"${SIWEOIDC_BASE_URL}\"" /data/homeserver.yaml
+# Public issuer clients see (must byte-match siwx-oidc metadata / .well-known).
+# Prefer SIWEOIDC_PUBLIC_ISSUER when set (local/e2e), else SIWEOIDC_BASE_URL.
+PUBLIC_ISSUER="${SIWEOIDC_PUBLIC_ISSUER:-${SIWEOIDC_BASE_URL}}"
+# Ensure trailing slash for RFC 8414 issuer byte-match with siwx metadata.
+case "${PUBLIC_ISSUER}" in
+  */) ;;
+  *) PUBLIC_ISSUER="${PUBLIC_ISSUER}/" ;;
+esac
+yq -i ".experimental_features.msc3861.issuer = \"${PUBLIC_ISSUER}\"" /data/homeserver.yaml
 # Account-management deep link must point at the /account page, NOT the bare issuer
 # root. Synapse echoes this verbatim into the cross-signing-reset UIA 401 it hands
 # clients (rest/client/keys.py, msc3861 branch); a bare root dead-ends Element Web at
 # the sign-in SPA (/client/null) so the reset approval is never reached. `${VAR%/}/account`
-# is correct whether or not SIWEOIDC_BASE_URL carries a trailing slash.
-yq -i ".experimental_features.msc3861.account_management_url = \"${SIWEOIDC_BASE_URL%/}/account\"" /data/homeserver.yaml
+# is correct whether or not the issuer carries a trailing slash.
+yq -i ".experimental_features.msc3861.account_management_url = \"${PUBLIC_ISSUER%/}/account\"" /data/homeserver.yaml
 yq -i ".experimental_features.msc3861.client_id = \"0000000000000000000SYNAPSE\"" /data/homeserver.yaml
+yq -i ".experimental_features.msc3861.client_auth_method = \"client_secret_post\"" /data/homeserver.yaml
 yq -i ".experimental_features.msc3861.client_secret = \"${MAS_SHARED_SECRET}\"" /data/homeserver.yaml
 yq -i ".experimental_features.msc3861.admin_token = \"${MAS_SHARED_SECRET}\"" /data/homeserver.yaml
+
+# When SIWEOIDC_INTERNAL_URL is set (local/e2e compose), pin issuer_metadata so
+# Synapse reaches siwx-oidc on the docker network for introspection while still
+# advertising the public issuer to clients. Without this, issuer=http://localhost:N
+# is unreachable from inside the Synapse container and every whoami returns 503.
+#
+# CRITICAL: Synapse forwards issuer_metadata VERBATIM to browsers via
+# GET /_matrix/client/v1/auth_metadata — it does NOT merge in the OP's real
+# metadata. A hand-written endpoints-only dict therefore breaks Element Web
+# twice over: (a) internal http://siwx-oidc:PORT endpoint URLs are
+# unreachable from a browser, and (b) missing capability fields
+# (response_types_supported, grant_types_supported,
+# code_challenge_methods_supported) fail matrix-js-sdk's issuer validation.
+# Either way Element falls back to the legacy /login/sso/redirect, which
+# 404s under MSC3861 (siwx has no MAS compat shim) — a login dead-end.
+#
+# Correct pattern (as MAS documents): take the OP's FULL metadata (siwx
+# advertises public URLs because SIWEOIDC_BASE_URL is host-facing) and
+# override ONLY introspection_endpoint to the docker-internal URL — the one
+# endpoint Synapse itself calls.
+if [ -n "${SIWEOIDC_INTERNAL_URL:-}" ]; then
+  INTERNAL="${SIWEOIDC_INTERNAL_URL%/}"
+  for i in $(seq 1 30); do
+    curl -fsS "${INTERNAL}/.well-known/openid-configuration" -o /tmp/op-metadata.json && break
+    echo "waiting for siwx-oidc metadata at ${INTERNAL} (${i}/30)..."
+    sleep 2
+  done
+  if [ ! -s /tmp/op-metadata.json ]; then
+    echo "FATAL: could not fetch ${INTERNAL}/.well-known/openid-configuration" >&2
+    exit 1
+  fi
+  yq -i ".experimental_features.msc3861.issuer_metadata = load(\"/tmp/op-metadata.json\")" /data/homeserver.yaml
+  yq -i ".experimental_features.msc3861.issuer_metadata.introspection_endpoint = \"${INTERNAL}/oauth2/introspect\"" /data/homeserver.yaml
+fi
 
 # Enable QR code login rendezvous server (MSC4108 2024 version)
 yq -i ".experimental_features.msc4108_enabled = true" /data/homeserver.yaml

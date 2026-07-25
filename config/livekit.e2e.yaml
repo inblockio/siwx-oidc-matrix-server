@@ -11,8 +11,8 @@ bind_addresses:
   - "0.0.0.0"
 rtc:
   tcp_port: 7881
-  port_range_start: 50100
-  port_range_end: 50200
+  port_range_start: 20100
+  port_range_end: 20200
   use_external_ip: false
 room:
   auto_create: true

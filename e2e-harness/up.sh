@@ -97,7 +97,7 @@ podman run -d --name siwx-e2eh-synapse --network "${NET}" --restart unless-stopp
   --health-interval 15s --health-timeout 5s --health-retries 5 --health-start-period 30s \
   localhost/siwx-real-synapse:local >/dev/null
 
-# 7. livekit (publish 7880 for the AV check + 7881/tcp + 50100-50200/udp)
+# 7. livekit (publish 7880 for the AV check + 7881/tcp + 20100-20200 (below the ephemeral range)/udp)
 echo "[up] starting siwx-e2eh-livekit"
 podman run -d --name siwx-e2eh-livekit --network "${NET}" --restart unless-stopped \
   -p "${LIVEKIT_HOST_PORT}:7880" \
