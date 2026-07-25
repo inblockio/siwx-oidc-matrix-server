@@ -44,16 +44,34 @@ yq -i ".experimental_features.msc3861.admin_token = \"${MAS_SHARED_SECRET}\"" /d
 # Synapse reaches siwx-oidc on the docker network for introspection while still
 # advertising the public issuer to clients. Without this, issuer=http://localhost:N
 # is unreachable from inside the Synapse container and every whoami returns 503.
+#
+# CRITICAL: Synapse forwards issuer_metadata VERBATIM to browsers via
+# GET /_matrix/client/v1/auth_metadata — it does NOT merge in the OP's real
+# metadata. A hand-written endpoints-only dict therefore breaks Element Web
+# twice over: (a) internal http://siwx-oidc:PORT endpoint URLs are
+# unreachable from a browser, and (b) missing capability fields
+# (response_types_supported, grant_types_supported,
+# code_challenge_methods_supported) fail matrix-js-sdk's issuer validation.
+# Either way Element falls back to the legacy /login/sso/redirect, which
+# 404s under MSC3861 (siwx has no MAS compat shim) — a login dead-end.
+#
+# Correct pattern (as MAS documents): take the OP's FULL metadata (siwx
+# advertises public URLs because SIWEOIDC_BASE_URL is host-facing) and
+# override ONLY introspection_endpoint to the docker-internal URL — the one
+# endpoint Synapse itself calls.
 if [ -n "${SIWEOIDC_INTERNAL_URL:-}" ]; then
   INTERNAL="${SIWEOIDC_INTERNAL_URL%/}"
-  yq -i ".experimental_features.msc3861.issuer_metadata.issuer = \"${PUBLIC_ISSUER}\"" /data/homeserver.yaml
-  yq -i ".experimental_features.msc3861.issuer_metadata.authorization_endpoint = \"${INTERNAL}/authorize\"" /data/homeserver.yaml
-  yq -i ".experimental_features.msc3861.issuer_metadata.token_endpoint = \"${INTERNAL}/token\"" /data/homeserver.yaml
+  for i in $(seq 1 30); do
+    curl -fsS "${INTERNAL}/.well-known/openid-configuration" -o /tmp/op-metadata.json && break
+    echo "waiting for siwx-oidc metadata at ${INTERNAL} (${i}/30)..."
+    sleep 2
+  done
+  if [ ! -s /tmp/op-metadata.json ]; then
+    echo "FATAL: could not fetch ${INTERNAL}/.well-known/openid-configuration" >&2
+    exit 1
+  fi
+  yq -i ".experimental_features.msc3861.issuer_metadata = load(\"/tmp/op-metadata.json\")" /data/homeserver.yaml
   yq -i ".experimental_features.msc3861.issuer_metadata.introspection_endpoint = \"${INTERNAL}/oauth2/introspect\"" /data/homeserver.yaml
-  yq -i ".experimental_features.msc3861.issuer_metadata.revocation_endpoint = \"${INTERNAL}/oauth2/revoke\"" /data/homeserver.yaml
-  yq -i ".experimental_features.msc3861.issuer_metadata.registration_endpoint = \"${INTERNAL}/register\"" /data/homeserver.yaml
-  yq -i ".experimental_features.msc3861.issuer_metadata.jwks_uri = \"${INTERNAL}/jwk\"" /data/homeserver.yaml
-  yq -i ".experimental_features.msc3861.issuer_metadata.account_management_uri = \"${PUBLIC_ISSUER%/}/account\"" /data/homeserver.yaml
 fi
 
 # Enable QR code login rendezvous server (MSC4108 2024 version)
