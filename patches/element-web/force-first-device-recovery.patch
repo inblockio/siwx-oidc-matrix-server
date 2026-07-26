@@ -10,7 +10,7 @@ index 0dbc2af..cb23d44 100644
  import dis from "../../dispatcher/dispatcher";
  import Notifier from "../../Notifier";
  import Modal from "../../Modal";
-@@ -1387,8 +1388,34 @@ export default class MatrixChat extends React.PureComponent<IProps, IState> {
+@@ -1387,8 +1388,40 @@ export default class MatrixChat extends React.PureComponent<IProps, IState> {
  
          const crypto = client.getCrypto();
          const crossSigningReady = await crypto?.isCrossSigningReady();
@@ -42,6 +42,12 @@ index 0dbc2af..cb23d44 100644
 +        const hasServer4S =
 +            !secretStorageReady &&
 +            !!(await client.getAccountDataFromServer("m.secret_storage.default_key").catch(() => null));
++
++        // Ops breadcrumb: this decision has bitten twice (restore gate, forceReset
++        // data-loss); keep the inputs observable in the rageshake log.
++        logger.info(
++            `shouldForceVerification: crossSigningReady=${crossSigningReady} secretStorageReady=${secretStorageReady} hasServer4S=${hasServer4S}`,
++        );
 +
 +        return !crossSigningReady || !(secretStorageReady || hasServer4S);
      }
