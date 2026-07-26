@@ -23,10 +23,18 @@ WORKDIR /src
 RUN git clone --depth 1 --branch "${ELEMENT_WEB_TAG}" \
       https://github.com/element-hq/element-web.git /src
 
-# Apply our vendored patch. Fail the build loudly if it does not apply cleanly,
-# so a tag bump that breaks the patch is caught here, not at runtime.
+# Apply our vendored patches. Fail the build loudly if any does not apply
+# cleanly, so a tag bump that breaks one is caught here, not at runtime. They are
+# separate files, and applied separately, so the failure names the guilty patch.
+#
+#  - force-first-device-recovery: OUR policy (a recovery key is mandatory).
+#  - setup-encryption-busy-wedge:  an UPSTREAM Element 1.12.20 defect, carried
+#    here only until it is fixed upstream. Drop this one on a tag bump that
+#    already contains the fix rather than forward-porting it by reflex.
 COPY patches/element-web/force-first-device-recovery.patch /tmp/ew.patch
 RUN git apply --verbose /tmp/ew.patch
+COPY patches/element-web/setup-encryption-busy-wedge.patch /tmp/ew-busy.patch
+RUN git apply --verbose /tmp/ew-busy.patch
 
 # Install exactly what the lockfile pins.
 RUN corepack enable && pnpm install --frozen-lockfile
