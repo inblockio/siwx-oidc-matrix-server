@@ -49,7 +49,7 @@ index 0dbc2af..cb23d44 100644
 +                    "GET" as any,
 +                    "/user/" + encodeURIComponent(client.getSafeUserId()) + "/account_data/m.secret_storage.default_key",
 +                )
-+                .then(() => true)
++                .then((r: any) => !!r?.key)
 +                .catch(() => false));
 +
 +        // Ops breadcrumb: this decision has bitten twice (restore gate, forceReset
@@ -115,7 +115,7 @@ index 0dbc2af..cb23d44 100644
 +                            "GET" as any,
 +                            "/user/" + encodeURIComponent(cli.getSafeUserId()) + "/account_data/m.secret_storage.default_key",
 +                        )
-+                        .then(() => true)
++                        .then((r: any) => !!r?.key)
 +                        .catch((e: any) => e?.errcode !== "M_NOT_FOUND");
 +                    await accessSecretStorage(async () => {}, { forceReset: !hasExisting4S });
 +                    // Re-check readiness inside the try: if a transient crypto error throws here
