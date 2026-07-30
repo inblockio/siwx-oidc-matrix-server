@@ -550,10 +550,160 @@ containers), 2 stopped by design (`aqua_proxy`, `aqua_acme`). Memory:
 1200 MB used, **2715 MB available**, swap 1 MB — ample headroom for T4's
 stack (H5 pre-check).
 
-## 9. CI auto-deploy note (T5, separate task)
+## 9. CI auto-deploy (T5)
 
-This runbook covers the manual stand-up. Once T5 wires CI auto-deploy for
-this box, routine updates become `git pull && docker compose pull && docker
-compose up -d` on push to `main` (see the plan's T5). Until then, redeploys
-here are the same manual pattern used on production (`docker compose pull
-<svc> && docker compose up -d <svc>` from this directory).
+**Status: wired, blocked only on one GitHub secret per repo.** Everything
+that does not require the `inblockio` GitHub PAT has been built and
+verified directly on the box; the PAT itself was invalid at implementation
+time (`~/.claude/CLAUDE.md`, "GitHub Authentication" section — rotation was
+pending), so no `gh` command could run. Nothing here required it except the
+one remaining step below.
+
+### What's in place
+
+1. **Deploy key.** A dedicated ed25519 keypair, generated on the DevOps
+   laptop, private half never printed or committed:
+   `~/.ssh/dev_aquafire_ci_deploy{,.pub}`. Public fingerprint:
+   `SHA256:JKGfdN+aDHhLfUPhiz0cZ8woLRy8ZkQxWrYO4wu3kqE`.
+
+2. **Forced-command authorized_keys entry**, appended to
+   `/home/dev/.ssh/authorized_keys` on the box (backup taken first at
+   `/home/dev/.ssh/authorized_keys.bak-20260730T181241Z`; the pre-existing 6
+   entries are untouched):
+
+   ```
+   command="/home/dev/matrix-staging/ci-deploy.sh",no-agent-forwarding,no-port-forwarding,no-pty,no-X11-forwarding ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEiNAST2CzPvOzSX3AqCszoUEc0bAn21IRfesckFy5kZ github-actions-dev-staging-deploy
+   ```
+
+   Verified from this machine with the new PRIVATE key: `ssh -p 8022 -i
+   ~/.ssh/dev_aquafire_ci_deploy dev@... "whoami"` runs `ci-deploy.sh` (not
+   `whoami` — no `dev` in the output), `cat /etc/shadow` and `rm -rf
+   /home/dev/matrix-staging` were both silently ignored (directory intact
+   after), `-L` port forwarding is refused (forwarded port never opens), and
+   `-t` pty allocation gets no interactive session. The only thing this key
+   can ever do is run `ci-deploy.sh`.
+
+3. **`/home/dev/matrix-staging/ci-deploy.sh`** (mode 755, owner `dev`):
+   `docker compose -f docker-compose.dev-staging.yml pull && ... up -d`
+   (tags come from `.env`, so `IMAGE_TAG=sha-4266aa8` stays pinned and only
+   `SIWX_OIDC_TAG=main` actually floats), waits for container health (90s
+   budget), prints `docker compose ps`, smoke-checks the three public HTTPS
+   endpoints through Caddy with retries (`dev.siwx` discovery doc,
+   `dev.matrix` `.well-known/matrix/client`, `dev.element` root), then
+   echoes the running `siwx-oidc`/`matrix_synapse`/`element-web` image
+   digests so CI logs show exactly what got deployed. `set -euo pipefail`;
+   any failure (bad pull, unhealthy container, failed smoke check) exits
+   nonzero. Takes no arguments and ignores `SSH_ORIGINAL_COMMAND` — trusting
+   client-supplied command strings would defeat the point of the forced
+   command above. **Manually run end-to-end from this machine (as `dev`
+   directly, not via the forced key) — exit 0, all three smoke checks ok,
+   idempotent on a second run** (see this doc's verification log / the T5
+   implementation report for the full transcript).
+
+4. **Workflow job `deploy-dev-staging`** appended to `docker.yml` in both
+   repos (`needs: build-and-push`, fires on push to `main` — not on tag
+   pushes, `fork-stable`, or releases, which also satisfy each repo's `on:
+   push` trigger — or on `workflow_dispatch`): installs the deploy key from
+   secret `DEV_STAGING_DEPLOY_KEY`, pins the box's host key from a
+   `ssh-keyscan` capture embedded in the workflow (no TOFU in CI), then SSHs
+   in; the forced command runs `ci-deploy.sh` regardless of the `deploy`
+   argument in the workflow (kept only for a readable Actions log line).
+   Both `docker.yml` files pass `python3 -c 'import yaml; yaml.safe_load(...)'`.
+
+### CI auto-deploy — pending user actions
+
+The only missing step is setting one GitHub Actions secret per repo. Do
+this once the `inblockio` PAT is rotated/restored:
+
+```bash
+# 1. Set the secret in both repos (private key file, never paste the value elsewhere)
+gh secret set DEV_STAGING_DEPLOY_KEY --repo inblockio/siwx-oidc \
+  < ~/.ssh/dev_aquafire_ci_deploy
+gh secret set DEV_STAGING_DEPLOY_KEY --repo inblockio/siwx-oidc-matrix-server \
+  < ~/.ssh/dev_aquafire_ci_deploy
+
+# 2. Confirm both are set (lists metadata only, never the value)
+gh secret list --repo inblockio/siwx-oidc | grep DEV_STAGING_DEPLOY_KEY
+gh secret list --repo inblockio/siwx-oidc-matrix-server | grep DEV_STAGING_DEPLOY_KEY
+
+# 3. Dispatch a test run on each repo's branch that already carries the
+#    new workflow (no need to wait for/merge to main — workflow_dispatch
+#    works on any branch containing the workflow file, and the deploy job's
+#    `if` explicitly allows workflow_dispatch regardless of ref):
+gh workflow run docker.yml --repo inblockio/siwx-oidc --ref ci/dev-staging-deploy
+gh workflow run docker.yml --repo inblockio/siwx-oidc-matrix-server --ref dev-staging
+
+# 4. Watch it run
+gh run watch --repo inblockio/siwx-oidc
+gh run watch --repo inblockio/siwx-oidc-matrix-server
+```
+
+**Alternative to `gh secret set`** (no PAT restored yet, or prefer the UI):
+GitHub web UI → repo → Settings → Secrets and variables → Actions → "New
+repository secret" → name `DEV_STAGING_DEPLOY_KEY` → paste the full
+contents of `~/.ssh/dev_aquafire_ci_deploy` (the PEM private key, including
+the `-----BEGIN/END OPENSSH PRIVATE KEY-----` lines) → Save. Repeat in the
+other repo. Same effect as step 1 above.
+
+**What a successful run looks like:** the `deploy-dev-staging` job goes
+green, and its "Deploy to dev-staging" step log ends with lines matching:
+
+```
+[ci-deploy] pulling images (tags come from .env — IMAGE_TAG and SIWX_OIDC_TAG stay pinned as configured)
+[ci-deploy] starting/recreating changed services
+[ci-deploy] waiting for services to report healthy (up to 90s)
+[ci-deploy] all health-checked services report healthy (or have no healthcheck)
+[ci-deploy] compose ps summary:
+...
+[ci-deploy] smoke check ok: siwx-oidc discovery (https://dev.siwx.inblock.io/.well-known/openid-configuration)
+[ci-deploy] smoke check ok: matrix well-known (https://dev.matrix.inblock.io/.well-known/matrix/client)
+[ci-deploy] smoke check ok: element web root (https://dev.element.inblock.io/)
+[ci-deploy] deployed image digests:
+[ci-deploy]   siwx-oidc: ghcr.io/inblockio/siwx-oidc@sha256:...
+[ci-deploy]   matrix_synapse: ghcr.io/inblockio/siwx-oidc-matrix-server/synapse@sha256:...
+[ci-deploy]   element-web: ghcr.io/inblockio/siwx-oidc-matrix-server/element-web@sha256:...
+[ci-deploy] deploy complete
+```
+
+A red job (nonzero exit) with no lasting damage is also an acceptable
+outcome to debug from — `ci-deploy.sh` never leaves the stack partially
+applied beyond what `docker compose up -d` itself guarantees, and the box's
+existing containers are untouched until the pull succeeds.
+
+### H6 verification procedure (image digest changes after a CI run)
+
+```bash
+# Baseline BEFORE triggering the run — capture the currently-running
+# siwx-oidc image digest on the box:
+ssh -p 8022 -i ~/.ssh/id_inblock_deploy dev@207.154.209.103 \
+  "docker inspect --format='{{.Image}}' matrix-staging-siwx-oidc-1 \
+     | xargs docker image inspect --format='{{join .RepoDigests \", \"}}'"
+
+# Trigger (step 3 above), wait for the run to finish green.
+
+# AFTER — re-run the same command. Expect the digest to differ from the
+# baseline whenever `main` produced a new image since the last deploy (a
+# workflow_dispatch always rebuilds via build-and-push, so in practice the
+# digest changes on essentially every dispatched run even without a new
+# commit, since the image layers/labels are freshly built).
+ssh -p 8022 -i ~/.ssh/id_inblock_deploy dev@207.154.209.103 \
+  "docker inspect --format='{{.Image}}' matrix-staging-siwx-oidc-1 \
+     | xargs docker image inspect --format='{{join .RepoDigests \", \"}}'"
+
+# Cross-check against what GHCR actually published (from the Actions log
+# for the build-and-push job, or):
+gh api /orgs/inblockio/packages/container/siwx-oidc/versions --jq \
+  '.[0].metadata.container.tags, .[0].name'
+```
+
+**H6 status: PARTIAL.** Every component has been verified independently —
+the deploy script (manual run, box-side, exit 0), the forced-command key
+restriction (four negative tests: arbitrary command ignored,
+`rm -rf`/`cat /etc/shadow` ignored, port forwarding refused, no pty), the
+workflow YAML (parses clean, correct `needs`/`if` gating), and port 8022
+reachability (ufw: `8022/tcp ALLOW Anywhere` + `Anywhere (v6)`, same port
+this doc's own SSH commands use). **The one thing NOT verified is an actual
+GitHub-Actions-runner-triggered run** — that requires `DEV_STAGING_DEPLOY_KEY`
+to exist as a secret, which requires the currently-invalid `inblockio` PAT.
+Once the PAT is restored and the pending actions above are run once, this
+graduates from PARTIAL to full AC4 (see the plan's acceptance criteria).
