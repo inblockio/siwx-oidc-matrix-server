@@ -1,0 +1,95 @@
+# Standalone reverse-proxy stack for the dev-aquafire box (207.154.209.103) —
+# its OWN compose project, deliberately independent of any application.
+#
+# WHY THIS IS A SEPARATE FILE FROM docker-compose.dev-staging.yml:
+# this box already learned the lesson once. From the header of
+# /home/dev/aquafier-rs/deployment/docker-compose-proxy.yml (the nginx-proxy
+# stack this replaces):
+#
+#   "the proxy used to live INSIDE the aquafier-js compose project, so
+#    `docker compose down` on aquafier-js removed the proxy and took every
+#    other site down with it."
+#
+# Caddy here fronts EIGHT vhosts across FIVE independent compose projects
+# (deployment/aquafier-js, aquafier-rs, aqua-explorer, excalidraw, and the
+# matrix-staging stack). If it lived inside the matrix stack, a routine
+# `docker compose down` of that stack would black-hole the five unrelated
+# legacy sites. It does not; it owns its own project and lifecycle.
+#
+# The coupling that remains is the intended one: `proxy_net` (external,
+# created by the old proxy project and kept). Apps attach by joining
+# `proxy_net`; Caddy reaches them by service/container name over Docker's
+# embedded DNS. Caddy joins NO other network — all eight upstreams are
+# reachable on proxy_net alone (verified 2026-07-30).
+#
+# Deploy location on the box: /home/dev/caddy-proxy/
+#   docker-compose.caddy-proxy.yml
+#   Caddyfile.dev-aquafire        <- bind-mounted read-only, path is relative
+#
+# Usage (full procedure: docs/2026-07-30-dev-staging-dev-aquafire.md):
+#   cd /home/dev/caddy-proxy
+#   docker compose -f docker-compose.caddy-proxy.yml config      # validate
+#   docker compose -f docker-compose.caddy-proxy.yml up -d
+#   docker compose -f docker-compose.caddy-proxy.yml logs -f     # cert issuance
+#
+# Config-only changes are zero-downtime — no restart, no dropped connections:
+#   docker exec caddy_proxy caddy reload --config /etc/caddy/Caddyfile
+#
+# !! DANGER: never run compose from /home/dev/aquafier-js/deployment/ !!
+# That directory's docker-compose-dev.yml defines a DUPLICATE nginx-proxy +
+# letsencrypt pair, neutralized only by a sibling docker-compose.override.yml
+# (`profiles: never`). Invoking compose there with `-f docker-compose-dev.yml`
+# alone drops the override and resurrects a second proxy that fights this
+# container for ports 80/443.
+
+name: caddy-proxy
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    # Explicit, stable name so ops/rollback commands (and `docker exec ...
+    # caddy reload`) do not depend on the compose-generated suffix. Mirrors
+    # the `aqua_proxy` / `aqua_acme` naming of the stack it replaces.
+    container_name: caddy_proxy
+    # unless-stopped, NOT always: it must come back after a host reboot, but a
+    # deliberate `docker stop` (i.e. a rollback to nginx-proxy) must STAY
+    # stopped. `always` would resurrect it on the next dockerd restart and
+    # fight the restored aqua_proxy for 80/443 — exactly the landmine the old
+    # proxy project shipped with.
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      # HTTP/3 (QUIC). nginx-proxy advertised `alt-svc h3` on all five legacy
+      # vhosts and listened on 443/udp; Caddy does HTTP/3 by default once the
+      # UDP port is published, so this preserves the behavior.
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile.dev-aquafire:/etc/caddy/Caddyfile:ro
+      # Certificates + ACME account keys live here. This volume is the thing
+      # to preserve across container recreation — losing it means re-issuing
+      # all eight certificates from Let's Encrypt.
+      - caddy_data:/data
+      - caddy_config:/config
+    healthcheck:
+      # Host 127.0.0.1 matches no vhost, so this hits the Caddyfile's `:80`
+      # catch-all (`respond "OK" 200`) — a true liveness probe of the HTTP
+      # server that never depends on an upstream app being up.
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:80/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - proxy_net
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+networks:
+  # Pre-existing, created by the outgoing nginx-proxy project (`proxy`) with an
+  # explicit `name:` so it is app-agnostic and stable. external:true here means
+  # compose will NEVER create or delete it — it is shared infrastructure.
+  proxy_net:
+    external: true

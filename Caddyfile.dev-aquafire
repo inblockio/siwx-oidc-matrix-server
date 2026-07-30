@@ -22,26 +22,42 @@
 # the Matrix/.well-known/livekit routing, and on Caddyfile.local for the
 # strip_upstream_cors snippet.
 #
-# STATUS: the upstream container:port for the FIVE MIGRATED legacy vhosts are
-# UNVERIFIED placeholders (T2/Sonnet authored this without box access). T3
-# (the live migration task) MUST dump the real generated nginx conf —
+# STATUS: VERIFIED 2026-07-30 (T3). Every upstream below was read off the LIVE
+# generated nginx-proxy config on the box:
 #     docker exec aqua_proxy cat /etc/nginx/conf.d/default.conf
-# — and correct every line tagged:
-#     # TODO(T3-verify): confirm upstream against generated nginx conf before cutover
-# before cutover. Do NOT bind this Caddy to 80/443 with unverified upstreams
-# still in place; see docs/2026-07-30-dev-staging-dev-aquafire.md for the
-# staged validation + cutover + rollback procedure.
+# which resolved by container IP on `proxy_net` as:
+#     aquafier-api.inblock.io   -> 172.18.0.7:3000  = deployment-aqua-container-1:3000
+#     aquafier.inblock.io       -> 172.18.0.7:3600  = deployment-aqua-container-1:3600
+#     dev.aqua-node.inblock.io  -> 172.18.0.2:80    = aqua-explorer:80
+#     dev.aquafire.inblock.io   -> 172.18.0.6:3000  = aquafier-rs:3000
+#     draw.inblock.io           -> 172.18.0.4:80    = excalidraw:80
+# NOTE the two aquafier vhosts share ONE container on TWO different ports
+# (3000 = API, 3600 = UI). Do not "simplify" them to the same port.
+# All TODO(T3-verify) markers are resolved; no placeholder `respond 503`
+# remains.
 #
-# Deploy: mounted read-only into the `caddy` service in
-# docker-compose.dev-staging.yml as /etc/caddy/Caddyfile.
+# Deploy: mounted read-only as /etc/caddy/Caddyfile into the `caddy` service of
+# docker-compose.caddy-proxy.yml — a STANDALONE compose project (`caddy-proxy`,
+# deployed to /home/dev/caddy-proxy/ on the box), deliberately NOT part of the
+# matrix stack's compose project. This mirrors the lesson already learned on
+# this box and recorded in the header of
+# /home/dev/aquafier-rs/deployment/docker-compose-proxy.yml: when the proxy
+# lived inside an application's compose project, a `docker compose down` on
+# that application took every other site on the box down with it. The proxy
+# owns its own project + lifecycle; apps attach by joining `proxy_net`.
+#
+# See docs/2026-07-30-dev-staging-dev-aquafire.md for the cutover + rollback
+# procedure actually executed.
 ##############################################################################
 
 {
-    # TODO(T3-verify): confirm the ops contact address to register with Let's
-    # Encrypt (reuse whatever address the existing aqua_acme ACME_EMAIL /
-    # DEFAULT_EMAIL env var already has registered, if any, to avoid a second
-    # distinct LE account for the same domains).
-    email devops@inblock.io
+    # VERIFIED 2026-07-30 (T3): this is the address the outgoing acme-companion
+    # already had registered for these exact domains —
+    #     docker inspect aqua_acme -> DEFAULT_EMAIL=hello@inblock.io
+    # Reusing it keeps Let's Encrypt expiry/problem notifications flowing to the
+    # same inbox across the nginx-proxy -> Caddy migration. (Caddy still creates
+    # its OWN ACME account keypair; only the contact address is shared.)
+    email hello@inblock.io
 
     # Admin API stays on Caddy's default bind (127.0.0.1:2019 inside the
     # container, never published to the host/ports: list below) — this still
@@ -70,8 +86,47 @@
     respond @cors_preflight 204
 }
 
+# HSTS — carried over from nginx-proxy, which emitted exactly
+#     add_header Strict-Transport-Security "max-age=31536000" always;
+# on ALL FIVE legacy vhosts (verified 2026-07-30 in the generated conf; no
+# includeSubDomains, no preload). Applied here to all EIGHT vhosts.
+#
+# The `+` prefix means ADD, not SET, replicating nginx's `add_header`
+# semantics. This matters for dev.aquafire.inblock.io, whose upstream
+# (aquafier-rs) emits its OWN, STRICTER header
+# ("max-age=31536000; includeSubDomains"). Under nginx the client saw both, in
+# that order, and per RFC 6797 processes the first — i.e. the upstream's
+# stricter policy won. A plain `header` (set) would silently DOWNGRADE that
+# vhost by discarding includeSubDomains, so do not "simplify" the + away.
+(hsts) {
+    header +Strict-Transport-Security "max-age=31536000"
+}
+
+# Request body cap — carried over from nginx-proxy's
+# /etc/nginx/conf.d/inblock_custom.conf (`client_max_body_size 200m;`, global,
+# matching PROXY_BODY_SIZE=200M in docker-compose-proxy.yml; aquafier-rs
+# accepts uploads up to ~200 MB). Caddy has NO default request-body limit, so
+# without this the migration would silently make the box MORE permissive than
+# nginx was. Applied to the five legacy vhosts only — the three new dev.*
+# vhosts stay unlimited, matching Caddyfile.production (Synapse media uploads
+# are already capped by Synapse's own max_upload_size).
+(legacy_body_limit) {
+    request_body {
+        max_size 200MB
+    }
+}
+
 # Bare-IP / no-SNI requests (health probes, scanners) — matches
 # Caddyfile.production's catch-all instead of erroring.
+#
+# VERIFIED 2026-07-30 (T3) on the box with a throwaway caddy container on
+# alternate ports: this host-less :80 block does NOT shadow Caddy's automatic
+# HTTP->HTTPS redirects. A request for a NAMED vhost over plain HTTP still gets
+# `308 Permanent Redirect -> https://...` (Caddy logs "enabling automatic
+# HTTP->HTTPS redirects" for srv0); only an UNMATCHED Host falls through to
+# this catch-all. nginx-proxy issued 301 for the same redirect; 308 is the
+# method-preserving equivalent and is what Caddy emits — a deliberate, benign
+# difference.
 :80 {
     respond "OK" 200
 }
@@ -82,6 +137,7 @@
 
 dev.matrix.inblock.io {
     encode zstd gzip
+    import hsts
 
     # Synapse server discovery (federation port delegation).
     handle /.well-known/matrix/server {
@@ -155,6 +211,7 @@ dev.matrix.inblock.io {
 
 dev.siwx.inblock.io {
     encode zstd gzip
+    import hsts
     import public_cors
 
     # Load-bearing: siwx-oidc emits its own CORS headers. Without stripping
@@ -171,55 +228,59 @@ dev.siwx.inblock.io {
 
 dev.element.inblock.io {
     encode zstd gzip
+    import hsts
     reverse_proxy element-web:8080
 }
 
 # ============================================================================
-# MIGRATED: pre-existing dev-aquafire services, currently behind nginx-proxy
-# (aqua_proxy) + acme-companion (aqua_acme). Upstream container:port below
-# are UNVERIFIED placeholders — see the file header. Each vhost responds 503
-# with an explanatory body until T3 replaces the placeholder `respond` line
-# with the real `reverse_proxy` directive, so a config error here cannot take
-# down a vhost that IS ready and this file still parses cleanly with
-# `caddy validate` before any upstream is confirmed.
+# MIGRATED: the five pre-existing dev-aquafire services, previously behind
+# nginx-proxy (aqua_proxy) + acme-companion (aqua_acme).
+#
+# Every upstream below is VERIFIED against the live generated nginx conf on
+# 2026-07-30 (see the file header for the IP -> container mapping). All five
+# containers sit on `proxy_net`, which is the only network this Caddy joins.
+#
+# Carried-over nginx behavior: `import hsts` (add_header Strict-Transport-
+# Security max-age=31536000) and `import legacy_body_limit` (client_max_body_
+# size 200m). WebSockets, HTTP/2 and HTTP/3 need no directives — they are
+# Caddy defaults (nginx needed explicit `http2 on` / `listen 443 quic` /
+# Upgrade-header plumbing). No per-vhost nginx snippets existed to port:
+# /etc/nginx/vhost.d/ was empty.
 # ============================================================================
 
+# UI. NOTE: same container as aquafier-api below, DIFFERENT port (3600 vs 3000).
 aquafier.inblock.io {
     encode zstd gzip
-    # TODO(T3-verify): confirm upstream against generated nginx conf before cutover.
-    # Replace with:  reverse_proxy deployment-aqua-container-1:<PORT>
-    respond "dev-aquafire: aquafier.inblock.io upstream not yet configured (T3 pending)" 503
+    import hsts
+    import legacy_body_limit
+    reverse_proxy deployment-aqua-container-1:3600
 }
 
+# API. NOTE: same container as aquafier above, DIFFERENT port (3000 vs 3600).
 aquafier-api.inblock.io {
     encode zstd gzip
-    # TODO(T3-verify): confirm upstream against generated nginx conf before cutover.
-    # Same backend container as aquafier.inblock.io above but almost
-    # certainly a DIFFERENT port (UI vs. API) — verify both independently,
-    # do not assume they match.
-    # Replace with:  reverse_proxy deployment-aqua-container-1:<PORT>
-    respond "dev-aquafire: aquafier-api.inblock.io upstream not yet configured (T3 pending)" 503
+    import hsts
+    import legacy_body_limit
+    reverse_proxy deployment-aqua-container-1:3000
 }
 
 dev.aqua-node.inblock.io {
     encode zstd gzip
-    # TODO(T3-verify): confirm upstream against generated nginx conf before cutover.
-    # Replace with:  reverse_proxy aqua-explorer:<PORT>
-    respond "dev-aquafire: dev.aqua-node.inblock.io upstream not yet configured (T3 pending)" 503
+    import hsts
+    import legacy_body_limit
+    reverse_proxy aqua-explorer:80
 }
 
 dev.aquafire.inblock.io {
     encode zstd gzip
-    # Verified 2026-07-30 (plan context, task instructions): aquafier-rs
-    # listens on 3000. Still worth a quick confirm against the live nginx
-    # conf during T3 since everything else on this box is unverified.
+    import hsts
+    import legacy_body_limit
     reverse_proxy aquafier-rs:3000
 }
 
 draw.inblock.io {
     encode zstd gzip
-    # TODO(T3-verify): confirm upstream against generated nginx conf before cutover.
-    # "Likely 80" per plan context (typical excalidraw-docker default) — NOT
-    # verified. Replace with:  reverse_proxy excalidraw:<PORT>
-    respond "dev-aquafire: draw.inblock.io upstream not yet configured (T3 pending)" 503
+    import hsts
+    import legacy_body_limit
+    reverse_proxy excalidraw:80
 }

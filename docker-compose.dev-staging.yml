@@ -2,21 +2,28 @@
 #
 # Same services as the production docker-compose.yml (Synapse, Redis,
 # siwx-oidc, Element Web, LiveKit, lk-jwt-service), pointed at the dev.*
-# domains via .env, PLUS a `caddy` service (production instead relies on a
-# separately-managed portal Caddy on an external `portal-net`). This box has
-# no such shared portal Caddy — Caddy lives in this compose file and also
-# has to reach FIVE pre-existing legacy services on the box (see
-# Caddyfile.dev-aquafire), so it needs network membership beyond this
-# project's own default network.
+# domains via .env.
+#
+# THE REVERSE PROXY IS NOT IN THIS FILE — ON PURPOSE.
+# Caddy lives in its own compose project, docker-compose.caddy-proxy.yml
+# (deployed to /home/dev/caddy-proxy/ on the box). It fronts eight vhosts
+# across five independent compose projects; if it were a service HERE, a
+# routine `docker compose -f docker-compose.dev-staging.yml down` would take
+# the five unrelated legacy sites on the box down with it. That exact failure
+# already happened once on this box under nginx-proxy — see the header of
+# /home/dev/aquafier-rs/deployment/docker-compose-proxy.yml. Keep them split.
+#
+# How Caddy reaches these services: every service Caddy proxies joins the
+# EXTERNAL `proxy_net` bridge network IN ADDITION to this project's default
+# network. Compose registers the service name as a network alias on every
+# network it joins, so `reverse_proxy matrix_synapse:8080` resolves from the
+# caddy container regardless of the compose-generated container name.
+# `redis` deliberately does NOT join proxy_net — Caddy never proxies it, so it
+# stays confined to this project's default network.
 #
 # Differences from docker-compose.yml (production):
-#   - No `portal-net` external network on the stack services — Caddy is now
-#     part of THIS compose project, reachable over the default network like
-#     docker-compose.local.yml's inline Caddy.
-#   - `caddy` service added: binds 80/443 (+443/udp for HTTP/3), serves
-#     Caddyfile.dev-aquafire, and additionally joins the legacy services'
-#     network(s) so it can reverse_proxy to them by container name (see the
-#     `networks:` section at the bottom — TODO(T3-verify) placeholders).
+#   - `portal-net` (the prod shared-portal-Caddy network) is replaced by this
+#     box's pre-existing `proxy_net`.
 #   - Image tags/hosts/URLs are supplied via .env (see
 #     .env.dev-staging.example), not hardcoded, matching how the prod
 #     compose consumes env vars.
@@ -54,6 +61,9 @@ services:
       start_period: 30s
     volumes:
       - matrix_data:/data
+    networks:
+      - default
+      - proxy_net
 
   redis:
     image: redis
@@ -96,6 +106,9 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+    networks:
+      - default
+      - proxy_net
 
   element-web:
     image: ghcr.io/inblockio/siwx-oidc-matrix-server/element-web:${IMAGE_TAG:-main}
@@ -116,6 +129,9 @@ services:
     depends_on:
       matrix_synapse:
         condition: service_healthy
+    networks:
+      - default
+      - proxy_net
 
   livekit:
     # Pinned: an unpinned :latest jumps SFU versions on any `docker compose pull`,
@@ -130,6 +146,9 @@ services:
       - "50100-50200:50100-50200/udp"
     volumes:
       - ./config/livekit.yaml:/etc/livekit.yaml:ro
+    networks:
+      - default
+      - proxy_net
 
   lk-jwt-service:
     image: ghcr.io/element-hq/lk-jwt-service:latest
@@ -143,51 +162,32 @@ services:
     depends_on:
       matrix_synapse:
         condition: service_healthy
-
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
-    volumes:
-      - ./Caddyfile.dev-aquafire:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      matrix_synapse:
-        condition: service_healthy
-      siwx-oidc:
-        condition: service_healthy
-      element-web:
-        condition: service_healthy
     networks:
       - default
-      # TODO(T3-verify): join whatever real network(s) the migrated legacy
-      # containers (deployment-aqua-container-1, aqua-explorer, aquafier-rs,
-      # excalidraw) actually sit on — see the `networks:` section below.
-      - legacy-aqua-net
+      - proxy_net
 
 volumes:
   matrix_data:
   redis_data:
-  caddy_data:
-  caddy_config:
 
 networks:
+  # This project's own private network (redis + inter-service traffic).
   default: {}
 
-  # --- Legacy dev-aquafire network(s) — T3 to fill in from live inventory ---
-  # nginx-proxy's pattern requires the proxy container to share a Docker
-  # network with each backend it proxies to; Caddy needs the same. Discover
-  # the real network name(s) on the box with:
-  #   docker inspect aqua_proxy --format '{{json .NetworkSettings.Networks}}' | jq
-  #   docker inspect deployment-aqua-container-1 aqua-explorer aquafier-rs excalidraw \
-  #     --format '{{.Name}}: {{json .NetworkSettings.Networks}}' | jq
-  # If the legacy containers are split across more than one Docker network,
-  # add one external network block per network found below, and list every
-  # one of them under `caddy.networks` above.
-  legacy-aqua-net:
-    name: legacy-aqua-net  # TODO(T3-verify): placeholder — replace with the real network name
+  # VERIFIED 2026-07-30 (T3): `proxy_net` is the single pre-existing bridge
+  # network shared by the reverse proxy and every backend on this box —
+  #   aqua_proxy, aqua_acme, deployment-aqua-container-1, aqua-explorer,
+  #   aquafier-rs, excalidraw
+  # all sit on it (`docker network inspect proxy_net`). It is created and
+  # owned by the standalone proxy compose project with an explicit `name:`,
+  # so it is stable and app-agnostic. external:true means compose never
+  # creates or removes it here.
+  #
+  # Trade-off, accepted deliberately: joining proxy_net makes these services
+  # reachable from the legacy containers on the same bridge. That is the same
+  # trust boundary the nginx-proxy pattern always required (every proxied
+  # backend had to share this network), and the internet-facing surface is
+  # unchanged — the edge deny for /_synapse/admin/* and /_synapse/mas/* lives
+  # in Caddyfile.dev-aquafire and is unaffected.
+  proxy_net:
     external: true
