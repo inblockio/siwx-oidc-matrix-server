@@ -159,6 +159,16 @@ services:
       LIVEKIT_SECRET: "${LIVEKIT_SECRET}"
       LIVEKIT_JWT_BIND: ":8080"
       LIVEKIT_INSECURE_SKIP_VERIFY_TLS: "${LIVEKIT_INSECURE_SKIP_VERIFY_TLS:-false}"
+      # Required as of a recent lk-jwt-service release (was previously
+      # optional/absent) — the container now refuses to start without it.
+      # Found 2026-07-30 standing up dev-staging: `:latest` is unpinned and
+      # had drifted to a version that hard-requires this var, restart-looping
+      # with "LIVEKIT_FULL_ACCESS_HOMESERVERS environment variable must be
+      # set". Grants full LiveKit room-creation access to our own homeserver
+      # only (see element-hq/lk-jwt-service README security note). Production
+      # docker-compose.yml has the identical gap and floats the same
+      # unpinned tag — same fix needed there.
+      LIVEKIT_FULL_ACCESS_HOMESERVERS: "${MATRIX_HOST}"
     depends_on:
       matrix_synapse:
         condition: service_healthy
