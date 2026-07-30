@@ -1,0 +1,225 @@
+##############################################################################
+# Caddyfile.dev-aquafire
+#
+# Static Caddy config for the dev-aquafire box (207.154.209.103). This Caddy
+# REPLACES nginx-proxy + acme-companion (containers `aqua_proxy` / `aqua_acme`,
+# docker-gen VIRTUAL_HOST pattern) as the box's SOLE reverse proxy + TLS
+# terminator, binding 80/443 for ALL EIGHT vhosts on the box:
+#
+#   NEW (this repo's stack, docker-compose.dev-staging.yml):
+#     dev.matrix.inblock.io    Synapse + .well-known + livekit subpaths
+#     dev.siwx.inblock.io      siwx-oidc OIDC provider (CORS strip is
+#                              load-bearing — see the vhost block below)
+#     dev.element.inblock.io   Element Web client
+#
+#   MIGRATED (5 pre-existing dev-aquafire services, currently behind
+#   nginx-proxy; unrelated to this stack, just sharing the box/proxy):
+#     aquafier.inblock.io, aquafier-api.inblock.io, dev.aqua-node.inblock.io,
+#     dev.aquafire.inblock.io, draw.inblock.io
+#
+# Origin: docs/superpowers/plans/2026-07-30-dev-staging-deploy-caddy-migration.md
+# (siwx-oidc repo), task T2. Modeled on Caddyfile.production (this repo) for
+# the Matrix/.well-known/livekit routing, and on Caddyfile.local for the
+# strip_upstream_cors snippet.
+#
+# STATUS: the upstream container:port for the FIVE MIGRATED legacy vhosts are
+# UNVERIFIED placeholders (T2/Sonnet authored this without box access). T3
+# (the live migration task) MUST dump the real generated nginx conf —
+#     docker exec aqua_proxy cat /etc/nginx/conf.d/default.conf
+# — and correct every line tagged:
+#     # TODO(T3-verify): confirm upstream against generated nginx conf before cutover
+# before cutover. Do NOT bind this Caddy to 80/443 with unverified upstreams
+# still in place; see docs/2026-07-30-dev-staging-dev-aquafire.md for the
+# staged validation + cutover + rollback procedure.
+#
+# Deploy: mounted read-only into the `caddy` service in
+# docker-compose.dev-staging.yml as /etc/caddy/Caddyfile.
+##############################################################################
+
+{
+    # TODO(T3-verify): confirm the ops contact address to register with Let's
+    # Encrypt (reuse whatever address the existing aqua_acme ACME_EMAIL /
+    # DEFAULT_EMAIL env var already has registered, if any, to avoid a second
+    # distinct LE account for the same domains).
+    email devops@inblock.io
+
+    # Admin API stays on Caddy's default bind (127.0.0.1:2019 inside the
+    # container, never published to the host/ports: list below) — this still
+    # allows `docker exec caddy caddy reload --config /etc/caddy/Caddyfile`
+    # for a zero-downtime config change without exposing the admin API
+    # externally. Not disabled outright ("admin off") because T3's staged
+    # cutover benefits from being able to reload without a restart.
+}
+
+(strip_upstream_cors) {
+    header_down -Access-Control-Allow-Origin
+    header_down -Access-Control-Allow-Methods
+    header_down -Access-Control-Allow-Headers
+    header_down -Access-Control-Allow-Credentials
+    header_down -Access-Control-Expose-Headers
+    header_down -Access-Control-Max-Age
+    header_down -Vary
+}
+
+(public_cors) {
+    @cors_preflight method OPTIONS
+    header Access-Control-Allow-Origin "*"
+    header Access-Control-Allow-Methods "GET, HEAD, POST, PUT, DELETE, OPTIONS"
+    header Access-Control-Allow-Headers "X-Requested-With, Content-Type, Authorization, Date"
+    header Access-Control-Max-Age "86400"
+    respond @cors_preflight 204
+}
+
+# Bare-IP / no-SNI requests (health probes, scanners) — matches
+# Caddyfile.production's catch-all instead of erroring.
+:80 {
+    respond "OK" 200
+}
+
+# ============================================================================
+# NEW: siwx-oidc-matrix-server stack (this box's primary purpose)
+# ============================================================================
+
+dev.matrix.inblock.io {
+    encode zstd gzip
+
+    # Synapse server discovery (federation port delegation).
+    handle /.well-known/matrix/server {
+        respond `{"m.server": "dev.matrix.inblock.io:443"}`
+    }
+
+    # Client discovery — points Element at the OIDC issuer for MSC3861 +
+    # advertises the LiveKit MatrixRTC focus (MSC4143).
+    handle /.well-known/matrix/client {
+        header Access-Control-Allow-Origin *
+        respond `{"m.homeserver": {"base_url": "https://dev.matrix.inblock.io"}, "m.authentication": {"issuer": "https://dev.siwx.inblock.io/", "account": "https://dev.siwx.inblock.io/account"}, "org.matrix.msc4143.rtc_foci": [{"type": "livekit", "livekit_service_url": "https://dev.matrix.inblock.io/livekit/jwt"}]}`
+    }
+
+    # MSC3861: login/logout/refresh go to siwx-oidc. Synapse returns 404 for
+    # these under delegated auth.
+    handle /_matrix/client/v3/login {
+        import public_cors
+        reverse_proxy siwx-oidc:8081 {
+            import strip_upstream_cors
+        }
+    }
+    handle /_matrix/client/v3/logout {
+        import public_cors
+        reverse_proxy siwx-oidc:8081 {
+            import strip_upstream_cors
+        }
+    }
+    handle /_matrix/client/v3/refresh {
+        import public_cors
+        reverse_proxy siwx-oidc:8081 {
+            import strip_upstream_cors
+        }
+    }
+
+    # MSC4108: QR code login rendezvous (no compression to preserve ETags).
+    handle /_matrix/client/unstable/org.matrix.msc4108/* {
+        reverse_proxy matrix_synapse:8080
+    }
+    handle /_synapse/client/rendezvous/* {
+        reverse_proxy matrix_synapse:8080
+    }
+
+    # MatrixRTC: lk-jwt-service (OpenID -> LiveKit JWT exchange)
+    handle_path /livekit/jwt {
+        reverse_proxy lk-jwt-service:8080
+    }
+    handle_path /livekit/jwt/* {
+        reverse_proxy lk-jwt-service:8080
+    }
+
+    # MatrixRTC: LiveKit SFU WebSocket signaling
+    handle_path /livekit/sfu/* {
+        reverse_proxy livekit:7880
+    }
+
+    # SEC-0003: never expose the Synapse admin / MAS provisioning surfaces at
+    # the edge. siwx-oidc reaches them directly over the Docker network, so
+    # the deny breaks nothing. Kept in parity with Caddyfile.production.
+    handle /_synapse/admin/* {
+        respond 404
+    }
+    handle /_synapse/mas/* {
+        respond 404
+    }
+
+    # Everything else -> Synapse.
+    handle {
+        reverse_proxy matrix_synapse:8080
+    }
+}
+
+dev.siwx.inblock.io {
+    encode zstd gzip
+    import public_cors
+
+    # Load-bearing: siwx-oidc emits its own CORS headers. Without stripping
+    # them here, the browser sees TWO Access-Control-Allow-Origin headers
+    # (Caddy's public_cors above + siwx-oidc's own) and CORS silently fails,
+    # breaking OIDC discovery/token calls. See siwx-oidc/CLAUDE.md "CORS rule"
+    # and Caddyfile.production / Caddyfile.local (strip_upstream_cors).
+    handle {
+        reverse_proxy siwx-oidc:8081 {
+            import strip_upstream_cors
+        }
+    }
+}
+
+dev.element.inblock.io {
+    encode zstd gzip
+    reverse_proxy element-web:8080
+}
+
+# ============================================================================
+# MIGRATED: pre-existing dev-aquafire services, currently behind nginx-proxy
+# (aqua_proxy) + acme-companion (aqua_acme). Upstream container:port below
+# are UNVERIFIED placeholders — see the file header. Each vhost responds 503
+# with an explanatory body until T3 replaces the placeholder `respond` line
+# with the real `reverse_proxy` directive, so a config error here cannot take
+# down a vhost that IS ready and this file still parses cleanly with
+# `caddy validate` before any upstream is confirmed.
+# ============================================================================
+
+aquafier.inblock.io {
+    encode zstd gzip
+    # TODO(T3-verify): confirm upstream against generated nginx conf before cutover.
+    # Replace with:  reverse_proxy deployment-aqua-container-1:<PORT>
+    respond "dev-aquafire: aquafier.inblock.io upstream not yet configured (T3 pending)" 503
+}
+
+aquafier-api.inblock.io {
+    encode zstd gzip
+    # TODO(T3-verify): confirm upstream against generated nginx conf before cutover.
+    # Same backend container as aquafier.inblock.io above but almost
+    # certainly a DIFFERENT port (UI vs. API) — verify both independently,
+    # do not assume they match.
+    # Replace with:  reverse_proxy deployment-aqua-container-1:<PORT>
+    respond "dev-aquafire: aquafier-api.inblock.io upstream not yet configured (T3 pending)" 503
+}
+
+dev.aqua-node.inblock.io {
+    encode zstd gzip
+    # TODO(T3-verify): confirm upstream against generated nginx conf before cutover.
+    # Replace with:  reverse_proxy aqua-explorer:<PORT>
+    respond "dev-aquafire: dev.aqua-node.inblock.io upstream not yet configured (T3 pending)" 503
+}
+
+dev.aquafire.inblock.io {
+    encode zstd gzip
+    # Verified 2026-07-30 (plan context, task instructions): aquafier-rs
+    # listens on 3000. Still worth a quick confirm against the live nginx
+    # conf during T3 since everything else on this box is unverified.
+    reverse_proxy aquafier-rs:3000
+}
+
+draw.inblock.io {
+    encode zstd gzip
+    # TODO(T3-verify): confirm upstream against generated nginx conf before cutover.
+    # "Likely 80" per plan context (typical excalidraw-docker default) — NOT
+    # verified. Replace with:  reverse_proxy excalidraw:<PORT>
+    respond "dev-aquafire: draw.inblock.io upstream not yet configured (T3 pending)" 503
+}

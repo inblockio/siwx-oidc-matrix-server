@@ -1,0 +1,193 @@
+# Dev-staging docker-compose for the dev-aquafire box (207.154.209.103).
+#
+# Same services as the production docker-compose.yml (Synapse, Redis,
+# siwx-oidc, Element Web, LiveKit, lk-jwt-service), pointed at the dev.*
+# domains via .env, PLUS a `caddy` service (production instead relies on a
+# separately-managed portal Caddy on an external `portal-net`). This box has
+# no such shared portal Caddy — Caddy lives in this compose file and also
+# has to reach FIVE pre-existing legacy services on the box (see
+# Caddyfile.dev-aquafire), so it needs network membership beyond this
+# project's own default network.
+#
+# Differences from docker-compose.yml (production):
+#   - No `portal-net` external network on the stack services — Caddy is now
+#     part of THIS compose project, reachable over the default network like
+#     docker-compose.local.yml's inline Caddy.
+#   - `caddy` service added: binds 80/443 (+443/udp for HTTP/3), serves
+#     Caddyfile.dev-aquafire, and additionally joins the legacy services'
+#     network(s) so it can reverse_proxy to them by container name (see the
+#     `networks:` section at the bottom — TODO(T3-verify) placeholders).
+#   - Image tags/hosts/URLs are supplied via .env (see
+#     .env.dev-staging.example), not hardcoded, matching how the prod
+#     compose consumes env vars.
+#
+# Suggested `COMPOSE_PROJECT_NAME=matrix-staging` in .env, so this project's
+# containers/volumes/network never collide with a `matrix` (production) or
+# `matrix_e2e` project name if ever run on the same Docker daemon.
+#
+# Usage (see docs/2026-07-30-dev-staging-dev-aquafire.md for the full runbook):
+#   cp .env.dev-staging.example .env
+#   # ...generate secrets per the comments in .env, fill in dev.* hosts...
+#   docker compose -f docker-compose.dev-staging.yml --env-file .env up -d
+
+services:
+  matrix_synapse:
+    image: ghcr.io/inblockio/siwx-oidc-matrix-server/synapse:${IMAGE_TAG:-main}
+    restart: unless-stopped
+    expose:
+      - "${MATRIX_PORT}"
+    environment:
+      SYNAPSE_SERVER_NAME: ${MATRIX_HOST}
+      SYNAPSE_REPORT_STATS: ${MATRIX_REPORT_STATS}
+      MATRIX_ADMIN_DID: ${MATRIX_ADMIN_DID:-}
+      MAS_SHARED_SECRET: ${MAS_SHARED_SECRET}
+    env_file:
+      - .env
+    depends_on:
+      siwx-oidc:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fSs http://localhost:${MATRIX_PORT}/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    volumes:
+      - matrix_data:/data
+
+  redis:
+    image: redis
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: always
+    volumes:
+      - redis_data:/data
+
+  siwx-oidc:
+    # Built by the separate siwx-oidc repo, so it is versioned independently of
+    # this stack's IMAGE_TAG (which co-versions synapse + element-web). Pin via
+    # SIWX_OIDC_TAG; defaults to main so a stack tag never demands a matching
+    # siwx-oidc tag that does not exist.
+    image: ghcr.io/inblockio/siwx-oidc:${SIWX_OIDC_TAG:-main}
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      SIWEOIDC_REDIS_URL: "redis://redis"
+      SIWEOIDC_ADDRESS: 0.0.0.0
+      SIWEOIDC_HOST: ${SIWEOIDC_HOST}
+      SIWEOIDC_PORT: ${SIWEOIDC_PORT}
+      SIWEOIDC_BASE_URL: ${SIWEOIDC_BASE_URL}
+      SIWEOIDC_SIGNING_KEY_PEM: ${SIWEOIDC_SIGNING_KEY_PEM}
+      SIWEOIDC_MAS_SHARED_SECRET: ${MAS_SHARED_SECRET}
+      SIWEOIDC_SYNAPSE_ENDPOINT: http://matrix_synapse:${MATRIX_PORT}
+      SIWEOIDC_REQUIRE_SECRET: "false"
+      SIWEOIDC_SUPPORTED_DID_METHODS: '["pkh","key"]'
+      SIWEOIDC_MATRIX_SERVER_NAME: ${MATRIX_HOST}
+      RUST_LOG: ${RUST_LOG}
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:${SIWEOIDC_PORT}/.well-known/openid-configuration"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  element-web:
+    image: ghcr.io/inblockio/siwx-oidc-matrix-server/element-web:${IMAGE_TAG:-main}
+    restart: unless-stopped
+    environment:
+      MATRIX_BASE_URL: ${MATRIX_BASE_URL}
+      MATRIX_HOST: ${MATRIX_HOST}
+      SIWEOIDC_BASE_URL: ${SIWEOIDC_BASE_URL}
+    volumes:
+      - ./config/element-config.json:/app/config.json.src:ro
+      - ./entrypoints/element_entrypoint.sh:/docker-entrypoint.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:8080/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      matrix_synapse:
+        condition: service_healthy
+
+  livekit:
+    # Pinned: an unpinned :latest jumps SFU versions on any `docker compose pull`,
+    # which can change call behavior unannounced. Bump deliberately.
+    image: livekit/livekit-server:v1.12.0
+    restart: unless-stopped
+    command: --config /etc/livekit.yaml
+    environment:
+      LIVEKIT_KEYS: "${LIVEKIT_KEY}: ${LIVEKIT_SECRET}"
+    ports:
+      - "7881:7881/tcp"
+      - "50100-50200:50100-50200/udp"
+    volumes:
+      - ./config/livekit.yaml:/etc/livekit.yaml:ro
+
+  lk-jwt-service:
+    image: ghcr.io/element-hq/lk-jwt-service:latest
+    restart: unless-stopped
+    environment:
+      LIVEKIT_URL: "wss://${MATRIX_HOST}/livekit/sfu"
+      LIVEKIT_KEY: "${LIVEKIT_KEY}"
+      LIVEKIT_SECRET: "${LIVEKIT_SECRET}"
+      LIVEKIT_JWT_BIND: ":8080"
+      LIVEKIT_INSECURE_SKIP_VERIFY_TLS: "${LIVEKIT_INSECURE_SKIP_VERIFY_TLS:-false}"
+    depends_on:
+      matrix_synapse:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile.dev-aquafire:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      matrix_synapse:
+        condition: service_healthy
+      siwx-oidc:
+        condition: service_healthy
+      element-web:
+        condition: service_healthy
+    networks:
+      - default
+      # TODO(T3-verify): join whatever real network(s) the migrated legacy
+      # containers (deployment-aqua-container-1, aqua-explorer, aquafier-rs,
+      # excalidraw) actually sit on — see the `networks:` section below.
+      - legacy-aqua-net
+
+volumes:
+  matrix_data:
+  redis_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  default: {}
+
+  # --- Legacy dev-aquafire network(s) — T3 to fill in from live inventory ---
+  # nginx-proxy's pattern requires the proxy container to share a Docker
+  # network with each backend it proxies to; Caddy needs the same. Discover
+  # the real network name(s) on the box with:
+  #   docker inspect aqua_proxy --format '{{json .NetworkSettings.Networks}}' | jq
+  #   docker inspect deployment-aqua-container-1 aqua-explorer aquafier-rs excalidraw \
+  #     --format '{{.Name}}: {{json .NetworkSettings.Networks}}' | jq
+  # If the legacy containers are split across more than one Docker network,
+  # add one external network block per network found below, and list every
+  # one of them under `caddy.networks` above.
+  legacy-aqua-net:
+    name: legacy-aqua-net  # TODO(T3-verify): placeholder — replace with the real network name
+    external: true
