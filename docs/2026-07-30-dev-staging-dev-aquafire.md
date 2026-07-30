@@ -552,14 +552,53 @@ stack (H5 pre-check).
 
 ## 9. CI auto-deploy (T5)
 
-**Status: wired, blocked only on one GitHub secret per repo.** Everything
-that does not require the `inblockio` GitHub PAT has been built and
-verified directly on the box; the PAT itself was invalid at implementation
-time (`~/.claude/CLAUDE.md`, "GitHub Authentication" section — rotation was
-pending), so no `gh` command could run. Nothing here required it except the
-one remaining step below.
+**Status: the box auto-deploys today, with no GitHub secret involved.**
+Auto-deploy has two independent mechanisms, and only one of them is
+currently live:
 
-### What's in place
+- **Pull-model systemd timer (PRIMARY, live now).** `matrix-staging-deploy.timer`
+  runs on the box itself, polling `ci-deploy.sh` on a schedule. It needs no
+  GitHub secret, no PAT, and no inbound reachability from GitHub Actions to
+  the box — the box reaches out to GHCR, not the other way around. This is
+  what actually keeps dev-staging converged to `main` today.
+- **Push-model CI job (SECONDARY, dormant until a secret exists).** The
+  `deploy-dev-staging` job in both repos' `docker.yml` SSHes into the box
+  right after a `main` build. It is fully built and wired but guarded to
+  **skip cleanly (green, with a `::notice::`)** whenever
+  `DEV_STAGING_DEPLOY_KEY` is unset, rather than fail — see "What's in
+  place" item 4 below. Wiring the secret in (once the `inblockio` PAT is
+  rotated/restored — `~/.claude/CLAUDE.md`, "GitHub Authentication") is
+  **optional**: it shortens the worst-case convergence lag from ~5 minutes
+  (next timer tick) to effectively immediate, but the box no longer depends
+  on it for correctness.
+
+Both mechanisms invoke the same idempotent `ci-deploy.sh`, now serialized
+against each other by an exclusive flock (`/home/dev/matrix-staging/.deploy.lock`,
+120s wait before failing) so a timer tick and a CI-triggered run can never
+race `docker compose pull`/`up -d` against each other — one simply waits
+for the other to finish.
+
+### Pull-model systemd timer — installed and verified 2026-07-30
+
+- `/etc/systemd/system/matrix-staging-deploy.service` — `Type=oneshot`,
+  `User=dev`, `ExecStart=/home/dev/matrix-staging/ci-deploy.sh`.
+- `/etc/systemd/system/matrix-staging-deploy.timer` — `OnBootSec=2min`,
+  `OnUnitActiveSec=5min`, `Persistent=false`, `WantedBy=timers.target`.
+- Enabled with `sudo systemctl enable --now matrix-staging-deploy.timer`.
+  Since the box had already been up for ~39h when the timer was enabled,
+  `OnBootSec=2min` was already in the past, so systemd ran the service
+  immediately on enable rather than waiting for a reboot — this doubled as
+  the first live verification run.
+- Verified: `systemctl list-timers matrix-staging-deploy.timer` shows a
+  `NEXT` ~5 minutes out and a `LAST`/`PASSED` from the immediate first run;
+  `journalctl -u matrix-staging-deploy.service` shows the full `ci-deploy.sh`
+  transcript ending `[ci-deploy] deploy complete` with `status=0/SUCCESS`
+  (a no-op deploy — images were already current, all three smoke checks
+  passed). A manual concurrency test (holding the flock in a background
+  shell, then launching `ci-deploy.sh`) confirmed the script blocks until
+  the lock is free rather than racing or erroring.
+
+### What's in place (push-model CI job)
 
 1. **Deploy key.** A dedicated ed25519 keypair, generated on the DevOps
    laptop, private half never printed or committed:
@@ -608,12 +647,25 @@ one remaining step below.
    `ssh-keyscan` capture embedded in the workflow (no TOFU in CI), then SSHs
    in; the forced command runs `ci-deploy.sh` regardless of the `deploy`
    argument in the workflow (kept only for a readable Actions log line).
-   Both `docker.yml` files pass `python3 -c 'import yaml; yaml.safe_load(...)'`.
+   **Guarded** (added 2026-07-30): a first `Check deploy key configured`
+   step writes `ok=${{ secrets.DEV_STAGING_DEPLOY_KEY != '' }}` to
+   `GITHUB_OUTPUT`; every subsequent step (`if: steps.check-secret.outputs.ok
+   == 'true'`) — install key, pin host key, deploy, clean up — is
+   conditioned on it, plus one step for the inverse that prints a
+   `::notice::` explaining the job is dormant and pointing at the pull-model
+   timer above. Net effect: with no secret, the job is entirely made of
+   skipped steps and one notice — **green**, not red. Both `docker.yml`
+   files still pass `python3 -c 'import yaml; yaml.safe_load(...)'`.
 
-### CI auto-deploy — pending user actions
+### Optional: enabling the push-model job (only if/when the PAT returns)
 
-The only missing step is setting one GitHub Actions secret per repo. Do
-this once the `inblockio` PAT is rotated/restored:
+This is no longer required for the box to converge — the pull-model timer
+above already does that — but it shortens the worst-case lag from "next
+timer tick" (~5 min) to effectively immediate, and it's the only way to
+verify AC4 via an actual GitHub-Actions-triggered run rather than the box
+polling on its own. `gh` commands below remain listed for when the
+`inblockio` PAT is rotated/restored; nothing in this runbook currently
+depends on them:
 
 ```bash
 # 1. Set the secret in both repos (private key file, never paste the value elsewhere)
@@ -696,14 +748,28 @@ gh api /orgs/inblockio/packages/container/siwx-oidc/versions --jq \
   '.[0].metadata.container.tags, .[0].name'
 ```
 
-**H6 status: PARTIAL.** Every component has been verified independently —
-the deploy script (manual run, box-side, exit 0), the forced-command key
-restriction (four negative tests: arbitrary command ignored,
-`rm -rf`/`cat /etc/shadow` ignored, port forwarding refused, no pty), the
-workflow YAML (parses clean, correct `needs`/`if` gating), and port 8022
+**H6 status via the pull-model timer: independently satisfiable without the
+PAT.** The systemd timer (section above) proves the box-converges-to-newest-
+`main` half of H6 on its own: `ci-deploy.sh` pulls `ghcr.io/inblockio/siwx-oidc:main`
+by tag every 5 minutes and re-`up -d`s if the resolved digest changed,
+verified by a live no-op run (exit 0, unchanged digest, all smoke checks
+passed) plus the concurrency/flock test above. A push to `main` that
+produces a new image is expected to be picked up within one timer interval;
+this is the mechanism actually exercised for T5b's end-to-end H6 check (see
+that task's report for the specific before/after digest pair and elapsed
+time).
+
+**Push-model (`deploy-dev-staging` CI job) status: PARTIAL, and now
+explicitly non-blocking.** The script itself (manual run, box-side, exit 0),
+the forced-command key restriction (four negative tests: arbitrary command
+ignored, `rm -rf`/`cat /etc/shadow` ignored, port forwarding refused, no
+pty), the workflow YAML (parses clean, correct `needs`/`if` gating, and now
+the secret-presence guard — see "What's in place" item 4), and port 8022
 reachability (ufw: `8022/tcp ALLOW Anywhere` + `Anywhere (v6)`, same port
-this doc's own SSH commands use). **The one thing NOT verified is an actual
-GitHub-Actions-runner-triggered run** — that requires `DEV_STAGING_DEPLOY_KEY`
-to exist as a secret, which requires the currently-invalid `inblockio` PAT.
-Once the PAT is restored and the pending actions above are run once, this
-graduates from PARTIAL to full AC4 (see the plan's acceptance criteria).
+this doc's own SSH commands use) are all verified. **The one thing NOT
+verified is an actual GitHub-Actions-runner-triggered run of this specific
+job** — that still requires `DEV_STAGING_DEPLOY_KEY` to exist as a secret,
+which requires the currently-invalid `inblockio` PAT. Once the PAT is
+restored and the optional steps above are run once, this graduates to a
+fully verified secondary path — faster than the timer, but no longer load-
+bearing for AC4/H6, which the pull-model timer already carries.
