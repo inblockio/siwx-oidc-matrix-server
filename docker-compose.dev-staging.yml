@@ -39,7 +39,18 @@
 
 services:
   matrix_synapse:
-    image: ghcr.io/inblockio/siwx-oidc-matrix-server/synapse:${IMAGE_TAG:-main}
+    # SYNAPSE_IMAGE_REF / ELEMENT_IMAGE_REF (not a shared IMAGE_TAG — see
+    # 2026-07-31 note below): full image refs including tag@digest, so each
+    # image can be pinned to its OWN digest. Kept separate on purpose — a
+    # single `IMAGE_TAG:${TAG}` applied to both `synapse:${TAG}` and
+    # `element-web:${TAG}` cannot express two different digests for the same
+    # tag string, and GHCR sha-tags have been observed to be republishable
+    # (element-web:sha-4a3d434 drifted from the bytes originally deployed
+    # under that tag), so tag-only pinning is not sufficient — see
+    # .env.dev-staging.example and docs/2026-07-30-dev-staging-dev-aquafire.md.
+    # Defaults track `:main` so a fresh checkout with no overrides still
+    # starts (same fallback behavior the old shared IMAGE_TAG had).
+    image: ${SYNAPSE_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/synapse:main}
     restart: unless-stopped
     expose:
       - "${MATRIX_PORT}"
@@ -111,7 +122,8 @@ services:
       - proxy_net
 
   element-web:
-    image: ghcr.io/inblockio/siwx-oidc-matrix-server/element-web:${IMAGE_TAG:-main}
+    # See SYNAPSE_IMAGE_REF comment above — same split-var rationale.
+    image: ${ELEMENT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/element-web:main}
     restart: unless-stopped
     environment:
       MATRIX_BASE_URL: ${MATRIX_BASE_URL}
