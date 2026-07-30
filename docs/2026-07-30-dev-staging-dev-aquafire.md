@@ -442,6 +442,114 @@ which is the desired burn-in state. When the migration is declared final, the
 old proxy project should be `down`ed properly rather than left as a stopped
 husk.
 
+## 8b. EXECUTED — cutover record, 2026-07-30 (T3)
+
+The migration described above was executed on 2026-07-30. Verbatim record.
+
+### Timeline (UTC)
+
+| Time | Event |
+|---|---|
+| 17:33–17:43 | Pre-flight: upstream map re-verified, `caddy validate` OK, both compose files OK, all 5 upstreams reachable by name from `proxy_net` (200×5), ufw LiveKit rules added, external baseline captured |
+| 17:44:01.345 | **T0** — cutover begins |
+| 17:44:02.079 | `docker compose -f .../docker-compose-proxy.yml stop` returned (aqua_proxy + aqua_acme stopped, **kept**) |
+| 17:44:02.136 | `docker update --restart=no aqua_proxy aqua_acme` returned |
+| 17:44:02.734 | **T1** — `docker compose -f docker-compose.caddy-proxy.yml up -d` returned, Caddy listening |
+| 17:44:02.9 | ACME account registered (`hello@inblock.io`), 8 parallel cert orders begin |
+| 17:44:09.5 | Last failing external probe sample |
+| 17:44:10.6 | **All 5 legacy vhosts back to HTTP 200** |
+| ~17:44:20 | All 8 certificates issued (`certificate obtained successfully` ×8) |
+| 17:47:58 | Zero-downtime reload #1 — HSTS `+` → `?` fix (159 ms, no restart) |
+| 17:49:18 | Zero-downtime reload #2 — body limit `200MB` → `200MiB` fix (159 ms, no restart) |
+
+**Cutover commands: 1.39 s.** No image pull was in the window (`caddy:2-alpine`
+was pre-pulled during pre-flight — do this, it matters).
+
+### Measured downtime
+
+External probe from a workstation, all 5 legacy vhosts in parallel, ~1.1 s
+sampling interval, 395 samples over 17:43:33–17:45:05:
+
+| vhost | failed samples | outage |
+|---|---|---|
+| `aquafier-api.inblock.io` | 6 | ~6.5 s |
+| `aquafier.inblock.io` | 7 | ~7.6 s |
+| `dev.aquafire.inblock.io` | 7 | ~7.6 s |
+| `dev.aqua-node.inblock.io` | 8 | ~8.7 s |
+| `draw.inblock.io` | 8 | ~8.7 s |
+
+**Worst case ~8.7 s, against a <60 s target.** Failure modes seen, in order:
+one round of `curl exit 7` (connection refused — old proxy stopped, Caddy not
+yet bound), then `curl exit 35` (TLS error — Caddy bound but that hostname's
+certificate not yet issued). The tail is dominated by ACME issuance, not by
+the container swap, which is why pre-pulling the image and letting all 8
+orders run in parallel is what keeps the window short.
+
+### Verification (H1/AC1)
+
+Post-cutover vs. pre-cutover baseline — identical status, byte size and
+content-type on every vhost, which is also what proves the
+`deployment-aqua-container-1` **3000-vs-3600** ports were not swapped (the two
+vhosts return visibly different payloads):
+
+| vhost | baseline | after | HSTS | issuer |
+|---|---|---|---|---|
+| `aquafier.inblock.io` | 200, text/html, 1808 B | 200, text/html, 1808 B | `max-age=31536000` | LE YE1 |
+| `aquafier-api.inblock.io` | 200, application/json, 15 B | 200, application/json, 15 B | `max-age=31536000` | LE YE2 |
+| `dev.aqua-node.inblock.io` | 200, text/html, 1719 B | 200, text/html, 1719 B | `max-age=31536000` | LE YE2 |
+| `dev.aquafire.inblock.io` | 200, text/html, 52199 B | 200, text/html, 52199 B | `max-age=31536000; includeSubDomains` | LE YE2 |
+| `draw.inblock.io` | 200, text/html, 6843 B | 200, text/html, 6843 B | `max-age=31536000` | LE YE1 |
+
+All HTTP/2; HTTP→HTTPS redirect confirmed (`308`, `Location: https://…`).
+
+The 3 dev vhosts, cert-only as expected pre-T4: `dev.matrix`, `dev.siwx`,
+`dev.element` all return **502 with a valid Let's Encrypt certificate** — TLS
+handshake succeeds, only the upstream is missing. Caddy's log shows the
+matching `dial tcp: lookup <svc> ... server misbehaving` errors; these are
+expected and clear once T4 starts the stack on `proxy_net`.
+
+### Two defects found and fixed during verification
+
+Both were found *because* the post-cutover check compared against a baseline
+rather than just looking for HTTP 200. Both were fixed by zero-downtime reload,
+no restart, no additional downtime.
+
+1. **HSTS order inversion (`header +` was wrong).** `+` (add) put Caddy's
+   weaker header FIRST on `dev.aquafire.inblock.io`, whose upstream emits
+   `includeSubDomains`. Per RFC 6797 §8.1 the UA processes only the first
+   header, so the effective policy was silently downgraded — while a header
+   dump still *showed* `includeSubDomains` and looked fine. Fixed to `?`
+   (default: set only if absent), verified against both a HSTS-emitting and a
+   non-emitting upstream. `dev.aquafire` now returns exactly one STS header,
+   the upstream's stricter one.
+2. **`200MB` ≠ `200m`.** Caddy's `200MB` is decimal (200,000,000 B); nginx's
+   `200m` is binary (209,715,200 B). The first config was 4.6% *stricter* than
+   nginx, which would have rejected uploads in that 9.7 MB band. Fixed to
+   `200MiB`; the running config now reports `max_size: 209715200` ×5.
+
+### Rollback status: REHEARSED AND READY, NOT EXECUTED
+
+Not needed — no legacy vhost was ever broken beyond the 8.7 s cutover window.
+State left behind, confirmed:
+
+```
+aqua_proxy   Exited (2)   restart=no
+aqua_acme    Exited (0)   restart=no
+volumes: proxy_proxy_data_{acme,certs,html,vhost}   (untouched)
+```
+
+Both containers present and startable; old certificates intact in their own
+volumes; Caddy's certs live separately in `caddy-proxy_caddy_data`. The
+section 7 procedure is three commands and was validated by inspection of this
+state, not by execution.
+
+### Box state after cutover
+
+8 containers running (`caddy_proxy` healthy + the 7 pre-existing app/db
+containers), 2 stopped by design (`aqua_proxy`, `aqua_acme`). Memory:
+1200 MB used, **2715 MB available**, swap 1 MB — ample headroom for T4's
+stack (H5 pre-check).
+
 ## 9. CI auto-deploy note (T5, separate task)
 
 This runbook covers the manual stand-up. Once T5 wires CI auto-deploy for

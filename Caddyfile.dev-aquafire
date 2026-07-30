@@ -91,15 +91,31 @@
 # on ALL FIVE legacy vhosts (verified 2026-07-30 in the generated conf; no
 # includeSubDomains, no preload). Applied here to all EIGHT vhosts.
 #
-# The `+` prefix means ADD, not SET, replicating nginx's `add_header`
-# semantics. This matters for dev.aquafire.inblock.io, whose upstream
-# (aquafier-rs) emits its OWN, STRICTER header
-# ("max-age=31536000; includeSubDomains"). Under nginx the client saw both, in
-# that order, and per RFC 6797 processes the first — i.e. the upstream's
-# stricter policy won. A plain `header` (set) would silently DOWNGRADE that
-# vhost by discarding includeSubDomains, so do not "simplify" the + away.
+# The `?` prefix is load-bearing: it means "DEFAULT" — set this header only if
+# the response does not already carry one. Do not change it to a plain `header`
+# (set) or to `+` (add).
+#
+# Why, verified empirically on the box 2026-07-30 against the real upstreams:
+# dev.aquafire.inblock.io's upstream (aquafier-rs) emits its OWN, STRICTER
+# header, "max-age=31536000; includeSubDomains". Per RFC 6797 §8.1 a UA that
+# receives more than one STS field "MUST process only the first such header
+# field", so header ORDER decides the effective policy.
+#
+#   plain `header` (set) -> upstream's header is discarded  => DOWNGRADE
+#   `header +` (add)     -> both present, but CADDY'S lands FIRST, so the UA
+#                           honors the weaker one            => DOWNGRADE
+#                           (this is a real trap: it looks correct in a header
+#                            dump because includeSubDomains is still visible)
+#   `header ?` (default) -> upstream has one  -> untouched, stricter one stands
+#                           upstream has none -> ours is added
+#
+# `?` therefore reproduces nginx's EFFECTIVE behavior (stronger policy wins)
+# while also removing the duplicate header nginx used to emit.
+#
+# Note: `?` is NOT accepted by reverse_proxy's `header_down` (Caddy rejects it
+# at parse time); it must be used at site level, as here.
 (hsts) {
-    header +Strict-Transport-Security "max-age=31536000"
+    header ?Strict-Transport-Security "max-age=31536000"
 }
 
 # Request body cap — carried over from nginx-proxy's
@@ -110,9 +126,17 @@
 # nginx was. Applied to the five legacy vhosts only — the three new dev.*
 # vhosts stay unlimited, matching Caddyfile.production (Synapse media uploads
 # are already capped by Synapse's own max_upload_size).
+#
+# `200MiB`, NOT `200MB` — these are not the same number and the difference is
+# a real regression, verified in the adapted JSON config:
+#     nginx  200m   = 200 * 1024 * 1024 = 209715200 bytes
+#     Caddy  200MB  = 200 * 1000 * 1000 = 200000000 bytes   (4.6% SMALLER)
+#     Caddy  200MiB = 200 * 1024 * 1024 = 209715200 bytes   (exact match)
+# With the decimal unit, an upload between 200,000,000 and 209,715,200 bytes
+# would be rejected here where nginx accepted it.
 (legacy_body_limit) {
     request_body {
-        max_size 200MB
+        max_size 200MiB
     }
 }
 
