@@ -88,3 +88,9 @@ RUN rm -rf /usr/share/nginx/html && ln -s /app /usr/share/nginx/html
 RUN chmod +x /docker-entrypoint.sh && chown -R nginx:nginx /app
 
 ENTRYPOINT ["/docker-entrypoint.sh"]
+
+# Harmless content marker: proves the `dev` branch CI trigger produces a
+# genuinely new, distinct :dev image (not a coalesced/reused build from a
+# simultaneous `main` push). See docs/2026-07-30-dev-staging-dev-aquafire.md
+# §9 (branch-based CI deploys).
+LABEL io.inblock.dev-branch-ci-test="2026-07-31"

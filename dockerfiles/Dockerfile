@@ -24,3 +24,9 @@ RUN wget https://github.com/mikefarah/yq/releases/download/v4.53.3/yq_linux_amd6
     && chmod +x /usr/bin/yq
 COPY ./entrypoints/matrix_server.sh /matrix_server.sh
 ENTRYPOINT ["/matrix_server.sh"]
+
+# Harmless content marker: proves the `dev` branch CI trigger produces a
+# genuinely new, distinct :dev image (not a coalesced/reused build from a
+# simultaneous `main` push). See docs/2026-07-30-dev-staging-dev-aquafire.md
+# §9 (branch-based CI deploys).
+LABEL io.inblock.dev-branch-ci-test="2026-07-31"
