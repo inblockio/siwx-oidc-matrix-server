@@ -62,6 +62,19 @@ COPY --from=builder /src/apps/web/webapp /app
 # bundle bytes. See docs/superpowers/plans/2026-06-19-element-index-html-no-cache.md.
 COPY config/element-nginx.conf /etc/nginx/conf.d/default.conf
 
+# Security-headers include (checklist S1, Section 1). Must land in conf.d/
+# with a NON-.conf suffix: the base image's nginx.conf auto-includes
+# conf.d/*.conf at the http level (`include /etc/nginx/conf.d/*.conf;`), so a
+# .conf name would get this file loaded TWICE — once automatically at http
+# level, and again via our own explicit
+# `include /etc/nginx/conf.d/element-security-headers.inc;` inside
+# config/element-nginx.conf's server/location blocks (needed there per-location
+# because add_header does not inherit into a location that sets its own
+# add_header — see the inheritance comment in element-nginx.conf). The .inc
+# suffix keeps this file include-only: nginx never auto-loads it, so the
+# explicit include is the ONLY place it is pulled in.
+COPY config/element-nginx-security-headers.inc /etc/nginx/conf.d/element-security-headers.inc
+
 # inblock.io overlay (identical to the previous Dockerfile.element).
 COPY config/element-config.json /app/config.json
 COPY config/element-theme-overrides.css /app/element-theme-overrides.css

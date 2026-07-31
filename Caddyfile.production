@@ -17,12 +17,38 @@
     respond @cors_preflight 204
 }
 
+# HSTS (checklist docs/2026-07-31-element-deploy-audit-checklist.md, Section 1,
+# S8/S9). Verbatim copy of Caddyfile.dev-aquafire's (hsts) snippet — see that
+# file for the full `?` (default, not set/add) rationale citing RFC 6797 §8.1
+# first-header-wins. `element.inblock.io` / `matrix.inblock.io` currently emit
+# no Strict-Transport-Security of their own, confirmed live 2026-07-31, so `?`
+# behaves like a plain set today; it is future-proofed against an upstream
+# someday emitting its own (stricter or not) HSTS header the same way
+# dev-aquafire's aquafier-rs upstream already does.
+(hsts) {
+    header ?Strict-Transport-Security "max-age=31536000"
+}
+
 :80 {
     respond "OK" 200
 }
 
 matrix.inblock.io {
+    # NOTE (Stage-B2 hardening, 2026-07-31): /home/portal/portal/Caddyfile on
+    # the box (mounted into portal-caddy-1) is the LIVE file; this repo copy
+    # already had drift from it BEFORE this change (different CORS
+    # mechanism, an MSC4191 device-delete redirect, 3 unrelated site blocks,
+    # and a malformed .well-known/matrix/client key that the live file has
+    # and this repo copy does not — see
+    # docs/2026-07-31-element-deploy-audit-checklist.md, "Chosen fix
+    # locations" section, for the full catalogue). That pre-existing drift
+    # is left untouched here — only the HSTS / MSC1929-support /
+    # Server-banner-suppression additions below were made, mirrored onto
+    # both this file and the live one via
+    # scripts/prod-caddy-harden-20260731.sh (which is the actual deploy
+    # vehicle; editing this repo file alone changes nothing on the box).
     encode zstd gzip
+    import hsts
 
     handle /.well-known/matrix/server {
         respond `{"m.server": "matrix.inblock.io:443"}`
@@ -30,6 +56,17 @@ matrix.inblock.io {
     handle /.well-known/matrix/client {
         header Access-Control-Allow-Origin *
         respond `{"m.homeserver": {"base_url": "https://matrix.inblock.io"}, "m.authentication": {"issuer": "https://siwx-oidc.inblock.io/", "account": "https://siwx-oidc.inblock.io/account"}, "org.matrix.msc4143.rtc_foci": [{"type": "livekit", "livekit_service_url": "https://matrix.inblock.io/livekit/jwt"}]}`
+    }
+
+    # MSC1929 (ratified): support-contact discovery. Checklist S6, Section 4
+    # — 404 on both dev and prod confirmed live 2026-07-31. Same JSON as
+    # Caddyfile.dev-aquafire's dev.matrix.inblock.io block. Support contact
+    # = tim.bansemer@inblock.io (operator org address; no support_page
+    # exists, so that key is omitted).
+    handle /.well-known/matrix/support {
+        header Content-Type application/json
+        header Access-Control-Allow-Origin *
+        respond `{"contacts":[{"email_address":"tim.bansemer@inblock.io","role":"m.role.admin"},{"email_address":"tim.bansemer@inblock.io","role":"m.role.security"}]}`
     }
 
     handle /_matrix/client/v3/login {
@@ -52,11 +89,19 @@ matrix.inblock.io {
     }
 
     # MSC4108: QR code login rendezvous.
+    # header_down -Server on these two Synapse-proxying handles + the
+    # catch-all below (checklist Section 5; see Caddyfile.dev-aquafire's
+    # matching handles for the full header_down-vs-site-level-header
+    # decision note). Scoped to matrix_synapse:8080 only.
     handle /_matrix/client/unstable/org.matrix.msc4108/* {
-        reverse_proxy matrix_synapse:8080
+        reverse_proxy matrix_synapse:8080 {
+            header_down -Server
+        }
     }
     handle /_synapse/client/rendezvous/* {
-        reverse_proxy matrix_synapse:8080
+        reverse_proxy matrix_synapse:8080 {
+            header_down -Server
+        }
     }
 
     # MatrixRTC: lk-jwt-service (OpenID -> LiveKit JWT exchange)
@@ -84,7 +129,9 @@ matrix.inblock.io {
     }
 
     handle {
-        reverse_proxy matrix_synapse:8080
+        reverse_proxy matrix_synapse:8080 {
+            header_down -Server
+        }
     }
 }
 
@@ -101,6 +148,10 @@ siwx-oidc.inblock.io {
 
 element.inblock.io {
     encode zstd gzip
+    # Stage-B2 hardening (2026-07-31): HSTS (checklist Section 1, S8/S9 —
+    # FAIL confirmed live before this change: no Strict-Transport-Security
+    # on element.inblock.io). See the (hsts) snippet definition above.
+    import hsts
     reverse_proxy element-web:8080
 }
 

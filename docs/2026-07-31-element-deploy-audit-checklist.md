@@ -177,3 +177,88 @@ These are the expected findings for Task B1 (audit only); Task B2 in the
 marathon plan fixes them. Prod's larger FAIL count is Real + expected: it
 carries both the shared gaps (headers, HSTS, banners, MSC1929) *and* the
 deploy-lag gap above that dev has already outrun via CD.
+
+## Chosen fix locations, 2026-07-31
+
+Stage-B2 hardening (prepared in worktree `ew-sw-boot`, NOT yet deployed
+anywhere — repo changes only; the prod runbook below is not-yet-run).
+
+**App-level security headers + nginx version banner -> container nginx.**
+Section 1's four `add_header` directives (X-Frame-Options, CSP
+frame-ancestors, X-Content-Type-Options, X-XSS-Protection) and Section 5's
+`server_tokens off` live in `config/element-nginx-security-headers.inc` +
+`config/element-nginx.conf`, copied in by `dockerfiles/Dockerfile.element`.
+This rides the normal CI build/digest-promotion pipeline (dev auto-converges,
+prod is a manual `docker compose pull && up -d`, per this repo's deploy
+model) rather than the Caddy edge, because it is genuinely an
+application-origin concern (the official element-web docs, S1, frame it as
+an nginx `add_header` recipe) and travels with the image regardless of which
+proxy fronts it.
+
+**HSTS + Synapse Server-banner suppression + MSC1929 support -> Caddy.**
+These three are TLS-terminator / edge concerns (HSTS is meaningless below
+the TLS boundary; the Synapse `Server` header is set by the upstream and
+only strippable at the proxy; MSC1929 is served at the `server_name` origin,
+which in this topology is Caddy's `matrix.inblock.io` site block, not
+Synapse itself). Applied to `Caddyfile.dev-aquafire` (this repo, mirrors
+onto the dev box) directly, and to `Caddyfile.production` (repo copy) +
+`scripts/prod-caddy-harden-20260731.sh` (the actual deploy vehicle for the
+live `/home/portal/portal/Caddyfile` on the box — editing the repo copy
+alone changes nothing in prod).
+
+**Server-banner suppression mechanism: `header_down -Server` per
+`reverse_proxy`, not a site-level `header -Server`.** Chosen because this
+codebase already has a load-bearing, verified precedent for exactly this
+problem shape (stripping a header the upstream itself sets, on a
+Caddy-proxied backend) — see this repo's CLAUDE.md CORS rule and the
+`(strip_upstream_cors)` snippet, which strips `Access-Control-*` via
+`header_down` inside `reverse_proxy` blocks, not a bare `header -X` at the
+site level. Caddy's docs
+(https://caddyserver.com/docs/caddyfile/directives/reverse_proxy#header-manipulation)
+describe `header_down` as operating on the headers coming back from that
+specific backend — the direct fit. A site-level `header -Server` would also
+work (Caddy's `header` directive wraps the response writer regardless of
+directive-order position relative to `reverse_proxy`/`handle`), but would
+apply uniformly across every `reverse_proxy` target sharing the site block
+(`matrix_synapse`, `siwx-oidc`, `lk-jwt-service`, `livekit` all appear in the
+`matrix.inblock.io` block) — broader blast radius for a fix scoped to "the
+Synapse banner" specifically. `header_down -Server` was added only to the
+handles that proxy to `matrix_synapse:8080`.
+
+**Support contact = tim.bansemer@inblock.io**, used for both `m.role.admin`
+and `m.role.security` (MSC1929/S6's ratified schema). Chosen as the operator
+org address; no separate `support_page` exists so that key is omitted from
+the JSON.
+
+**Drift found (not reconciled) between `Caddyfile.production` (repo) and the
+live `/home/portal/portal/Caddyfile`** (diffed against a snapshot in this
+task's scratchpad, sha256
+`ac38d47432e275cefef2b603b96d6e73f3a16db6c4c82c83b640584ae318dfd8`), left
+untouched per this task's explicit scope:
+- Live has NO top-level Caddyfile snippets (`(strip_upstream_cors)` /
+  `(public_cors)`); every site inlines the equivalent `header_down`/`header`
+  lines instead. The repo copy defines both snippets and `import`s them.
+- Live's `.well-known/matrix/client` JSON carries a FLAT top-level key
+  `"m.authentication.account"` where the repo copy nests `account` inside
+  `m.authentication`. The flat form is NOT a bug to fix blindly: it is the
+  shape deliberately deployed 2026-05-25 as part of the Element X
+  passkey-first login fix (see siwx-oidc CLAUDE.md, "Fixes deployed
+  2026-05-25") and Element X has worked against it since. Deploying the repo
+  copy's nested form verbatim would change that surface and risks regressing
+  Element X login. Any reconciliation (either direction) needs its own
+  decision + Element X regression test; the 2026-07-31 hardening deliberately
+  preserves the live flat form byte-identically.
+- Live has an MSC4191 in-client device sign-out redirect (`@siwx_device_delete`
+  matcher + `/_matrix/client/v3/delete_devices` handle, both routed to
+  siwx-oidc) that the repo copy does not have at all.
+- Live restricts `siwx-oidc.inblock.io` CORS to `https://element.inblock.io`
+  specifically (inline headers + an explicit `@options`/204 handler); the
+  repo copy uses the wildcard `(public_cors)` snippet (`Access-Control-Allow-Origin: *`).
+- Live has three site blocks entirely absent from the repo copy:
+  `audit.inblock.io`, `viewer.inblock.io`, `projects.inblock.io` (unrelated
+  services sharing the box; not part of this stack).
+
+The prod runbook (`scripts/prod-caddy-harden-20260731.sh`) patches the LIVE
+file's actual current shape (verified via the sha256 gate above) — it
+preserves every one of these differences and touches only the three Stage-B2
+additions.

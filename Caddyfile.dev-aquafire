@@ -168,6 +168,20 @@ dev.matrix.inblock.io {
         respond `{"m.server": "dev.matrix.inblock.io:443"}`
     }
 
+    # MSC1929 (ratified): support-contact discovery. Checklist S6
+    # (docs/2026-07-31-element-deploy-audit-checklist.md, Section 4) — 404 on
+    # both dev and prod confirmed live 2026-07-31. Mirrors the
+    # /.well-known/matrix/client pattern immediately above (public CORS,
+    # inline JSON `respond`, no explicit status = defaults to 200). Support
+    # contact = tim.bansemer@inblock.io, the operator org address (chosen for
+    # both m.role.admin and m.role.security — no separate support_page
+    # exists, so that key is omitted per S6's "and/or").
+    handle /.well-known/matrix/support {
+        header Content-Type application/json
+        header Access-Control-Allow-Origin *
+        respond `{"contacts":[{"email_address":"tim.bansemer@inblock.io","role":"m.role.admin"},{"email_address":"tim.bansemer@inblock.io","role":"m.role.security"}]}`
+    }
+
     # Client discovery — points Element at the OIDC issuer for MSC3861 +
     # advertises the LiveKit MatrixRTC focus (MSC4143).
     handle /.well-known/matrix/client {
@@ -197,11 +211,23 @@ dev.matrix.inblock.io {
     }
 
     # MSC4108: QR code login rendezvous (no compression to preserve ETags).
+    # header_down -Server on these two Synapse-proxying handles + the
+    # catch-all below: checklist Section 5 — confirmed live 2026-07-31
+    # (`server: Synapse/1.154.0` on both dev and prod). Per-reverse_proxy
+    # header_down chosen over a site-level `header -Server`, same reasoning
+    # as the CORS strip below (see the decision note on the catch-all
+    # handle). Scoped to matrix_synapse:8080 only — the siwx-oidc,
+    # lk-jwt-service and livekit upstreams in this block are out of scope
+    # ("Synapse Server-banner suppression" is the checklist item).
     handle /_matrix/client/unstable/org.matrix.msc4108/* {
-        reverse_proxy matrix_synapse:8080
+        reverse_proxy matrix_synapse:8080 {
+            header_down -Server
+        }
     }
     handle /_synapse/client/rendezvous/* {
-        reverse_proxy matrix_synapse:8080
+        reverse_proxy matrix_synapse:8080 {
+            header_down -Server
+        }
     }
 
     # MatrixRTC: lk-jwt-service (OpenID -> LiveKit JWT exchange)
@@ -228,8 +254,29 @@ dev.matrix.inblock.io {
     }
 
     # Everything else -> Synapse.
+    #
+    # header_down -Server decision (checklist Section 5): chose per-reverse_proxy
+    # header_down over a site-level `header -Server` because this repo already
+    # has a load-bearing, verified precedent for exactly this problem shape —
+    # stripping an upstream-set response header from a Caddy-proxied backend —
+    # via header_down on the CORS headers (see (strip_upstream_cors) above and
+    # this repo's CLAUDE.md "CORS rule": "Caddy must strip siwx-oidc's upstream
+    # CORS headers (header_down -Access-Control-Allow-Origin in reverse_proxy
+    # blocks)"). Caddy docs (caddyserver.com/docs/caddyfile/directives/
+    # reverse_proxy#header-manipulation) document header_down as operating on
+    # "the headers going back to the client" from that specific backend, which
+    # is exactly this case (Synapse's own `Server` header). A site-level
+    # `header -Server` would rely on directive-ordering/response-writer-wrapping
+    # semantics across FOUR different reverse_proxy targets in this block
+    # (matrix_synapse, siwx-oidc, lk-jwt-service, livekit) sharing one site —
+    # correct in principle (header's response-header ops wrap whatever the
+    # inner handler writes), but broader-blast-radius and less directly
+    # verified than the pattern this codebase already trusts. header_down,
+    # scoped to just the matrix_synapse handles, changes nothing else.
     handle {
-        reverse_proxy matrix_synapse:8080
+        reverse_proxy matrix_synapse:8080 {
+            header_down -Server
+        }
     }
 }
 
