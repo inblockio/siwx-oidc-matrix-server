@@ -251,42 +251,61 @@ docker inspect --format='{{.Image}}' matrix-siwx-oidc-1 \
 | LiveKit keys | .env file | No | Active calls drop; regenerate |
 | Caddy TLS certs | portal volumes | Auto-renewed | ACME re-issues within minutes |
 
-## Current prod reality (dated snapshot — 2026-07-31)
+## Current prod reality (dated snapshot — 2026-07-31, post-S6)
 
 The "Image pinning policy" section above is the permanent invariant. This
 section is what that invariant looks like in practice on prod, **as of
-2026-07-31** — expect it to go stale and be superseded once S6 (moving prod
-to GitHub-built `:main`, pinned by digest) lands. When that happens, replace
-this snapshot with the new one; do not delete or weaken the invariant above
-it.
+2026-07-31 after S6 landed**. Expect it to go stale; when it does, replace
+this snapshot with a new one and do not delete or weaken the invariant
+above it.
 
-- Prod's `.env` currently pins `IMAGE_TAG=prod-20260731` and
-  `SIWX_OIDC_TAG=tested-20260731`. **Both are LOCAL-ONLY tags — they do not
-  exist in GHCR.** This is intentional: a stray `docker compose pull` on
-  prod fails LOUDLY (image-not-found) instead of silently floating to
-  whatever `:main` currently resolves to. If a pull ever fails on prod with
-  these tags, that is the safety mechanism working, **not** a reason to
-  switch prod back to `:main`/`:latest` — that is the exact trap this
-  document exists to prevent falling into again.
-- A rollback anchor tag `:rollback-20260731` exists for a fast, verified
-  revert target.
-- A prod DB snapshot was taken at
-  `/mnt/volume_matrix_service/backup-20260731/` before the version-crossing
-  deploy that produced the tags above (see the "One-way migrations" process
-  rule in `docs/2026-07-30-dev-staging-dev-aquafire.md` — Synapse schema
-  migrations do not roll back, so a snapshot precedes any version-crossing
-  deploy, prod included).
-- The full rollback procedure specific to this deploy is recorded in
-  `ROLLBACK-20260731.md`, in `/home/deploy/matrix/stack/` **on the server**
-  — it is not checked into this repo, because it documents server-local
-  state (paths, current tag values) that would go stale the moment it was
-  copied here.
+**S6 is done: prod runs GitHub-built images, pinned by DIGEST.** The
+local-build era is over. Prod no longer builds images on the server, and no
+longer uses local-only tags.
 
-**After S6:** prod is expected to move to GitHub-built `:main`, but pulled
-under the same verify-then-pull discipline as "Image pinning policy" above
-— resolve the digest, deploy, verify the running digest matches — rather
-than trusting the tag. The dated local tags above go away at that point; the
-digest-pin rule they exist to approximate does not.
+- Prod's `.env` pins all three stack images by **digest-only ref**
+  (`repo@sha256:…`), via the full-ref env vars `SYNAPSE_IMAGE_REF`,
+  `ELEMENT_IMAGE_REF` and `SIWX_OIDC_IMAGE_REF`. The old shared `IMAGE_TAG`
+  and bare `SIWX_OIDC_TAG` were retired in `e55059e`; compose no longer
+  reads them. Both lines survive in prod's `.env` **commented out and marked
+  INERT**, purely as provenance for what the local-build era ran.
+- **Why digest and not a tag — not even a commit-sha tag:** GHCR tags are
+  republishable (see the tag-republish drift incident below), and the
+  promoted images are tagged `:dev` upstream while `:main` resolves to
+  different bytes (builds are not reproducible). Any tag name in prod's
+  `.env` would therefore *misdescribe* the running image. Only a `sha256:`
+  digest names immutable content.
+- **`docker compose pull` on prod works again, and that is now correct.**
+  The previous local-only tags existed to make a stray pull fail LOUDLY
+  rather than silently float to `:main`. A digest ref cannot float — it
+  fetches those exact bytes or fails — so the pin *is* the guard, in a
+  stronger form. Do not reintroduce nonexistent tags to recreate the old
+  fail-loudly behaviour.
+- **`deploy.sh <ref>` overrides the `.env` pins on the command line**, which
+  on a digest-pinned host is a downgrade to a floating tag. Prefer editing
+  prod's `.env`; pass a full `repo@sha256:…` if deploy.sh must be used.
+- Two generations of rollback anchor tags exist on the server for fast,
+  network-free reverts: `:rollback-20260731` (older state; cleanup on/after
+  2026-08-01) and `:rollback-20260731b` (the pre-S6 images; cleanup on/after
+  2026-08-02).
+- Quiesced prod DB snapshots exist at
+  `/mnt/volume_matrix_service/backup-20260731/` and `…/backup-20260731b/`
+  (the latter taken with containers stopped, immediately before the S6
+  switch). Per the "One-way migrations" process rule in
+  `docs/2026-07-30-dev-staging-dev-aquafire.md`, a snapshot precedes any
+  version-crossing deploy — though **S6 itself was same-version**
+  (Synapse 1.154.0 → 1.154.0, no migration), so its snapshot is insurance
+  only and a DB restore would *destroy* real messages written since.
+- The deploy-specific procedures live **on the server**, in
+  `/home/deploy/matrix/stack/`: `PROMOTION-20260731.md` (the S6 promotion —
+  old→new digests, anchors, exact rollback commands) and the older
+  `ROLLBACK-20260731.md`. They are not checked into this repo because they
+  document server-local state (paths, digests, tag values) that would go
+  stale the moment it was copied here.
+- **`matrix-watchtower-1` is an orphan container** in the `matrix` compose
+  project: it carries the project label but is not in the compose model.
+  **Never run `docker compose ... --remove-orphans` on this stack** — use an
+  explicit service list for stop/up.
 
 ## Incident references
 
