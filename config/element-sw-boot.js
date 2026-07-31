@@ -27,6 +27,22 @@
  */
 (function () {
     "use strict";
+
+    // (C) i18n manifest cache repair. The unhashed i18n/languages.json was
+    // historically served without Cache-Control, so browsers hold heuristically
+    // "fresh" stale copies that name deleted hashed files (-> 404 -> raw i18n
+    // keys UI-wide) and that survive normal reloads indefinitely — the server's
+    // new no-cache header can't reach a browser that never revalidates.
+    // cache:"reload" fetches unconditionally AND replaces the HTTP cache entry
+    // with the fresh response, permanently healing the profile. This script
+    // runs at <head> parse time, long before the app's own manifest fetch, so
+    // the app then reads the repaired entry in the same load.
+    try {
+        fetch("i18n/languages.json", { cache: "reload" }).catch(function () {});
+    } catch (e) {
+        // Old fetch implementations: the no-cache header remains the floor.
+    }
+
     if (!("serviceWorker" in navigator)) return;
 
     // (A) early userinfo responder
