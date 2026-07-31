@@ -14,7 +14,7 @@
 # ---------------------------------------------------------------------------
 FROM node:24-bullseye AS builder
 
-ARG ELEMENT_WEB_TAG=v1.12.20
+ARG ELEMENT_WEB_TAG=v1.12.24
 
 WORKDIR /src
 
@@ -53,6 +53,27 @@ USER root
 
 # Source-built web app bundle.
 COPY --from=builder /src/apps/web/webapp /app
+
+# Give sw.js a per-build identity.
+#
+# Element authenticates ALL media (downloads, thumbnails, inline images) inside
+# the service worker: it rewrites the legacy /_matrix/media/v3/* URLs the app
+# emits to the authenticated /_matrix/client/v1/media/* endpoints and injects the
+# bearer token. Synapse enforces authenticated media, so a browser running a
+# stale or wedged worker silently refetches the legacy URL tokenless, gets a 404,
+# and the download button does nothing with no page-console error.
+#
+# Upstream's sw.js is byte-identical across our builds (verified: same sha256 for
+# the 2026-06-13 and 2026-07-31 images), so a browser NEVER installs a new worker
+# on deploy — a wedged worker stays wedged indefinitely. Stamping the bundle hash
+# (which changes whenever the app changes) makes each app build ship a distinct
+# worker, so the byte-diff triggers the normal update -> skipWaiting -> claim
+# path. When the app is unchanged the stamp is unchanged too, so this adds no
+# needless worker churn.
+RUN set -eu; \
+    hash="$(basename "$(find /app/bundles -maxdepth 1 -mindepth 1 -type d | head -n1)")"; \
+    printf '\n// build: %s\n' "$hash" >> /app/sw.js; \
+    echo "stamped sw.js with build $hash"
 
 # Serve the SPA entrypoint (index.html) with no-cache so browsers always
 # revalidate it and load the current content-hashed bundles, preventing the
