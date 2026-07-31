@@ -107,3 +107,32 @@ sweep + drag suppression + identity stamp + canary to prod in one step.
   register for the shim), this file.
 - e2e: `~/wt/siwx-durability/e2e/element/` — run with
   `ELEMENT_URL=… MATRIX_URL=… SIWX_URL=… npx playwright test <spec>`.
+
+---
+
+# STATUS ADDENDUM (2026-07-31, end of hardening marathon — all tasks executed)
+
+- **TASK 1 DONE** — per-build sw.js identity stamp (f51308b): index.html-hash +
+  build-UTC timestamp appended in Dockerfile.element. Live on prod. The
+  timestamp half proved load-bearing: a config-only rebuild produced an
+  IDENTICAL bundle hash and only the timestamp differentiated the builds.
+- **TASK 2 DONE** — guard (E) SW liveness canary (f51308b), review-hardened
+  beyond this spec: DIFFERENTIAL probe (homeserver-origin SW-intercepted fetch
+  vs TWO non-intercepted controls on element + homeserver origins) so neither
+  a stalled network nor a slow-but-up Synapse can cause a spurious unregister;
+  verified-sentinel one-shot; hidden-tab deferral. Probe goes to the
+  HOMESERVER origin (this file's original same-origin suggestion would 404 at
+  element-nginx and never exercise the SW's real rewrite path).
+- **TASK 3 DONE** — two digest promotions (deb4ae8c… rev 62cad3d, then
+  e8e1a61a… rev fbe21a7). EW-DL1 passed against prod after each. Rollback doc
+  updated on the box.
+- **TASK 4** — probe accounts: 15/15 created-2026-07-31 accounts deactivated
+  (erase:false, admin-reversible), positively verified. Upstream filing still
+  pending (gh token dead). Worktrees left in place (active).
+- **BEYOND SCOPE OF THIS FILE** — official-docs deployment audit executed:
+  `scripts/element-deploy-audit.sh` + checklist doc; security headers
+  (XFO/CSP frame-ancestors/XCTO/XXP + server_tokens off) in container nginx;
+  HSTS + MSC1929 /.well-known/matrix/support + Synapse banner suppression in
+  Caddy (dev box + prod, hash-gated runbook). Audit: **21 PASS / 0 FAIL on
+  both dev and prod.** Domain separation recorded as accepted deviation.
+  Full trace: docs/superpowers/plans/2026-07-31-element-hardening-marathon.md.

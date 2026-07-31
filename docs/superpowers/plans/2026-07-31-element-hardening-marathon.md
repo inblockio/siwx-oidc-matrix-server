@@ -85,3 +85,57 @@ specs as permanent regression coverage.
 - **Top risks:** (1) CI element source build ~12 min/iteration → batch changes;
   (2) prod Caddy edit blast radius → backup + immediate smoke + rollback doc;
   (3) e2e blindness to SW replacement → byte-diff validation, not e2e, proves H1.
+
+---
+
+# Phase 3 AUDIT (executed 2026-07-31, end of marathon)
+
+## Hypothesis Trace
+
+| ID | Status | Evidence (commands actually run) |
+|----|--------|----------------------------------|
+| H1 | **Confirmed** | build1 sw.js sha1 `e000dd3c` ≠ baseline `1a5c8d47`, stamp `66d89731… 19:17:00Z`; build2 sha1 `31fc7c56` ≠ build1 with IDENTICAL bundle-hash half and differing timestamp half (`20:37:16Z`) — the dual-component stamp is what preserved per-build uniqueness on a config-only rebuild. `sha1sum` + `curl …/sw.js | tail -c 200` on both origins. |
+| H2 | **Partial (by design, as registered)** | No-false-positive half CONFIRMED: 0 `liveness probe hung` warns across 13 e2e spec runs on dev + prod. Firing path unreachable in e2e (fresh context = fresh SW); mitigated by two opus review rounds → differential DUAL-control probe (element + homeserver origins), verified-sentinel one-shot, every ambiguous case fails toward not healing. |
+| H3 | **Confirmed** | Two full CI+CD convergences observed (stamps 19:17:00Z, 20:37:16Z; staging timer logs). One transient synapse CI failure (run 30660382696) detected via unauthenticated API and hardened: `fail-fast: false` (fbe21a7). |
+| H4 | **Confirmed** | After each promotion `sha1sum` prod == dev sw.js; EW-DL1 passed against prod twice (19.9 s, 22.6 s — real browser download events); container healthy; rollback doc appended both times. |
+| H5 | **Confirmed** | `element-deploy-audit.sh` pre-fix: dev 6 FAIL / prod 8 FAIL, every FAIL independently curl-verified as a real deviation; post-fix: 21 PASS / 0 FAIL on BOTH dev and prod. |
+| H6 | **Confirmed** | Security headers + `server_tokens off` rode CI dev→prod; per-location include coverage 12/12 (nginx add_header inheritance gotcha); 6/6 download e2e green after headers (same-origin usercontent iframe unaffected, matching app.element.io's identical header set). |
+| H7 | **Confirmed** | Dev Caddy: applied via backup + inode-safe write + validate + reload; prod via hash-gated runbook, all post-checks PASS. Client well-known (incl. the load-bearing flat `m.authentication.account`), auth_metadata, versions, federation all 200 after both applies; siwx-oidc CORS `header_down` stripping verified byte-identical by reviewer. |
+| H8 | **Confirmed** | 15 accounts created 2026-07-31 (13 incident probes + 2 marathon smoke accounts) deactivated `erase:false`; positive re-query with `deactivated=true` shows 15/15 deactivated, 0 active. |
+
+## Acceptance Criteria
+
+| # | Met? | Evidence |
+|---|------|----------|
+| AC1 | Yes | Prod serves stamped sw.js; stamp changed across the two prod deploys (H1/H4). |
+| AC2 | Yes | Guard E live on prod (`hsControlSettled` in served sw-boot.js); 0 false-positive reloads (H2). |
+| AC3 | Yes | EW-DL1 vs prod passed twice (H4). |
+| AC4 | Yes | Audit 21 PASS / 0 FAIL on dev AND prod: XFO, CSP frame-ancestors, XCTO, HSTS 31536000 both origins, full no-cache set, bounded bundles/sw.js, MSC1929 support 200 JSON, banners version-free (H5–H7). |
+| AC5 | Yes | Domain separation recorded as accepted deviation (checklist §Accepted deviations + audit SKIP row); no change made. |
+| AC6 | Yes | 15/15 probe accounts deactivated (H8); records updated (this doc, handover addendum, rollback doc, memory). |
+
+## Discovered during execution (outside the original register)
+
+1. **CI matrix fail-fast defect**: a transient synapse build failure cancelled the
+   healthy element-web build, stalling the staged deploy → `fail-fast: false`
+   (fbe21a7). CI status is checkable WITHOUT gh auth (repo Actions API is
+   public-readable) — used for monitoring, since the gh token is dead.
+2. **Runbook mv-vs-bind-mount defect (caught at review, never shipped)**: `mv`
+   onto the single-file-bind-mounted prod Caddyfile would have detached the
+   mount and turned validate/reload into false PASSes on a config that never
+   applied. Fixed to inode-preserving truncating write pre-execution.
+3. **Prod portal Caddyfile drift catalogue** vs repo copy (see checklist doc),
+   incl. the provenance of the flat `m.authentication.account` well-known key
+   (2026-05-25 Element X fix — must NOT be "corrected" casually).
+4. **Element builds produce identical index.html for config-only changes** —
+   observed live; the build-timestamp half of the stamp is load-bearing, not
+   belt-and-braces.
+
+## Left open (deliberate)
+
+- Upstream issues to file when gh auth is restored (see handover Task 4 list):
+  SW auth-chain fallback, wedged-SW watchdog absence, drag-cancellable
+  downloads.
+- Prod/repo Caddyfile drift reconciliation (needs its own decision + Element X
+  regression test).
+- Worktrees (`~/wt/ew-sw-boot` etc.) left in place — active working trees.
