@@ -5,7 +5,22 @@
 # and .env.dev-staging.example). Do not float :latest; bump deliberately once
 # the entrypoint is migrated to the new config schema.
 FROM matrixdotorg/synapse:v1.154.0
-RUN apt update && apt install wget -y && apt clean
-RUN wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/bin/yq && chmod +x /usr/bin/yq
+# apt-get (not the apt CLI, which is documented as script-unstable) with
+# --no-install-recommends so this layer stays deterministic in shape. Debian
+# security-repo package versions are not pinned here — pinning wget to an
+# exact Debian package version is impractical against a floating
+# `matrixdotorg/synapse` base (the base image's own apt sources rotate), so
+# this only removes the non-determinism we CAN control (the yq download
+# below, and unpinned recommends bloat).
+RUN apt-get update && apt-get install -y --no-install-recommends wget && apt-get clean
+# Pinned to yq v4.53.3 (resolved from the /releases/latest redirect at the
+# time this was written) with a SHA-256 check against the binary — was
+# `.../releases/latest/download/...`, which re-resolves to whatever is
+# newest on every image rebuild, churning the layer digest for a tool-fetch
+# reason unrelated to any actual dependency bump. Bump deliberately: update
+# both the version and the checksum together.
+RUN wget https://github.com/mikefarah/yq/releases/download/v4.53.3/yq_linux_amd64 -O /usr/bin/yq \
+    && echo "fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4  /usr/bin/yq" | sha256sum -c - \
+    && chmod +x /usr/bin/yq
 COPY ./entrypoints/matrix_server.sh /matrix_server.sh
 ENTRYPOINT ["/matrix_server.sh"]
