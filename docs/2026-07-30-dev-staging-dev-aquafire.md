@@ -694,6 +694,105 @@ for the other to finish.
    skipped steps and one notice — **green**, not red. Both `docker.yml`
    files still pass `python3 -c 'import yaml; yaml.safe_load(...)'`.
 
+### Branch-based CI deploys (S5, 2026-07-31)
+
+**Status: LIVE.** `docker.yml` in both repos now builds on a push to `dev`
+as well as `main` (`docker/metadata-action`'s `type=ref,event=branch` tag
+rule, already in place for `main`, applies identically — no other workflow
+change was needed). The flow:
+
+- **`dev` branch -> `:dev` images -> dev-staging auto-converges.** Both
+  repos' `dev` branches float independently for fast iteration. dev-staging's
+  `.env` now pins `SYNAPSE_IMAGE_REF`/`ELEMENT_IMAGE_REF` to the `:dev` tag
+  and `SIWX_OIDC_TAG=dev` (was `:main`/`main`); `REDIS_IMAGE_REF`/
+  `LK_JWT_IMAGE_REF` are untouched digest pins. The existing pull-model
+  `matrix-staging-deploy.timer` (above) is the ENTIRE convergence mechanism
+  — it needed zero changes, because it always pulled whatever tag `.env`
+  named; only the tag name changed, not the mechanism.
+- **`main` branch -> `:main` images**, kept for later prod promotion (S6).
+  Prod's `.env` is untouched by this change — it still digest-pins,
+  independent of what `:main` currently resolves to.
+- **`paths-ignore: ['docs/**', '**.md']`** on the `push` trigger (only —
+  `release`/`workflow_dispatch` are unaffected) stops a docs-only commit
+  from rebuilding+moving a floating tag's digest with no code change, which
+  is what silently happened to `:main` earlier in the 2026-07-31 digest
+  incidents this doc's Process Rule 1 already describes. Deliberately does
+  **not** exclude `.github/workflows/**` — a workflow-file edit must still
+  build. Both `docker.yml` files parse clean under `python3 -c 'import
+  yaml; yaml.safe_load(...)'`.
+
+**Live-verified, 2026-07-31 (all times UTC):**
+
+| Repo | Push | Run | Conclusion | Build done | Box tick | Deploy complete | Push->converged |
+|---|---|---|---|---|---|---|---|
+| siwx-oidc-matrix-server (`dev`) | `d5ad705` 00:48:32 | [30594598088](https://github.com/inblockio/siwx-oidc-matrix-server/actions/runs/30594598088) | success | 00:51:40 | 00:56:50 | 00:57:21 | ~8m50s |
+| siwx-oidc (`dev`) | `b6c8d63` 00:48:16 | [30594585961](https://github.com/inblockio/siwx-oidc/actions/runs/30594585961) | success | 00:52:57 | 00:56:50 | 00:57:21 | ~9m07s |
+
+Both comfortably inside the "next tick or two" (~15 min / 3-tick) budget.
+Post-convergence battery: all 3 public endpoints 200, all 6 containers
+healthy with `RestartCount=0`, Synapse still `1.154.0`, and a fresh
+throwaway `did:key` RFC 7591 + auth-code login round-tripped to a `mat_`
+token and a 200 `whoami` with a `SIWX_` device id (then `POST
+/_matrix/client/v3/logout` to revoke the token and delete the throwaway
+device — cleanup verified via the endpoint's `{}` 200).
+
+**paths-ignore proof (step 6):** a docs-only commit to `dev`
+(`b2a7488`, docs/, no code) produced **zero** check-suites for that SHA
+(`GET /repos/.../commits/b2a7488/check-suites` -> `total_count: 0`) — not
+just a skipped job, no run was ever created. Verified again on `main`
+itself when this very doc's update landed there (see the commit that
+introduced this paragraph — same `total_count: 0` result expected/required).
+
+**Landmine (new): simultaneous same-SHA pushes to two branches can coalesce
+into one check-suite.** The very first `dev` push in this rollout
+(`git push origin dev-staging:main` immediately followed by `git push
+origin dev` from the same commit, in the same shell invocation) landed on
+the identical commit SHA as the `main` push seconds earlier. GitHub created
+only ONE check-suite for that SHA (`head_branch: main`); `dev` got no
+distinct run and no `:dev` tag was published. Confirmed via `GET
+.../commits/{sha}/check-suites` -> `total_count: 1`, and `GET
+.../actions/runs?branch=dev` -> `total_count: 0`. Fix: give the second
+branch a genuinely new commit (don't just move a second ref onto a
+just-pushed SHA) — that's what the `e3f9a21` harmless-LABEL commit did.
+Anyone scripting a "push the same commit to two trigger branches" flow
+should stagger the pushes by more than a few seconds, or expect to verify
+per-branch and re-push if coalesced.
+
+**Landmine (confirms Process Rule 1): identical source, different image
+bytes.** siwx-oidc's `dev` and `main` were both built from commit `b6c8d63`
+(the `dev` push, then a later FF-push of the same commit to `main`) via two
+separate `docker/build-push-action` runs. Their digests differ —
+`:dev` = `sha256:5a8be625e31bb704c0259265547d8e7977ba36eb4ee1a67785d42ab3ee2cdfeb`,
+`:main` = `sha256:7aa8426c95927bdfa317a92d2c91d6e6359a6974a2353cba3bc2f7c94914279d`
+— despite byte-identical source. This is not a bug (no `SOURCE_DATE_EPOCH`
+pinning, standard for these Dockerfiles); it is exactly why **the S6
+promotion gate must never treat "same tag" or even "same source commit" as
+"same image"** — always digest-compare (Process Rule 1 above, restated
+here because this branch flow makes it easy to accidentally reach for the
+wrong evidence: "`main` was built from the commit `dev` validated" is
+NOT the same claim as "`main` resolves to the digest `dev` validated").
+
+**Current dev-validated digests (for S6 promotion — pin these exact
+digests in prod's `.env`, not `:dev`/`:main` tags):**
+
+```
+siwx-oidc:            sha256:5a8be625e31bb704c0259265547d8e7977ba36eb4ee1a67785d42ab3ee2cdfeb
+synapse:               sha256:60c30d63bd2eadb216994b63b667ceec9be66869295be78e87edd33419230f99
+element-web:            sha256:7f7fe71567535ef86f3b6f32367958cc9275e01e7bf63ece7639023f80f4dfba
+```
+
+These are the exact digests dev-staging pulled, ran, smoke-tested, and
+completed a live e2e login against on 2026-07-31 — not just "whatever
+`:dev`/`:main` happen to resolve to when S6 runs".
+
+**Promotion path:** FF-merge `dev` -> `main` in both repos (clean, since
+`dev` only ever adds commits on top of the shared history — never rebased,
+never force-pushed) once the digests above are what you want to ship, then
+apply the S6-style digest-pinned prod `.env` update using the table above
+(never the floating `:main` tag — see the "identical source, different
+bytes" landmine just above for why `:main` alone is not sufficient
+evidence).
+
 ### Optional: enabling the push-model job (only if/when the PAT returns)
 
 This is no longer required for the box to converge — the pull-model timer
@@ -836,10 +935,17 @@ promotion or recovery on this stack, dev-staging or prod.
 2. **Promotion gate.** Before anything ships to prod, dev-staging must have
    run the EXACT digest being promoted, verified by the standard battery
    (section 6 above) plus an end-to-end login. "Ran something with the same
-   tag name" does not satisfy this gate — see rule 1. (After the upcoming
-   branch-flow change: dev floats `:dev` continuously for fast iteration,
-   but the dev→main promotion step itself stays a digest comparison, not a
-   tag comparison.)
+   tag name" does not satisfy this gate — see rule 1. **Live since the S5
+   branch-based CI deploy change (2026-07-31, §9 "Branch-based CI deploys"):**
+   `dev` floats `:dev` continuously on dev-staging for fast iteration, `main`
+   floats `:main` for later prod promotion, but the dev→main promotion step
+   itself stays a digest comparison, never a tag comparison — proven
+   necessary in practice, not just in theory: `siwx-oidc:dev` and
+   `siwx-oidc:main`, built from the byte-identical commit `b6c8d63`, resolved
+   to two different digests (see §9). Promote by pinning the exact
+   dev-validated `sha256:` digests in prod's `.env`, the same way dev-staging
+   itself pins `REDIS_IMAGE_REF`/`LK_JWT_IMAGE_REF` — never by pointing prod
+   at `:main` and trusting it matches what dev-staging ran.
 
 3. **.env hygiene.** Never `cat`/print a `.env` file anywhere — not in a
    terminal transcript, not in chat, not in a CI log. Two signing-key
