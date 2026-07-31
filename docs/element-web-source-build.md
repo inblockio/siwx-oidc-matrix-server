@@ -23,35 +23,23 @@ identical to the corresponding upstream PR to `element-hq/element-web`.
 - Element Web v1.12.24 is a pnpm + nx monorepo (`pnpm@10.33.3`, Node >= 22.18).
   The builder uses `node:24-bullseye` to match upstream.
 - Bumped from v1.12.20 on 2026-07-31. v1.12.24 carries upstream PR #33997,
-  "Fetch authenticated media through the session", which reduces how much of the
-  media path depends on the service worker (see "Service worker" below). The
-  vendored patch was rebased onto the new tag: upstream split the
-  `IMatrixClientCreds` import out of `MatrixClientPeg`, so the import hunk no
-  longer applied.
+  "Fetch authenticated media through the session". The vendored patch was rebased
+  onto the new tag: upstream split the `IMatrixClientCreds` import out of
+  `MatrixClientPeg`, so the import hunk no longer applied.
 
-## Service worker (`sw.js`)
+## Media and the service worker (debugging note)
 
-Element authenticates ALL media inside the service worker: the app emits legacy
-`/_matrix/media/v3/*` URLs, and the worker rewrites them to the authenticated
-`/_matrix/client/v1/media/*` endpoints and injects the bearer token. Our Synapse
-enforces authenticated media, so **any** failure of that worker makes media
-requests go out tokenless, Synapse answers 404, and downloads/images fail
-silently — no error in the page console (the worker logs to its own console).
+Element authenticates ALL media inside its service worker (`sw.js`): the app
+emits legacy `/_matrix/media/v3/*` URLs, and the worker rewrites them to the
+authenticated `/_matrix/client/v1/media/*` endpoints and injects the bearer
+token. Our Synapse enforces authenticated media, so **any** failure of that
+worker makes media requests go out tokenless, Synapse answers 404, and
+downloads/images fail silently — nothing appears in the page console, because
+the worker logs to its own.
 
-Two properties keep that recoverable, both added 2026-07-31:
-
-1. `Dockerfile.element` appends the bundle hash to `/app/sw.js`, giving each app
-   build a distinct worker. Upstream's `sw.js` is byte-identical across builds
-   (verified: same sha256 in the 2026-06-13 and 2026-07-31 images), so without
-   this a browser never installs a new worker on deploy and a wedged worker stays
-   wedged indefinitely.
-2. `config/element-nginx.conf` serves `/sw.js` with `Cache-Control: no-cache,
-   must-revalidate`, same as `index.html`. Without it the file that must never go
-   stale is the one served with no cache directives at all.
-
-Debugging note: a **hard reload (Ctrl+Shift+R) makes media symptoms worse** — it
-loads the page uncontrolled by the service worker, which is exactly the broken
-state. Use a normal reload. The worker's own errors are visible only under
+When debugging that: a **hard reload (Ctrl+Shift+R) makes media symptoms worse**,
+since it loads the page uncontrolled by the service worker, which is exactly the
+broken state. Use a normal reload. The worker's own errors are visible only under
 DevTools → Application → Service Workers → inspect.
 
 ## How the build works
