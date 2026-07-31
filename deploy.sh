@@ -157,21 +157,32 @@ CADDYFILE_SCRIPT
 echo ""
 echo "[4/4] Pull and restart..."
 
-# Derive IMAGE_TAG from the ref for GHCR image pulls
-IMAGE_TAG="$REF"
+# Derive the per-image refs from the ref for GHCR image pulls.
+# The compose file no longer honours a shared IMAGE_TAG (removed 2026-07-31):
+# synapse and element-web are pinned independently via SYNAPSE_IMAGE_REF /
+# ELEMENT_IMAGE_REF so each can carry its OWN digest. Setting IMAGE_TAG here
+# would be silently ignored and deploy `:main` instead of "$REF".
+# NOTE: these override whatever the server's .env pins. On a digest-pinned box
+# (production since 2026-07-31) that is a DOWNGRADE to a floating tag — pass a
+# full `repo@sha256:…` as <ref>, or prefer editing .env, for such hosts.
+SYNAPSE_IMAGE_REF="ghcr.io/inblockio/siwx-oidc-matrix-server/synapse:${REF}"
+ELEMENT_IMAGE_REF="ghcr.io/inblockio/siwx-oidc-matrix-server/element-web:${REF}"
+IMAGE_ENV="SYNAPSE_IMAGE_REF=${SYNAPSE_IMAGE_REF} ELEMENT_IMAGE_REF=${ELEMENT_IMAGE_REF}"
 
 if [ "$DO_BUILD" = true ]; then
-  echo "Pulling pre-built images from GHCR (tag: ${IMAGE_TAG})..."
+  echo "Pulling pre-built images from GHCR (tag: ${REF})..."
   # Pull only the stack's own GHCR images. The external images (redis, livekit,
   # lk-jwt-service) are pinned/cached and pulled by `up -d` only if missing, so
   # a deploy never gates on Docker Hub anonymous-token availability (its
   # parallel token fetches intermittently 404 and abort `compose pull`).
-  $SSH_CMD "cd ${REMOTE_DIR}/stack && IMAGE_TAG=${IMAGE_TAG} docker compose pull matrix_synapse siwx-oidc element-web"
+  # siwx-oidc is left on whatever the server's .env pins (SIWX_OIDC_IMAGE_REF);
+  # it is versioned by its own repo, not by this stack's ref.
+  $SSH_CMD "cd ${REMOTE_DIR}/stack && ${IMAGE_ENV} docker compose pull matrix_synapse siwx-oidc element-web"
 fi
 
 if [ "$DO_RESTART" = true ]; then
   echo "Restarting containers..."
-  $SSH_CMD "cd ${REMOTE_DIR}/stack && IMAGE_TAG=${IMAGE_TAG} docker compose down && IMAGE_TAG=${IMAGE_TAG} docker compose up -d"
+  $SSH_CMD "cd ${REMOTE_DIR}/stack && ${IMAGE_ENV} docker compose down && ${IMAGE_ENV} docker compose up -d"
   echo "Waiting for health checks..."
   sleep 5
   $SSH_CMD "cd ${REMOTE_DIR}/stack && docker compose ps --format 'table {{.Name}}\t{{.Status}}'"

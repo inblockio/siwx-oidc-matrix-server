@@ -74,6 +74,15 @@ done
 SIWX_OIDC_TAG="${BRANCH//\//-}"
 SSH_CMD="ssh -i $SSH_KEY $SERVER"
 
+# The compose file no longer honours the bare tags IMAGE_TAG / SIWX_OIDC_TAG
+# (removed 2026-07-31): every image is selected by a FULL ref env var so each
+# can carry its OWN digest. The bare tags above are still the source of truth
+# for WHICH tag to deploy; these derive the refs compose actually reads.
+# Setting the old vars would now be silently ignored and deploy `:main`.
+STACK_IMAGE_ENV="SYNAPSE_IMAGE_REF=ghcr.io/inblockio/siwx-oidc-matrix-server/synapse:${IMAGE_TAG} ELEMENT_IMAGE_REF=ghcr.io/inblockio/siwx-oidc-matrix-server/element-web:${IMAGE_TAG}"
+BRANCH_IMAGE_ENV="SIWX_OIDC_IMAGE_REF=ghcr.io/${SIWX_OIDC_REPO}:${SIWX_OIDC_TAG} ${STACK_IMAGE_ENV}"
+MAIN_IMAGE_ENV="SIWX_OIDC_IMAGE_REF=ghcr.io/${SIWX_OIDC_REPO}:main SYNAPSE_IMAGE_REF=ghcr.io/inblockio/siwx-oidc-matrix-server/synapse:main ELEMENT_IMAGE_REF=ghcr.io/inblockio/siwx-oidc-matrix-server/element-web:main"
+
 echo "=== Feature deploy: branch '$BRANCH' (siwx-oidc tag '$SIWX_OIDC_TAG', stack IMAGE_TAG '$IMAGE_TAG') ==="
 
 # -- Rollback to main ---------------------------------------------------------
@@ -86,9 +95,9 @@ cd ${REMOTE_DIR}/stack
 git fetch origin --prune
 git checkout origin/main --detach
 echo "Repo at \$(git rev-parse --short HEAD) (main)"
-SIWX_OIDC_TAG=main IMAGE_TAG=main docker compose pull matrix_synapse siwx-oidc element-web
-SIWX_OIDC_TAG=main IMAGE_TAG=main docker compose down
-SIWX_OIDC_TAG=main IMAGE_TAG=main docker compose up -d
+${MAIN_IMAGE_ENV} docker compose pull matrix_synapse siwx-oidc element-web
+${MAIN_IMAGE_ENV} docker compose down
+${MAIN_IMAGE_ENV} docker compose up -d
 sleep 5
 docker compose ps --format 'table {{.Name}}\t{{.Status}}'
 REMOTE_ROLLBACK
@@ -133,9 +142,9 @@ chmod +x entrypoints/*.sh start-matrix.sh deploy*.sh verify-deployment.sh 2>/dev
 echo "Repo at \$(git rev-parse --short HEAD) (${BRANCH})"
 
 # Pull the branch siwx-oidc image; keep synapse + element-web on IMAGE_TAG.
-SIWX_OIDC_TAG=${SIWX_OIDC_TAG} IMAGE_TAG=${IMAGE_TAG} docker compose pull matrix_synapse siwx-oidc element-web
-SIWX_OIDC_TAG=${SIWX_OIDC_TAG} IMAGE_TAG=${IMAGE_TAG} docker compose down
-SIWX_OIDC_TAG=${SIWX_OIDC_TAG} IMAGE_TAG=${IMAGE_TAG} docker compose up -d
+${BRANCH_IMAGE_ENV} docker compose pull matrix_synapse siwx-oidc element-web
+${BRANCH_IMAGE_ENV} docker compose down
+${BRANCH_IMAGE_ENV} docker compose up -d
 echo "Waiting for health checks..."
 sleep 6
 docker compose ps --format 'table {{.Name}}\t{{.Status}}'

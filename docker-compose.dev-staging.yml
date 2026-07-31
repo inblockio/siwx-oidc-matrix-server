@@ -100,10 +100,13 @@ services:
 
   siwx-oidc:
     # Built by the separate siwx-oidc repo, so it is versioned independently of
-    # this stack's IMAGE_TAG (which co-versions synapse + element-web). Pin via
-    # SIWX_OIDC_TAG; defaults to main so a stack tag never demands a matching
-    # siwx-oidc tag that does not exist.
-    image: ghcr.io/inblockio/siwx-oidc:${SIWX_OIDC_TAG:-main}
+    # synapse + element-web. SIWX_OIDC_IMAGE_REF is a FULL image ref (not a
+    # bare tag, which the old SIWX_OIDC_TAG was) so that a digest-only
+    # `ghcr.io/inblockio/siwx-oidc@sha256:…` pin is expressible — GHCR tags
+    # have proven republishable and `:main`/`:dev` can resolve to different
+    # bytes than the ones validated, so a tag name may misdescribe the image.
+    # Defaults to :main so a fresh checkout with no overrides still starts.
+    image: ${SIWX_OIDC_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc:main}
     restart: unless-stopped
     depends_on:
       redis:

@@ -26,15 +26,35 @@ rollback targets a known artifact.
 
 ## Image versioning model
 
-| Image | Tag source | Notes |
+| Image | Ref source | Notes |
 |---|---|---|
-| `synapse`, `element-web` | stack `IMAGE_TAG` (= the deploy `<ref>`) | Co-versioned by this repo's tag |
-| `siwx-oidc` | `SIWX_OIDC_TAG` (defaults `main`) | Built by the **separate** `siwx-oidc` repo; versioned independently |
+| `synapse` | `SYNAPSE_IMAGE_REF` (defaults `:main`) | Set by deploy.sh from the deploy `<ref>` |
+| `element-web` | `ELEMENT_IMAGE_REF` (defaults `:main`) | Set by deploy.sh from the deploy `<ref>` |
+| `siwx-oidc` | `SIWX_OIDC_IMAGE_REF` (defaults `:main`) | Built by the **separate** `siwx-oidc` repo; versioned independently |
 
-A stack tag (e.g. `native-oidc-v3`) only co-versions synapse + element-web. siwx-oidc
-stays on `:main` unless you set `SIWX_OIDC_TAG`. This is deliberate: a stack tag never
-demands a matching siwx-oidc tag that may not exist. **There is no "ref must exist in
-both repos" requirement** (that was the old two-repo model).
+Each image is selected by a **full image ref**, not a bare tag. The old shared
+`IMAGE_TAG` (synapse + element-web) and `SIWX_OIDC_TAG` were removed 2026-07-31 and
+are now **silently ignored** — a single tag string cannot express two different
+digests, and GHCR tags have proven republishable (element-web:sha-4a3d434 drifted
+from the bytes originally deployed under it), so tag-only pinning is not trustworthy.
+
+For a promoted/validated build, pin by **digest**, digest-only form preferred:
+
+```
+SYNAPSE_IMAGE_REF=ghcr.io/inblockio/siwx-oidc-matrix-server/synapse@sha256:<digest>
+ELEMENT_IMAGE_REF=ghcr.io/inblockio/siwx-oidc-matrix-server/element-web@sha256:<digest>
+SIWX_OIDC_IMAGE_REF=ghcr.io/inblockio/siwx-oidc@sha256:<digest>
+```
+
+A stack `<ref>` only co-versions synapse + element-web. siwx-oidc stays on whatever
+the server's `.env` pins. This is deliberate: a stack ref never demands a matching
+siwx-oidc tag that may not exist. **There is no "ref must exist in both repos"
+requirement** (that was the old two-repo model).
+
+> **Production is digest-pinned** (since 2026-07-31). `deploy.sh <ref>` overrides
+> `SYNAPSE_IMAGE_REF`/`ELEMENT_IMAGE_REF` on the command line, which on a
+> digest-pinned host is a **downgrade to a floating tag**. Prefer editing the
+> server's `.env` for production; pass a full `repo@sha256:…` if you use deploy.sh.
 
 ## Server layout
 
