@@ -452,6 +452,46 @@ Why this is safe to rely on:
 - The new stack's containers are in a different project and are untouched by
   either direction of this switch.
 
+### Rollback procedure — updated after teardown (2026-07-31)
+
+The three-command procedure above assumed `aqua_proxy`/`aqua_acme` were
+**stopped, not removed** (the section 8 burn-in state). That assumption ended
+on 2026-07-31 when the old proxy project was torn down (see section 8,
+"EXECUTED — teardown"): `docker start aqua_proxy aqua_acme` will now fail —
+those containers no longer exist. `down` (without `-v`) removes containers and
+networks, not volumes or images, so rollback is still fast, just one command
+different:
+
+```bash
+# 1. Free 80/443.
+docker compose -f /home/dev/caddy-proxy/docker-compose.caddy-proxy.yml stop
+
+# 2. Recreate the old proxy pair from the retained compose file, images, and
+#    volumes — same certs, same config, no rebuild, no re-pull.
+docker compose -f /home/dev/aquafier-rs/deployment/docker-compose-proxy.yml up -d
+
+# 3. Confirm the 5 legacy vhosts serve again.
+for h in aquafier.inblock.io aquafier-api.inblock.io dev.aqua-node.inblock.io \
+         dev.aquafire.inblock.io draw.inblock.io; do
+  curl -sSI --max-time 20 "https://$h" | head -1
+done
+```
+
+Why this still works: the compose file
+(`/home/dev/aquafier-rs/deployment/docker-compose-proxy.yml`), the
+`ghcr.io/inblockio/ngnix-proxy:master` / `nginxproxy/acme-companion:latest`
+images, and the `proxy_proxy_data_{acme,certs,html,vhost}` volumes were all
+**retained** by design during teardown (`down` with no `-v`, images never
+pruned) — only the containers and the (shared, still-in-use) `proxy_net`
+membership were removed. `up -d` recreates `aqua_proxy`/`aqua_acme` from that
+exact state, certs included.
+
+Note the compose file bakes in `restart: always` for both services (Landmine
+1). For a genuine emergency rollback that is the correct behavior once Caddy
+is stopped in step 1. If instead this is a temporary test bring-up, re-apply
+`docker update --restart=no aqua_proxy aqua_acme` afterward before stopping
+them again, exactly as Landmine 1 describes.
+
 ## 8. 24-hour burn-in rule
 
 After a successful cutover, `aqua_proxy` and `aqua_acme` stay **stopped, not
@@ -478,6 +518,72 @@ Note that with `--restart=no` the old proxy will NOT come back on a reboot,
 which is the desired burn-in state. When the migration is declared final, the
 old proxy project should be `down`ed properly rather than left as a stopped
 husk.
+
+### EXECUTED — teardown, 2026-07-31
+
+The 24h window above was **ended early by explicit user order**, not run to
+completion: Caddy had served all 8 vhosts cleanly since cutover T0
+(2026-07-30T17:44:01Z, section 8b) with multiple clean audits in between, and
+the order judged that sufficient to stop the burn-in and finalize the
+migration ahead of schedule (characterized at order time as "~11h in";
+measured wall-clock from T0 to the teardown below was closer to ~14h — the
+window was cut short either way, well inside the intended 24h, on explicit
+instruction rather than a full clock run).
+
+Pre-teardown check confirmed the burn-in invariants had held throughout: both
+containers present in `docker ps -a` as `Exited` (`aqua_proxy` code 2,
+`aqua_acme` code 0) with `restart=no`, `caddy_proxy` healthy with
+`RestartCount=0`, and all 8 vhosts at their known-good status codes.
+
+```bash
+docker compose -f /home/dev/aquafier-rs/deployment/docker-compose-proxy.yml down
+```
+
+Run with **no `-v`** — volumes were never in scope for removal. Output:
+
+```
+Container aqua_acme   Stopping / Stopped / Removing / Removed
+Container aqua_proxy  Stopping / Stopped / Removing / Removed
+Network proxy_net     Removing
+Network proxy_net     Resource is still in use
+```
+
+The trailing "Resource is still in use" on `proxy_net` is **expected, not an
+error**: the network is shared with `caddy_proxy` and the five live legacy
+backends, so Docker correctly refuses to delete it. Verified post-teardown:
+
+- `aqua_proxy` / `aqua_acme` absent from `docker ps -a`.
+- `proxy_net` still exists, with `caddy_proxy` and all five legacy backends
+  (plus the matrix-staging containers) still attached — unchanged from the
+  pre-teardown membership list.
+- `caddy_proxy` still `healthy`, `RestartCount=0` (unchanged) — the teardown
+  did not touch or restart it.
+- All 8 vhosts re-swept immediately after: identical status codes to the
+  pre-teardown sweep (200 ×7, 302 on `dev.matrix.inblock.io`, matching the
+  known baseline both times).
+- `proxy_proxy_data_{acme,certs,html,vhost}` volumes: present, untouched
+  (`docker volume ls`).
+- `ghcr.io/inblockio/ngnix-proxy:master` and `nginxproxy/acme-companion:latest`
+  images: present, untouched (`docker images`) — kept intentionally as
+  last-resort rollback material, see updated section 7.
+
+**Rollback-to-nginx is now:**
+
+```bash
+docker compose -f /home/dev/aquafier-rs/deployment/docker-compose-proxy.yml up -d
+```
+
+(file, volumes, and images all retained on the box — see the updated section
+7 rollback procedure for the full sequence including freeing 80/443 first.)
+
+**Cleanup candidates, not yet acted on.** The old cert volumes
+(`proxy_proxy_data_{acme,certs,html,vhost}`) and the two retired images
+(`ghcr.io/inblockio/ngnix-proxy:master`, `nginxproxy/acme-companion:latest`)
+are being kept deliberately as last-resort rollback material per section 7.
+Once Caddy has run stable for **~30 days** past this teardown (i.e. from
+~2026-08-30), they become candidates for actual removal
+(`docker volume rm` / `docker image rm`) to reclaim disk — not before, and not
+automatically.
 
 ## 8b. EXECUTED — cutover record, 2026-07-30 (T3)
 
