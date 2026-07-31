@@ -30,3 +30,4 @@ ENTRYPOINT ["/matrix_server.sh"]
 # simultaneous `main` push). See docs/2026-07-30-dev-staging-dev-aquafire.md
 # §9 (branch-based CI deploys).
 LABEL io.inblock.dev-branch-ci-test="2026-07-31"
+LABEL io.inblock.dev-branch-ci-test-s5-live-check="2026-07-31T00:48Z"
