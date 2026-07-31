@@ -25,6 +25,11 @@ jobs:
       contents: read
       packages: write
     strategy:
+      # The two images are independent artifacts: a transient failure in one
+      # build must not cancel the other (observed 2026-07-31: a synapse build
+      # flake cancelled a healthy element-web build mid-run, stalling a
+      # staged deploy).
+      fail-fast: false
       matrix:
         include:
           - image: synapse
