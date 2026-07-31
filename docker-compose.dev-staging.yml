@@ -77,7 +77,17 @@ services:
       - proxy_net
 
   redis:
-    image: redis
+    # REDIS_IMAGE_REF: same env-overridable digest-pin pattern as
+    # SYNAPSE_IMAGE_REF/ELEMENT_IMAGE_REF above. The DEFAULT here is
+    # production's current digest (conservative fallback for anyone standing
+    # up a fresh checkout without an explicit override) — but THIS BOX does
+    # NOT run that digest. dev-staging independently runs a NEWER redis
+    # (8.10.0, digest 077ba791...) than prod (8.8.0, digest aa049e68...)
+    # against its own AOF file, so /home/dev/matrix-staging/.env sets
+    # REDIS_IMAGE_REF explicitly to dev's own digest — otherwise the default
+    # below would downgrade this box's redis against a live AOF on the next
+    # `up -d`. See docker-compose.yml for the prod-side rationale.
+    image: ${REDIS_IMAGE_REF:-redis:latest@sha256:aa049e689e141a4358ad1d4562dc49c88a89fbab711fd8fcc33f684c80b26301}
     command: redis-server --appendonly yes
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -163,7 +173,12 @@ services:
       - proxy_net
 
   lk-jwt-service:
-    image: ghcr.io/element-hq/lk-jwt-service:latest
+    # LK_JWT_IMAGE_REF: same env-overridable digest-pin pattern as
+    # REDIS_IMAGE_REF above. Prod and dev-staging were verified 2026-07-31 to
+    # run the IDENTICAL digest here (unlike redis), so the same default is
+    # safe for both boxes; set explicitly in dev's .env anyway for clarity/
+    # symmetry with REDIS_IMAGE_REF, not because the default would diverge.
+    image: ${LK_JWT_IMAGE_REF:-ghcr.io/element-hq/lk-jwt-service:latest@sha256:29918567e6b7cd920e2853b4cd6848ce01b79947c3d19a9f1ed5b74f0a2a88bf}
     restart: unless-stopped
     environment:
       LIVEKIT_URL: "wss://${MATRIX_HOST}/livekit/sfu"
@@ -177,9 +192,9 @@ services:
       # had drifted to a version that hard-requires this var, restart-looping
       # with "LIVEKIT_FULL_ACCESS_HOMESERVERS environment variable must be
       # set". Grants full LiveKit room-creation access to our own homeserver
-      # only (see element-hq/lk-jwt-service README security note). Production
-      # docker-compose.yml has the identical gap and floats the same
-      # unpinned tag — same fix needed there.
+      # only (see element-hq/lk-jwt-service README security note). Upstreamed
+      # to production's docker-compose.yml 2026-07-31 (matching prod's
+      # server-local edit content-for-content) — no longer a gap there.
       LIVEKIT_FULL_ACCESS_HOMESERVERS: "${MATRIX_HOST}"
     depends_on:
       matrix_synapse:
