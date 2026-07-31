@@ -49,6 +49,26 @@
         // Old fetch implementations: the no-cache header remains the floor.
     }
 
+    // (D) Suppress native drag-start on anchors/images. Element renders file
+    // download controls as real <a href> elements (shared-components
+    // FileBodyView) and images are draggable by default, so a human click
+    // with a few pixels of pointer drift starts an HTML5 drag instead: the
+    // cursor flashes the no-drop deny symbol and the browser CANCELS the
+    // click — downloads silently do nothing, with zero network/console
+    // evidence. Synthetic (automation) clicks have zero drift, which is why
+    // e2e never caught it; headless Chromium cannot even synthesize native
+    // drags. Room-list reordering uses pointer events, not HTML5 drag, so it
+    // is unaffected; the only loss is dragging images/links out of the app.
+    document.addEventListener(
+        "dragstart",
+        function (e) {
+            var t = e.target;
+            if (!t || !t.closest) return;
+            if (t.closest("a[href], img")) e.preventDefault();
+        },
+        true,
+    );
+
     if (!("serviceWorker" in navigator)) return;
 
     // (A) early userinfo responder
