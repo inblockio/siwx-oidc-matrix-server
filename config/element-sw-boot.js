@@ -39,6 +39,12 @@
     // the app then reads the repaired entry in the same load.
     try {
         fetch("i18n/languages.json", { cache: "reload" }).catch(function () {});
+        // Same repair for the download-iframe document (FileDownloader uses
+        // iframe.src = "usercontent/"): it is unhashed, names a hashed
+        // bundles/<hash>/usercontent.js, and is fetched at CLICK time from
+        // the HTTP cache — so a stale copy from a previous deploy 404s and
+        // kills the download button, surviving app reloads indefinitely.
+        fetch("usercontent/", { cache: "reload" }).catch(function () {});
     } catch (e) {
         // Old fetch implementations: the no-cache header remains the floor.
     }
