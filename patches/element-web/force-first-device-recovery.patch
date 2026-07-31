@@ -1,21 +1,19 @@
 diff --git a/apps/web/src/components/structures/MatrixChat.tsx b/apps/web/src/components/structures/MatrixChat.tsx
-index 0dbc2af..cb23d44 100644
+index a424b40..f2ab0ca 100644
 --- a/apps/web/src/components/structures/MatrixChat.tsx
 +++ b/apps/web/src/components/structures/MatrixChat.tsx
-@@ -35,6 +35,7 @@ import { DecryptionFailureTracker } from "../../DecryptionFailureTracker";
- import { type IMatrixClientCreds, MatrixClientPeg } from "../../MatrixClientPeg";
+@@ -36,6 +36,7 @@ import { type IMatrixClientCreds } from "../../utils/createMatrixClient";
+ import { MatrixClientPeg } from "../../MatrixClientPeg";
  import PlatformPeg from "../../PlatformPeg";
  import SdkConfig, { type ConfigOptions } from "../../SdkConfig";
 +import { accessSecretStorage } from "../../SecurityManager";
  import dis from "../../dispatcher/dispatcher";
- import Notifier from "../../Notifier";
  import Modal from "../../Modal";
-@@ -1387,8 +1388,49 @@ export default class MatrixChat extends React.PureComponent<IProps, IState> {
+ import { showRoomInviteDialog, showStartChatInviteDialog } from "../../RoomInvite";
+@@ -1377,8 +1378,49 @@ export default class MatrixChat extends React.PureComponent<IProps, IState> {
  
          const crypto = client.getCrypto();
          const crossSigningReady = await crypto?.isCrossSigningReady();
--
--        return !crossSigningReady;
 +        // `force_verification` mandates a recoverable identity, not merely a cross-signed
 +        // one: the transparent first-device bootstrap (InitialCryptoSetupStore) sets up
 +        // cross-signing but never creates secret storage (4S), so a user could otherwise
@@ -57,12 +55,13 @@ index 0dbc2af..cb23d44 100644
 +        logger.info(
 +            `shouldForceVerification: crossSigningReady=${crossSigningReady} secretStorageReady=${secretStorageReady} hasServer4S=${hasServer4S}`,
 +        );
-+
+ 
+-        return !crossSigningReady;
 +        return !crossSigningReady || !(secretStorageReady || hasServer4S);
      }
  
      /**
-@@ -2133,13 +2169,82 @@ export default class MatrixChat extends React.PureComponent<IProps, IState> {
+@@ -2155,13 +2197,82 @@ export default class MatrixChat extends React.PureComponent<IProps, IState> {
  
      /** Called when {@link Views.E2E_SETUP} or {@link Views.COMPLETE_SECURITY} have completed. */
      private onCompleteSecurityE2eSetupFinished = async (): Promise<void> => {
@@ -151,10 +150,10 @@ index 0dbc2af..cb23d44 100644
  
          this.onShowPostLoginScreen();
 diff --git a/apps/web/src/i18n/strings/en_EN.json b/apps/web/src/i18n/strings/en_EN.json
-index 4ed51db..0c69655 100644
+index 1671f79..4d6221b 100644
 --- a/apps/web/src/i18n/strings/en_EN.json
 +++ b/apps/web/src/i18n/strings/en_EN.json
-@@ -972,6 +972,8 @@
+@@ -970,6 +970,8 @@
          "event_shield_reason_unsigned_device": "Encrypted by a device not verified by its owner.",
          "event_shield_reason_unverified_identity": "Encrypted by an unverified user.",
          "export_unsupported": "Your browser does not support the required cryptography extensions",

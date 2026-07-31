@@ -19,9 +19,28 @@ identical to the corresponding upstream PR to `element-hq/element-web`.
 
 ## Pinned tag
 
-- **Tag:** `v1.12.20` (set as `ARG ELEMENT_WEB_TAG` in `Dockerfile.element`).
-- Element Web v1.12.20 is a pnpm + nx monorepo (`pnpm@10.33.3`, Node >= 22.18).
+- **Tag:** `v1.12.24` (set as `ARG ELEMENT_WEB_TAG` in `Dockerfile.element`).
+- Element Web v1.12.24 is a pnpm + nx monorepo (`pnpm@10.33.3`, Node >= 22.18).
   The builder uses `node:24-bullseye` to match upstream.
+- Bumped from v1.12.20 on 2026-07-31. v1.12.24 carries upstream PR #33997,
+  "Fetch authenticated media through the session". The vendored patch was rebased
+  onto the new tag: upstream split the `IMatrixClientCreds` import out of
+  `MatrixClientPeg`, so the import hunk no longer applied.
+
+## Media and the service worker (debugging note)
+
+Element authenticates ALL media inside its service worker (`sw.js`): the app
+emits legacy `/_matrix/media/v3/*` URLs, and the worker rewrites them to the
+authenticated `/_matrix/client/v1/media/*` endpoints and injects the bearer
+token. Our Synapse enforces authenticated media, so **any** failure of that
+worker makes media requests go out tokenless, Synapse answers 404, and
+downloads/images fail silently — nothing appears in the page console, because
+the worker logs to its own.
+
+When debugging that: a **hard reload (Ctrl+Shift+R) makes media symptoms worse**,
+since it loads the page uncontrolled by the service worker, which is exactly the
+broken state. Use a normal reload. The worker's own errors are visible only under
+DevTools → Application → Service Workers → inspect.
 
 ## How the build works
 

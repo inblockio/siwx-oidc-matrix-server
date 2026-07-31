@@ -14,7 +14,7 @@
 # ---------------------------------------------------------------------------
 FROM node:24-bullseye AS builder
 
-ARG ELEMENT_WEB_TAG=v1.12.20
+ARG ELEMENT_WEB_TAG=v1.12.24
 
 WORKDIR /src
 
@@ -75,6 +75,16 @@ COPY config/favicon-180.png /app/favicon-180.png
 COPY config/favicon-512.png /app/favicon-512.png
 COPY config/favicon-1024.png /app/favicon-1024.png
 COPY entrypoints/element_entrypoint.sh /docker-entrypoint.sh
+
+# Service-worker media-auth boot shim (2026-07-31 download RCA). Must be a
+# separate same-origin file: index.html ships a CSP with script-src 'self' and
+# no 'unsafe-inline', so an inline script would be blocked. Injected into
+# <head> so its listener registers before any app bundle executes (bundles
+# load at the end of body). The grep fails the build loudly if the upstream
+# index.html shape ever stops matching the sed anchor.
+COPY config/element-sw-boot.js /app/sw-boot.js
+RUN sed -i 's|<head>|<head><script src="sw-boot.js"></script>|' /app/index.html \
+    && grep -q '<head><script src="sw-boot.js"></script>' /app/index.html
 
 # nginx-unprivileged's default server serves /usr/share/nginx/html. Point that
 # at /app via a symlink (same as upstream element-web's app Dockerfile) so the
