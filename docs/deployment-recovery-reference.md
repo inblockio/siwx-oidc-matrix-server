@@ -1,7 +1,14 @@
 # Deployment Recovery Reference
 
-Last verified: 2026-05-24
+Last verified: 2026-07-31
 Stack: siwx-oidc-matrix-server (MSC3861 delegated auth)
+
+**Read "Image pinning policy" below before running ANY command in this
+document.** This runbook used to instruct recovery via bare `./deploy.sh main
+--build --restart`, which pulls images by a mutable tag with no verification
+— that is exactly the mechanism that poisoned `:main` on 2026-07-31 (see
+"Incident references"). The commands further down are now written to verify
+digests; do not shortcut them back to a bare tag pull.
 
 ## Server Identity
 
@@ -53,6 +60,12 @@ by docker-compose.yml.
 | matrix-livekit-1 | livekit/livekit-server:latest | 7880 WS, 7881 TCP | matrix.inblock.io/livekit/* |
 | matrix-lk-jwt-service-1 | ghcr.io/element-hq/lk-jwt-service:latest | 8080 | matrix.inblock.io/livekit/jwt |
 | matrix-watchtower-1 | (watchtower) | - | - |
+
+**The `:main`/`:latest` tags above are for identification only — they say
+what a healthy stack currently runs, not what is safe to pull.** Never pull
+or deploy by these bare tags without resolving and verifying a digest first;
+see "Image pinning policy" below. `matrix-watchtower-1` does not auto-deploy
+anything in this stack (see `../siwx-oidc/CLAUDE.md`, "Deploys are MANUAL").
 
 ## Secrets Inventory (names only, values in .env on server)
 
@@ -110,12 +123,77 @@ authoritative. Key settings baked in:
 - Federation via .well-known delegation (no direct TLS on 8448)
 - SQLite database (at /data/homeserver.db)
 
+## Image pinning policy — READ BEFORE RUNNING ANY RECOVERY COMMAND
+
+**Standing rule: recovery and deploy pulls are always by DIGEST, or a
+digest-verified tag — never a bare mutable tag (`:main`, `:latest`, or any
+`sha-<hash>` tag taken on faith).** This is the permanent invariant for this
+stack, not a one-time caution. It has bitten this stack twice, for two
+different reasons — see "Incident references" below:
+
+1. **Upstream base images float underneath you if the Dockerfile doesn't pin
+   them.** `dockerfiles/Dockerfile` used to do `FROM matrixdotorg/synapse:latest`.
+   Every CI rebuild of `:main` silently tracked whatever upstream Synapse was
+   current *at build time*, with no commit to this repo marking the change.
+2. **GHCR tags are republishable — a tag string, including a commit-sha tag,
+   is not proof of contents.** `element-web:sha-4a3d434` was observed to
+   resolve to different bytes at two different times under the identical tag
+   string. A tag is a label someone (or some CI run) can move; a digest
+   (`sha256:...`) is the only thing that names an immutable set of bytes.
+
+**Practical rule for every recovery command below:** resolve and record the
+digest you intend to deploy *before* pulling, and confirm what is actually
+*running* afterward matches it — never trust the tag name at either end.
+
+```bash
+# Resolve what a tag CURRENTLY points at, without pulling (safe, read-only).
+# `docker buildx imagetools inspect` prints a `Digest:` line for the ref as
+# requested — unlike `docker manifest inspect`, it does this correctly for
+# both single-arch and multi-arch images without extra flags:
+docker buildx imagetools inspect ghcr.io/inblockio/siwx-oidc-matrix-server/synapse:main
+docker buildx imagetools inspect ghcr.io/inblockio/siwx-oidc:main
+
+# After a pull + restart, confirm what is actually RUNNING (not just what
+# was requested) — this is the step that would have caught the tag-drift
+# incident, since the pull itself reported success either way:
+docker inspect --format='{{.Image}}' matrix-matrix_synapse-1 \
+  | xargs docker image inspect --format='{{join .RepoDigests ", "}}'
+docker inspect --format='{{.Image}}' matrix-siwx-oidc-1 \
+  | xargs docker image inspect --format='{{join .RepoDigests ", "}}'
+```
+
+If the running digest does not match the digest you resolved and intended to
+deploy, **STOP** — do not consider the recovery complete, and do not paper
+over the mismatch by re-running the same tag pull again.
+
 ## Recovery Procedures
 
 ### If SSH is restored
 ```bash
-./deploy.sh main --build --restart
-# Verify:
+# 1. Decide and VERIFY the exact ref you are recovering to. Never pass
+#    "main" to deploy.sh — it becomes IMAGE_TAG verbatim, i.e. a bare
+#    mutable-tag pull with no verification (the exact trap this doc used to
+#    document by example). Prefer the last known-good sha-tag — from this
+#    doc's "Deployed Versions" table, from a rollback anchor tag such as
+#    `:rollback-YYYYMMDD` if one exists (see "Current prod reality" below),
+#    or from a `docker compose images` capture taken before the incident.
+REF=sha-<known-good-short-sha>   # NOT "main"
+
+docker buildx imagetools inspect ghcr.io/inblockio/siwx-oidc-matrix-server/synapse:${REF}
+docker buildx imagetools inspect ghcr.io/inblockio/siwx-oidc:${REF}
+# Record both "Digest:" lines — this is what you compare against after step 2.
+
+# 2. Deploy.
+./deploy.sh ${REF} --build --restart
+
+# 3. Verify the RUNNING containers match the digests recorded in step 1 (per
+#    the Image pinning policy above — do not skip this).
+docker inspect --format='{{.Image}}' matrix-matrix_synapse-1 \
+  | xargs docker image inspect --format='{{join .RepoDigests ", "}}'
+docker inspect --format='{{.Image}}' matrix-siwx-oidc-1 \
+  | xargs docker image inspect --format='{{join .RepoDigests ", "}}'
+
+# 4. Functional verify:
 curl -sf https://siwx-oidc.inblock.io/.well-known/openid-configuration | jq .issuer
 curl -sf https://matrix.inblock.io/_matrix/client/versions | jq '.versions[-1]'
 curl -sf -o /dev/null -w '%{http_code}' https://element.inblock.io
@@ -127,7 +205,10 @@ curl -sf -o /dev/null -w '%{http_code}' https://element.inblock.io
 3. Create deploy user, install SSH key
 4. Create portal-net Docker network
 5. Set up Caddy container (portal-caddy-1) with the Caddyfile.production from this repo
-6. Run `./deploy.sh main --build --restart` to clone repos and start containers
+6. Run the "If SSH is restored" procedure above (resolve + verify a specific
+   `sha-` ref, deploy, verify running digests) to clone repos and start
+   containers — **do not** deploy `main` bare here either; a full rebuild is
+   exactly when you most want to be certain of what you are standing up.
 7. SSH in and run `start-matrix.sh` to generate new secrets (.env)
 8. All user sessions will be invalidated (new signing key)
 9. E2EE history will be lost unless matrix_data volume was backed up
@@ -135,10 +216,26 @@ curl -sf -o /dev/null -w '%{http_code}' https://element.inblock.io
 
 ### If only siwx-oidc needs rebuild
 ```bash
-# Trigger CI build
+# 1. Trigger a fresh CI build off main. This is a build trigger only — it
+#    does NOT tell you what to deploy, because `main` keeps moving after it
+#    (the same reason it's unsafe to deploy directly).
 gh workflow run docker.yml --ref main --repo inblockio/siwx-oidc
-# Wait, then deploy
-./deploy.sh main --build --restart
+
+# 2. Wait for the run to finish, then find the SPECIFIC sha it published —
+#    never assume `:main` still points at it by the time you deploy:
+gh run list --repo inblockio/siwx-oidc --workflow docker.yml --limit 1
+NEWSHA=<short-sha-from-that-run>
+
+# 3. Verify the image exists and record its digest BEFORE deploying:
+docker buildx imagetools inspect ghcr.io/inblockio/siwx-oidc:sha-${NEWSHA}
+
+# 4. Deploy by that exact sha ref, never by "main":
+./deploy.sh sha-${NEWSHA} --build --restart
+
+# 5. Verify the running container's digest matches step 3's (per the Image
+#    pinning policy above).
+docker inspect --format='{{.Image}}' matrix-siwx-oidc-1 \
+  | xargs docker image inspect --format='{{join .RepoDigests ", "}}'
 ```
 
 ## Data Loss Impact Assessment
@@ -154,7 +251,76 @@ gh workflow run docker.yml --ref main --repo inblockio/siwx-oidc
 | LiveKit keys | .env file | No | Active calls drop; regenerate |
 | Caddy TLS certs | portal volumes | Auto-renewed | ACME re-issues within minutes |
 
+## Current prod reality (dated snapshot — 2026-07-31)
+
+The "Image pinning policy" section above is the permanent invariant. This
+section is what that invariant looks like in practice on prod, **as of
+2026-07-31** — expect it to go stale and be superseded once S6 (moving prod
+to GitHub-built `:main`, pinned by digest) lands. When that happens, replace
+this snapshot with the new one; do not delete or weaken the invariant above
+it.
+
+- Prod's `.env` currently pins `IMAGE_TAG=prod-20260731` and
+  `SIWX_OIDC_TAG=tested-20260731`. **Both are LOCAL-ONLY tags — they do not
+  exist in GHCR.** This is intentional: a stray `docker compose pull` on
+  prod fails LOUDLY (image-not-found) instead of silently floating to
+  whatever `:main` currently resolves to. If a pull ever fails on prod with
+  these tags, that is the safety mechanism working, **not** a reason to
+  switch prod back to `:main`/`:latest` — that is the exact trap this
+  document exists to prevent falling into again.
+- A rollback anchor tag `:rollback-20260731` exists for a fast, verified
+  revert target.
+- A prod DB snapshot was taken at
+  `/mnt/volume_matrix_service/backup-20260731/` before the version-crossing
+  deploy that produced the tags above (see the "One-way migrations" process
+  rule in `docs/2026-07-30-dev-staging-dev-aquafire.md` — Synapse schema
+  migrations do not roll back, so a snapshot precedes any version-crossing
+  deploy, prod included).
+- The full rollback procedure specific to this deploy is recorded in
+  `ROLLBACK-20260731.md`, in `/home/deploy/matrix/stack/` **on the server**
+  — it is not checked into this repo, because it documents server-local
+  state (paths, current tag values) that would go stale the moment it was
+  copied here.
+
+**After S6:** prod is expected to move to GitHub-built `:main`, but pulled
+under the same verify-then-pull discipline as "Image pinning policy" above
+— resolve the digest, deploy, verify the running digest matches — rather
+than trusting the tag. The dated local tags above go away at that point; the
+digest-pin rule they exist to approximate does not.
+
+## Incident references
+
+- **2026-07-31 — Synapse 1.157.1 removed `experimental_features.msc3861`.**
+  `dockerfiles/Dockerfile` floated `FROM matrixdotorg/synapse:latest`, so
+  every CI rebuild of `:main` silently tracked whatever upstream Synapse was
+  current at build time — with no commit to this repo marking the change.
+  Upstream 1.157.1 removed `experimental_features.msc3861` (hard startup
+  error: `experimental_features.msc3861 was removed. Use the
+  matrix_authentication_service configuration instead.`), poisoning `:main`
+  for this stack's config schema; dev-staging had to be pinned to a
+  pre-drift `sha-4a3d434` build as a workaround while this was diagnosed.
+  Fixed in `29beb88` by pinning the Dockerfile to
+  `matrixdotorg/synapse:v1.154.0` (the last version before the removal) and
+  ceasing to float `latest`. **Lesson: never float an upstream base image in
+  a `FROM` line; pin it explicitly and bump deliberately.** `:main` is
+  currently good again post-fix — that does not license going back to
+  pulling it unverified; see "Image pinning policy" above. Full context:
+  `.env.dev-staging.example` and `docs/2026-07-30-dev-staging-dev-aquafire.md`.
+- **2026-07-30/31 — GHCR tag-republish drift.** `element-web:sha-4a3d434`
+  was observed to resolve to different bytes at two different times, under
+  the identical tag string. Root cause: GHCR sha-tags are republishable — a
+  tag, including a commit-sha tag, is a movable label, not a content hash.
+  **Lesson: tags are hints; only a `sha256:` digest names immutable
+  content.** This is why `docker-compose.dev-staging.yml` moved off one
+  shared `IMAGE_TAG` to independent `SYNAPSE_IMAGE_REF` / `ELEMENT_IMAGE_REF`,
+  each meant to carry a full `tag@digest` reference so two independently
+  built images can be pinned to two different digests (see `29beb88`).
+
 ## Deployed Versions (as of 2026-05-24)
+
+**Stale — see "Current prod reality" above for what prod actually runs
+today.** Kept here as a historical record of the last time this table was
+refreshed by hand; do not treat it as current.
 
 | Component | Commit | Key Change |
 |---|---|---|

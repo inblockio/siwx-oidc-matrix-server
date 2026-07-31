@@ -362,10 +362,47 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://dev.element.inblock.io
 # H3 / AC3 — end-to-end login (headless client, did:key). Run from a
 # machine with the siwx-oidc-auth binary (or `cargo run -p siwx-oidc-auth`
 # from a siwx-oidc checkout).
+#
+# BUG (fixed 2026-07-31): this used to read
+#   `siwx-oidc-auth --server https://dev.siwx.inblock.io \
+#      --client-id dev-staging-smoke --redirect-uri https://dev.element.inblock.io`
+# `dev-staging-smoke` was never a registered client — the token exchange
+# 401s with "Unrecognised client id". There is no static smoke client;
+# register an ephemeral one per run via RFC 7591 dynamic client registration
+# first. This is the exact sequence used repeatedly this week (verified
+# live against dev.siwx.inblock.io — see
+# `docs/audits/2026-07-30-dev-staging-audit-evidence.md`, H3 section, in the
+# siwx-oidc repo, for a full transcript with real IDs/tokens redacted).
+
+# 1. Generate a throwaway Ed25519 identity for the smoke test (produces a
+#    did:key — the server must have "key" in SIWEOIDC_SUPPORTED_DID_METHODS,
+#    which dev-staging does).
+openssl genpkey -algorithm Ed25519 -out /tmp/dev-staging-smoke-key.pem
+
+# 2. Register an ephemeral public OAuth client (no secret needed for this
+#    flow). The registration_endpoint is advertised in OIDC discovery
+#    (`/register`); redirect_uris just needs to be a URI the client controls
+#    — it does not need to resolve to anything for this smoke test.
+curl -sS -X POST https://dev.siwx.inblock.io/register \
+  -H 'Content-Type: application/json' \
+  -d '{"redirect_uris": ["https://dev.siwx.inblock.io/smoke-test-callback"]}'
+# -> HTTP 201, body includes "client_id": "<uuid>" — use that uuid below.
+
+# 3. Authenticate: signs a challenge with the ephemeral key and exchanges it
+#    for OIDC tokens via the registered client.
 siwx-oidc-auth --server https://dev.siwx.inblock.io \
-  --client-id dev-staging-smoke --redirect-uri https://dev.element.inblock.io
-# then, against Synapse, confirm the returned access_token resolves via
-# GET https://dev.matrix.inblock.io/_matrix/client/v3/account/whoami
+  --client-id <client_id from step 2> \
+  --redirect-uri https://dev.siwx.inblock.io/smoke-test-callback \
+  --key-file /tmp/dev-staging-smoke-key.pem
+# -> prints access_token (mat_... in MSC3861 mode), refresh_token, id_token.
+
+# 4. Confirm the returned access_token resolves via Synapse:
+curl -sS -H "Authorization: Bearer <access_token from step 3>" \
+  https://dev.matrix.inblock.io/_matrix/client/v3/account/whoami
+# -> HTTP 200, {"user_id":"@did-key-...:dev.matrix.inblock.io", "device_id":"SIWX_..."}
+
+# 5. Clean up the throwaway key (it is not a secret worth keeping around):
+rm -f /tmp/dev-staging-smoke-key.pem
 
 # H5 — RAM headroom after a 30-minute burn-in.
 free -m
@@ -773,3 +810,68 @@ which requires the currently-invalid `inblockio` PAT. Once the PAT is
 restored and the optional steps above are run once, this graduates to a
 fully verified secondary path — faster than the timer, but no longer load-
 bearing for AC4/H6, which the pull-model timer already carries.
+
+## Process rules (2026-07-31)
+
+Cross-cutting rules distilled from this week's dev-staging work and the
+2026-07-31 msc3861/digest incidents (full incident write-up: the sibling
+`docs/deployment-recovery-reference.md`, "Incident references" and "Image
+pinning policy" sections). These apply beyond this one runbook — to any
+promotion or recovery on this stack, dev-staging or prod.
+
+1. **Digests are truth, tags are hints.** All promotion decisions, parity
+   checks, and recovery pulls compare/pull image DIGESTS — never verify by
+   tag name. Proven necessary, not theoretical: `element-web:sha-4a3d434`
+   was observed to resolve to different bytes at two different points this
+   week, under the identical tag string (see `29beb88`). A tag, including a
+   commit-sha tag, is a label someone (or some CI run) can move; a
+   `sha256:` digest is the only thing that names immutable content. Compare
+   with `docker buildx imagetools inspect <image>:<tag>` (prints a
+   `Digest:` line without pulling) and, for what is actually running,
+   `docker inspect --format='{{.Image}}' <container>` piped into
+   `docker image inspect --format '{{join .RepoDigests ", "}}'` — never by
+   eyeballing the tag string. See `docs/deployment-recovery-reference.md`,
+   "Image pinning policy", for the full worked commands.
+
+2. **Promotion gate.** Before anything ships to prod, dev-staging must have
+   run the EXACT digest being promoted, verified by the standard battery
+   (section 6 above) plus an end-to-end login. "Ran something with the same
+   tag name" does not satisfy this gate — see rule 1. (After the upcoming
+   branch-flow change: dev floats `:dev` continuously for fast iteration,
+   but the dev→main promotion step itself stays a digest comparison, not a
+   tag comparison.)
+
+3. **.env hygiene.** Never `cat`/print a `.env` file anywhere — not in a
+   terminal transcript, not in chat, not in a CI log. Two signing-key
+   exposures happened THIS WEEK via careless dumps. Verify a key/line is
+   present with `grep -c '^KEY_NAME=' .env` (a count, never the content);
+   edit with `sed` or a scripted replacement, not an interactive editor
+   session that could be screen-shared or logged. Treat any secret that WAS
+   printed as burned — rotate it immediately, don't wait to see whether it
+   "probably" leaked.
+
+4. **One-way migrations.** Synapse schema migrations do not roll back.
+   Snapshot the DB before any version-crossing deploy, on dev-staging as
+   well as prod — dev-staging is not exempt just because it is
+   disposable-in-theory; in practice it's where the same one-way migration
+   gets exercised first, and a broken dev-staging DB still costs a rebuild.
+
+5. **Landmines and timer semantics stay load-bearing — don't let them rot.**
+   This rule set sits on top of the box-specific notes already in this doc,
+   it does not replace them. In particular:
+   - **Landmine 2** (the dormant `aquafier-js` duplicate proxy pair, §0) is
+     a standing hazard, not a one-time gotcha: `docker compose` invoked from
+     `/home/dev/aquafier-js/deployment/` with an explicit
+     `-f docker-compose-dev.yml` still resurrects a second nginx-proxy/acme
+     pair that would fight Caddy for 80/443, on this box, today. Any future
+     runbook or agent touching that directory must restate this, not assume
+     the reader (human or agent) remembers it from here.
+   - The **CI timer semantics** in §9 (pull-model
+     `matrix-staging-deploy.timer` as PRIMARY convergence mechanism; the
+     push-model `deploy-dev-staging` CI job as SECONDARY and dormant without
+     `DEV_STAGING_DEPLOY_KEY`) are the current source of truth for "how does
+     dev-staging actually converge." Re-verify both still hold — which
+     mechanism is primary, whether the secret has since been wired in —
+     before relying on either in a future recovery; treat this section as a
+     dated snapshot, the same way "Current prod reality" in
+     `docs/deployment-recovery-reference.md` is dated.
