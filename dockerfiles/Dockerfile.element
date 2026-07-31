@@ -86,6 +86,33 @@ COPY config/element-sw-boot.js /app/sw-boot.js
 RUN sed -i 's|<head>|<head><script src="sw-boot.js"></script>|' /app/index.html \
     && grep -q '<head><script src="sw-boot.js"></script>' /app/index.html
 
+# Per-build sw.js identity stamp (2026-07-31 wedged-SW incident). Browsers only
+# replace an installed service worker when sw.js's BYTES change; our source
+# builds produce byte-identical sw.js across deploys (verified: prod and dev
+# sw.js shared one sha1), so a wedged registration — respondWith() that never
+# settles, silently hanging every media fetch forever — survives every deploy
+# with no user-visible error. Upstream's sw.js calls skipWaiting() on the
+# install event and clients.claim() on the activate event, so a byte change
+# alone evicts a wedged instance on the user's next navigation with zero user
+# action. This re-lands the concept from b781b89 that 9f67ed9 reverted as
+# "dead weight" — the incident proved it load-bearing. Stamp combines the
+# index.html bundle hash with a build-UTC timestamp so even two builds with
+# identical bundles still differ. Locally, with a warm Docker layer cache, a
+# fully-unchanged build reuses this cached layer (and therefore the image
+# digest) unchanged, which is not a new deploy, so no stamp change happens
+# there. CI (.github/workflows/docker.yml) configures no cache-from/cache-to,
+# so every CI build starts cold and stamps a fresh timestamp — and therefore
+# a fresh digest — on every run regardless of whether the tree changed; that
+# is expected and harmless, since a fresh sw.js still evicts any wedged
+# instance, it just also does so on an unchanged rebuild. The `test -s` guard
+# makes a missing /app/sw.js (upstream ever stops shipping one) fail the
+# build loudly here rather than silently produce a stamp-only file. sw.js is
+# served with Cache-Control public, max-age=14400, must-revalidate
+# (config/element-nginx.conf), but browsers bypass the HTTP cache for SW
+# update checks by default (updateViaCache "imports"), so the stamp still
+# reaches clients on their next navigation regardless of that max-age.
+RUN test -s /app/sw.js && printf '\n// build: %s %s\n' "$(sha1sum /app/index.html | cut -c1-20)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /app/sw.js
+
 # nginx-unprivileged's default server serves /usr/share/nginx/html. Point that
 # at /app via a symlink (same as upstream element-web's app Dockerfile) so the
 # source-built bundle is served without touching the nginx config, and the
