@@ -238,16 +238,21 @@ untouched per this task's explicit scope:
 - Live has NO top-level Caddyfile snippets (`(strip_upstream_cors)` /
   `(public_cors)`); every site inlines the equivalent `header_down`/`header`
   lines instead. The repo copy defines both snippets and `import`s them.
-- Live's `.well-known/matrix/client` JSON carries a FLAT top-level key
-  `"m.authentication.account"` where the repo copy nests `account` inside
-  `m.authentication`. The flat form is NOT a bug to fix blindly: it is the
-  shape deliberately deployed 2026-05-25 as part of the Element X
-  passkey-first login fix (see siwx-oidc CLAUDE.md, "Fixes deployed
-  2026-05-25") and Element X has worked against it since. Deploying the repo
-  copy's nested form verbatim would change that surface and risks regressing
-  Element X login. Any reconciliation (either direction) needs its own
-  decision + Element X regression test; the 2026-07-31 hardening deliberately
-  preserves the live flat form byte-identically.
+- ~~Live's `.well-known/matrix/client` carried a FLAT top-level
+  `"m.authentication.account"` key~~ **RECONCILED 2026-08-01 (Tim's decision:
+  nested-only).** The flat key was proven dead before removal: the literal
+  string appears nowhere in the served Element Web bundle (grep of
+  /app/bundles — no JSON consumer can read a key whose name its code never
+  mentions), matrix-rust-sdk/ruma parse typed structs keyed on the nested
+  names, and current Element Web/X use `/_matrix/client/v1/auth_metadata`
+  discovery (bundle references neither `m.authentication` name at all). The
+  2026-05-25 Element X fix credit belongs to `prompt_values_supported`; the
+  flat key rode along in that deploy and was never load-bearing. Live prod
+  now serves the nested `{issuer, account}` form — identical to dev, this
+  repo copy (Caddyfile.production L58), and MAS-style compat. Backup:
+  `Caddyfile.bak.20260801090301` on the box. Residual (low): one Element X
+  login check from a real device at leisure — removal cannot affect it (key
+  unreadable), the nested add matches dev where logins work.
 - Live has an MSC4191 in-client device sign-out redirect (`@siwx_device_delete`
   matcher + `/_matrix/client/v3/delete_devices` handle, both routed to
   siwx-oidc) that the repo copy does not have at all.
