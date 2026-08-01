@@ -8,7 +8,7 @@
 #
 # Distinct host ports vs siwx-real-* (8081/8448/8450) and the mock (8080/8090):
 #   caddy edge 18080, siwx-oidc 18081 (via caddy), synapse 18448,
-#   livekit 7880 + 7881/tcp + 50100-50200/udp.
+#   livekit 7880 + 7881/tcp + 20100-20200/udp.
 #
 # Run (where a compose engine exists):
 #   scripts/gen-e2e-env.sh
@@ -99,7 +99,12 @@ services:
     ports:
       - "7880:7880"
       - "7881:7881/tcp"
-      - "50100-50200:50100-50200/udp"
+      # Must match rtc.port_range_start/end in config/livekit.e2e.yaml (and the
+      # LIVEKIT_RTC_UDP_* values scripts/gen-e2e-env.sh writes for up.sh, which
+      # is the live bring-up on this box). This publish had been left on the old
+      # 50100-50200 range after the config moved, so the compose spec bound 101
+      # ports the SFU was never listening on.
+      - "20100-20200:20100-20200/udp"
     volumes:
       - ./config/livekit.e2e.yaml:/etc/livekit.yaml:ro
     networks:

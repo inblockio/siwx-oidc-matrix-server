@@ -168,7 +168,12 @@ services:
       LIVEKIT_KEYS: "${LIVEKIT_KEY}: ${LIVEKIT_SECRET}"
     ports:
       - "7881:7881/tcp"
-      - "50100-50200:50100-50200/udp"
+      # Below the Linux ephemeral range (32768-60999). MUST match
+      # rtc.port_range_start/end in config/livekit.yaml — this file mounts the
+      # SAME config as production, so the two move together. `ufw allow
+      # 20100:20200/udp` on this box before converging, or media dies silently
+      # (T4, docs/superpowers/plans/2026-08-01-av-hardening-config.md).
+      - "20100-20200:20100-20200/udp"
     volumes:
       - ./config/livekit.yaml:/etc/livekit.yaml:ro
     networks:
