@@ -101,7 +101,30 @@
 		reverse_proxy siwx-e2eh-lk-jwt:8080
 	}
 
-	# --- MatrixRTC: LiveKit SFU WebSocket signaling -----------------------------
+	# --- MatrixRTC: LiveKit SFU -------------------------------------------------
+	# Port 7880 muxes WebSocket signaling AND the Twirp management API, which no
+	# upstream flag can split or disable, so the edge is the only place to
+	# restrict it (S3, 2026-08-01 av-hardening audit; Caddyfile.production
+	# carries the full rationale). Kept here so the harness exercises the same
+	# routing, though this stack's lk-jwt talks to the SFU directly and never
+	# crosses this edge — so a green harness does NOT validate the production
+	# hairpin, only that the block does not break ordinary SFU traffic.
+	@livekit_twirp_public {
+		not remote_ip private_ranges
+	}
+	handle /livekit/sfu/twirp/* {
+		respond @livekit_twirp_public 403
+		uri strip_prefix /livekit/sfu
+		reverse_proxy siwx-e2eh-livekit:7880
+	}
+
+	# Bare path: `/livekit/sfu/*` does not match `/livekit/sfu`, so without this
+	# exact-match block the bare path 404s. Same idiom as /livekit/jwt.
+	handle_path /livekit/sfu {
+		reverse_proxy siwx-e2eh-livekit:7880
+	}
+
+	# Everything else under the SFU (/rtc, /rtc/validate, …).
 	handle_path /livekit/sfu/* {
 		reverse_proxy siwx-e2eh-livekit:7880
 	}
