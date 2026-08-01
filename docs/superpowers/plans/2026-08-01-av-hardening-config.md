@@ -310,3 +310,7 @@ pair, which must move together).
 - Nothing is applied to prod by this pipeline. Dev-staging changes are reversible and coordinated (firewall additions additive).
 - Never `mv`/`sed -i` the bind-mounted portal Caddyfile on prod (promotion runbook must respect this).
 - Out of scope: TURN/coturn for legacy VoIP (legacy is disabled via `use_exclusively`), LiveKit embedded TURN enablement (needs 443/5349 planning — record as future work), the mis-nested Synapse retention block (separate known issue, needs Tim's intent), apex-domain `.well-known` 404, focus_selection interop divergence (upstream, tracking only).
+
+## 2026-08-02 addendum
+
+The T10 checklist's 1-PARTIAL result (Element browser check, H8) is now explained: it wasn't a gap in that check, it was validating the wrong layer. On-box/synthetic test calls ride the private docker-bridge path end to end, which masks a separate, more serious defect — LiveKit being multi-homed (compose-default net + shared proxy net) and advertising the private proxy-net IP as if it were an external ICE candidate, so a *real* external client's ICE selection can pick the unreachable candidate and get zero media even though the server side looks perfectly healthy. This was root-caused and fixed (dev-staging, validated live) on 2026-08-02; see `docs/superpowers/plans/2026-08-02-video-call-audit.md` for the full hypothesis register, the fix (`config/livekit.yaml` `rtc.ips.excludes`), and the prod promotion addendum.
