@@ -86,6 +86,7 @@ COPY config/element-nginx-security-headers.inc /etc/nginx/conf.d/element-securit
 COPY config/element-config.json /app/config.json
 COPY config/element-theme-overrides.css /app/element-theme-overrides.css
 COPY config/inblockio_logo_dark.png /app/inblockio_logo_dark.png
+COPY config/element-welcome-background.svg /app/welcome-background.svg
 COPY config/favicon.ico /app/favicon.ico
 COPY config/favicon-24.png /app/favicon-24.png
 COPY config/favicon-120.png /app/favicon-120.png

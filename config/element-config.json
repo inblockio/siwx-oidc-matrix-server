@@ -11,6 +11,12 @@
   "disable_guests": true,
   "disable_login_language_selector": true,
   "brand": "inblock.io Chat",
+  "branding": {
+    "auth_header_logo_url": "inblockio_logo_dark.png",
+    "logo_link_url": "https://inblock.io",
+    "welcome_background_url": "welcome-background.svg",
+    "auth_footer_links": [{ "text": "inblock.io", "url": "https://inblock.io" }]
+  },
   "default_theme": "custom-inblock.io Dark",
   "element_call": {
     "url": "https://call.element.io",
