@@ -140,6 +140,17 @@ services:
       - "20100-20200:20100-20200/udp"
     volumes:
       - ./config/livekit.yaml:/etc/livekit.yaml:ro
+    healthcheck:
+      # busybox wget (the image has no curl); GET / is LiveKit's unauthenticated
+      # liveness endpoint. It answers 406 until the node publishes its first
+      # stats tick — measured 8s from container start on v1.12.0, most of it the
+      # use_external_ip STUN lookup — hence start_period. Verified against
+      # livekit/livekit-server:v1.12.0 + this config on 2026-08-01.
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:7880/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     networks:
       - portal-net
       - default
@@ -167,6 +178,8 @@ services:
       LIVEKIT_FULL_ACCESS_HOMESERVERS: "${MATRIX_HOST}"
     depends_on:
       matrix_synapse:
+        condition: service_healthy
+      livekit:
         condition: service_healthy
     networks:
       - portal-net

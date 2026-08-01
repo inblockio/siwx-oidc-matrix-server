@@ -176,6 +176,15 @@ services:
       - "20100-20200:20100-20200/udp"
     volumes:
       - ./config/livekit.yaml:/etc/livekit.yaml:ro
+    healthcheck:
+      # busybox wget (no curl in the image); GET / 406s until the node's first
+      # stats tick (~8s from start, mostly the use_external_ip STUN lookup),
+      # hence start_period. Mirrors docker-compose.yml.
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:7880/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     networks:
       - default
       - proxy_net
@@ -206,6 +215,8 @@ services:
       LIVEKIT_FULL_ACCESS_HOMESERVERS: "${MATRIX_HOST}"
     depends_on:
       matrix_synapse:
+        condition: service_healthy
+      livekit:
         condition: service_healthy
     networks:
       - default
