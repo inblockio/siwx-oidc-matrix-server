@@ -16,5 +16,3 @@ logging:
   level: info
 turn:
   enabled: false
-keys:
-  placeholder: "overridden-by-env-vars"
