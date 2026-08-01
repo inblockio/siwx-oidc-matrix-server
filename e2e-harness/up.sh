@@ -16,6 +16,9 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${REPO_ROOT}/.env.e2e"
 NET="siwx-e2eh-net"
 
+# Same env-overridable digest pin as docker-compose.yml / docker-compose.e2e.yml.
+LK_JWT_IMAGE_REF="${LK_JWT_IMAGE_REF:-ghcr.io/element-hq/lk-jwt-service:0.5.0@sha256:29918567e6b7cd920e2853b4cd6848ce01b79947c3d19a9f1ed5b74f0a2a88bf}"
+
 FRESH=0
 [ "${1:-}" = "--fresh" ] && FRESH=1
 
@@ -108,6 +111,11 @@ podman run -d --name siwx-e2eh-livekit --network "${NET}" --restart unless-stopp
   livekit/livekit-server:v1.12.0 --config /etc/livekit.yaml >/dev/null
 
 # 8. lk-jwt-service (internal :8080; reached via caddy /livekit/jwt)
+#    Digest-pinned to the SAME ref production runs (docker-compose.yml), so the
+#    harness exercises the pinned binary rather than the moving `latest` label.
+#    LIVEKIT_FULL_ACCESS_HOMESERVERS is the harness's own server name, not "*":
+#    v0.5.0 refuses to boot without it, and an explicit host exercises the same
+#    allowlist parsing prod uses (startup echoes the parsed value).
 #    INSECURE_SKIP_VERIFY must be the EXACT magic string YES_I_KNOW_WHAT_I_AM_DOING
 #    ("true" is silently ignored), so lk-jwt accepts the self-signed cert the
 #    federation TLS shim (step 8b) presents on localhost:8448.
@@ -117,9 +125,9 @@ podman run -d --name siwx-e2eh-lk-jwt --network "${NET}" --restart unless-stoppe
   -e LIVEKIT_KEY="${LIVEKIT_KEY}" \
   -e LIVEKIT_SECRET="${LIVEKIT_SECRET}" \
   -e LIVEKIT_JWT_BIND=":8080" \
-  -e LIVEKIT_FULL_ACCESS_HOMESERVERS="*" \
+  -e LIVEKIT_FULL_ACCESS_HOMESERVERS="${MATRIX_SERVER_NAME}" \
   -e LIVEKIT_INSECURE_SKIP_VERIFY_TLS="YES_I_KNOW_WHAT_I_AM_DOING" \
-  ghcr.io/element-hq/lk-jwt-service:latest >/dev/null
+  "${LK_JWT_IMAGE_REF}" >/dev/null
 
 # 8b. Federation TLS shim — runs IN siwx-e2eh-lk-jwt's network namespace so its
 #     localhost:8448 IS the loopback lk-jwt dials when resolving the "localhost"

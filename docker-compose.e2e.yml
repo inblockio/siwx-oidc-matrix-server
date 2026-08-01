@@ -111,7 +111,9 @@ services:
       - siwx-e2eh-net
 
   siwx-e2eh-lk-jwt:
-    image: ghcr.io/element-hq/lk-jwt-service:latest
+    # Same digest pin as docker-compose.yml, so the harness exercises the binary
+    # production runs instead of the moving `latest` label.
+    image: ${LK_JWT_IMAGE_REF:-ghcr.io/element-hq/lk-jwt-service:0.5.0@sha256:29918567e6b7cd920e2853b4cd6848ce01b79947c3d19a9f1ed5b74f0a2a88bf}
     container_name: siwx-e2eh-lk-jwt
     restart: unless-stopped
     environment:
@@ -124,9 +126,10 @@ services:
       LIVEKIT_KEY: "${LIVEKIT_KEY}"
       LIVEKIT_SECRET: "${LIVEKIT_SECRET}"
       LIVEKIT_JWT_BIND: ":8080"
-      # Required by recent lk-jwt-service builds: homeservers allowed to create
-      # rooms. "*" = any (fine for a hermetic single-homeserver harness).
-      LIVEKIT_FULL_ACCESS_HOMESERVERS: "*"
+      # Mandatory since v0.5.0 (the container exits at startup without it).
+      # Kept an EXPLICIT host — the harness's own server name — rather than "*",
+      # so it exercises the same allowlist parsing production does.
+      LIVEKIT_FULL_ACCESS_HOMESERVERS: "${MATRIX_SERVER_NAME}"
       # MUST be this EXACT magic string ("true" is silently ignored) so lk-jwt
       # accepts the self-signed cert the federation TLS shim presents on
       # localhost:8448 (see siwx-e2eh-fed-proxy below + R3 root-cause notes).
