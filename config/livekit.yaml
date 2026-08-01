@@ -10,6 +10,18 @@ rtc:
   port_range_start: 20100
   port_range_end: 20200
   use_external_ip: true
+  # The livekit container is attached to TWO docker networks: its own compose
+  # default net (STUN maps it to the host's public IP) and the shared reverse-
+  # proxy net (172.18.0.0/16) that exists only so Caddy can reach :7880. STUN
+  # fails on the proxy-net interface and LiveKit then advertises that private
+  # bridge IP AS IF it were external ("using external IPs" lists two entries).
+  # When a real client's ICE selects it, DTLS times out and the call carries
+  # no media. Excluding the proxy-net subnet removes that candidate entirely.
+  # VERIFY after every restart: `docker logs <livekit> | grep 'using external
+  # IPs'` must show exactly ONE entry (the public IP).
+  ips:
+    excludes:
+      - "172.18.0.0/16"
 room:
   auto_create: false
 logging:
