@@ -1,0 +1,161 @@
+diff --git a/apps/web/src/components/views/auth/LoginWithQR.tsx b/apps/web/src/components/views/auth/LoginWithQR.tsx
+index 257d2af..d779da8 100644
+--- a/apps/web/src/components/views/auth/LoginWithQR.tsx
++++ b/apps/web/src/components/views/auth/LoginWithQR.tsx
+@@ -423,6 +423,7 @@ export default class LoginWithQR extends React.Component<Props, IState> {
+                 code={this.state.phase === Phase.ShowingQR ? this.state.rendezvous?.code : undefined}
+                 failureReason={this.state.failureReason}
+                 userCode={this.state.userCode}
++                verificationUri={this.state.verificationUri}
+                 intent={this.props.intent}
+             />
+         );
+diff --git a/apps/web/src/components/views/auth/LoginWithQRFlow.tsx b/apps/web/src/components/views/auth/LoginWithQRFlow.tsx
+index 6b5a213..1566a35 100644
+--- a/apps/web/src/components/views/auth/LoginWithQRFlow.tsx
++++ b/apps/web/src/components/views/auth/LoginWithQRFlow.tsx
+@@ -51,6 +51,16 @@ interface Props {
+      * The 6 digit user code to render in Phase.WaitingForDevice
+      */
+     userCode?: string;
++    /**
++     * inblock.io vendored patch (auto-approve-check-code): the OIDC device-flow
++     * approval URL, rendered as a fallback link in Phase.WaitingForDevice for the
++     * reciprocate intent. The parent opens it via window.open() at approval time,
++     * but that call now originates from an `input` event (auto-approve), which
++     * Firefox's popup blocker gates by event type — and strict popup settings
++     * block even the click-originated open upstream ships. The visible link keeps
++     * the flow completable whenever the popup is swallowed.
++     */
++    verificationUri?: string;
+ }
+ 
+ /**
+@@ -61,10 +71,96 @@ interface Props {
+ export default class LoginWithQRFlow extends React.Component<Props> {
+     private checkCodeInput = createRef<HTMLInputElement>();
+ 
++    // inblock.io vendored patch (auto-approve-check-code): approve as soon as both
++    // check-code digits are typed. The MSC4108 security property is the deliberate
++    // reading + typing of the code shown on the other device, not the extra
++    // Continue click after it. The listener is attached to the native input
++    // through the existing ref (upstream already treats the ref as the single
++    // input holding the full value), so no compound-web prop forwarding is relied
++    // upon. approveInFlight guards BOTH the auto path and the Continue button:
++    // matrix-js-sdk's deviceAuthorizationGrant has no reentrancy protection, and a
++    // second Click.Approve during the in-flight window desyncs the rendezvous
++    // channel (UnexpectedMessageReceived). lastAutoSubmittedCode prevents a
++    // submit loop after a CheckCodeMismatch (the same value never auto-fires
++    // twice — the Continue button remains as the manual path) and is reset per
++    // input node / per re-entry into the check-code phase, since a QR re-roll
++    // mints a new check code that may collide with the previous value. The caret
++    // fix is caretColor, not blur alone: BaseDialog wraps this flow in FocusLock
++    // (returnFocus), which can immediately revert a blur().
++    private autoApproveAttachedTo: HTMLInputElement | null = null;
++    private lastAutoSubmittedCode: string | null = null;
++    private approveInFlight = false;
++
++    public componentDidMount(): void {
++        this.syncAutoApproveListener();
++    }
++
++    public componentDidUpdate(prevProps: Readonly<Props>): void {
++        this.syncAutoApproveListener();
++        if (this.props.phase !== prevProps.phase && this.props.phase === Phase.OutOfBandConfirmation) {
++            this.lastAutoSubmittedCode = null;
++        }
++        if (
++            this.props.failureReason === LoginWithQRFailureReason.CheckCodeMismatch &&
++            prevProps.failureReason !== this.props.failureReason
++        ) {
++            // Mismatch recovery: the field is full (maxLength), so without this the
++            // user must click in and clear it by hand before retyping.
++            const input = this.checkCodeInput.current;
++            if (input) {
++                input.style.caretColor = "";
++                input.focus();
++                input.select();
++            }
++        }
++    }
++
++    public componentWillUnmount(): void {
++        this.autoApproveAttachedTo?.removeEventListener("input", this.onCheckCodeInput);
++        this.autoApproveAttachedTo = null;
++    }
++
++    private syncAutoApproveListener(): void {
++        const input = this.checkCodeInput.current;
++        if (input === this.autoApproveAttachedTo) return;
++        this.autoApproveAttachedTo?.removeEventListener("input", this.onCheckCodeInput);
++        this.autoApproveAttachedTo = input;
++        this.lastAutoSubmittedCode = null;
++        input?.addEventListener("input", this.onCheckCodeInput);
++    }
++
++    private onCheckCodeInput = (): void => {
++        const input = this.checkCodeInput.current;
++        if (!input) return;
++        const value = input.value;
++        if (!/^\d{2}$/.test(value)) {
++            input.style.caretColor = "";
++            return;
++        }
++        if (value === this.lastAutoSubmittedCode || this.approveInFlight) return;
++        this.lastAutoSubmittedCode = value;
++        this.approveInFlight = true;
++        input.style.caretColor = "transparent";
++        input.blur();
++        void this.props.onClick(Click.Approve, value).finally(() => {
++            this.approveInFlight = false;
++        });
++    };
++
+     private handleClick = (type: Click): ((e: React.FormEvent) => Promise<void>) => {
+         return async (e: React.FormEvent): Promise<void> => {
+             e.preventDefault();
+-            await this.props.onClick(type, type === Click.Approve ? this.checkCodeInput.current?.value : undefined);
++            if (type === Click.Approve) {
++                if (this.approveInFlight) return;
++                this.approveInFlight = true;
++                try {
++                    await this.props.onClick(type, this.checkCodeInput.current?.value);
++                } finally {
++                    this.approveInFlight = false;
++                }
++                return;
++            }
++            await this.props.onClick(type, undefined);
+         };
+     };
+ 
+@@ -340,7 +436,16 @@ export default class LoginWithQRFlow extends React.Component<Props> {
+                             {this.simpleSpinner(_t("auth|qr_code_login|waiting_for_device"))}
+                         </>
+                     ) : (
+-                        this.simpleSpinner(_t("auth|qr_code_login|waiting_for_device"))
++                        <>
++                            {this.simpleSpinner(_t("auth|qr_code_login|waiting_for_device"))}
++                            {this.props.verificationUri && (
++                                <Text size="md">
++                                    <a href={this.props.verificationUri} target="_blank" rel="noreferrer noopener">
++                                        {_t("auth|qr_code_login|open_approval_page")}
++                                    </a>
++                                </Text>
++                            )}
++                        </>
+                     );
+                 buttons = this.cancelButton();
+                 break;
+diff --git a/apps/web/src/i18n/strings/en_EN.json b/apps/web/src/i18n/strings/en_EN.json
+index 1671f79..7670072 100644
+--- a/apps/web/src/i18n/strings/en_EN.json
++++ b/apps/web/src/i18n/strings/en_EN.json
+@@ -261,6 +261,7 @@
+             "error_user_declined": "You or the account provider declined the sign in request.",
+             "error_user_declined_title": "Sign in declined",
+             "follow_remaining_instructions": "Follow the remaining instructions",
++            "open_approval_page": "If the approval page did not open in a new tab, open it here.",
+             "open_element_mobile_device": "Open %(brand)s on your mobile device",
+             "open_element_other_device": "Open %(brand)s on your other device",
+             "point_the_camera": "Scan the QR code shown here",

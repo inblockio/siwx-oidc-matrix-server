@@ -28,6 +28,13 @@ RUN git clone --depth 1 --branch "${ELEMENT_WEB_TAG}" \
 COPY patches/element-web/force-first-device-recovery.patch /tmp/ew.patch
 RUN git apply --verbose /tmp/ew.patch
 
+# QR-link check-code UX (2026-08-01): auto-approve once both MSC4108 check-code
+# digits are typed (the deliberate read+type is the security property, the extra
+# Continue click is not) and blur the input so no caret is left blinking after
+# the second digit. Same fail-loudly contract as the patch above.
+COPY patches/element-web/auto-approve-check-code.patch /tmp/ew-checkcode.patch
+RUN git apply --verbose /tmp/ew-checkcode.patch
+
 # Install exactly what the lockfile pins.
 RUN corepack enable && pnpm install --frozen-lockfile
 
