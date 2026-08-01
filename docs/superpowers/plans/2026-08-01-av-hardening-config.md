@@ -100,16 +100,209 @@ Known, deliberately not fixed here:
 
 ## Dev-staging validation checklist
 
-- [ ] `ufw allow 20100:20200/udp` applied BEFORE converging; old 50100 rule left until calls pass.
-- [ ] lk-jwt logs `LIVEKIT_FULL_ACCESS_HOMESERVERS: [dev.matrix.inblock.io]` — an explicit host, not `[*]` — and the container is not restart-looping.
-- [ ] `docker image inspect` digests match the pins for lk-jwt and synapse after a `compose pull`.
-- [ ] `docker compose ps` shows livekit `healthy` and lk-jwt started after it (the new `depends_on` gate).
-- [ ] `ss -ulnp` shows the SFU bound across 20100-20200 and nothing left on 50100-50200; a test call moves rtpStats packets > 0.
-- [ ] **Twirp hairpin (T6, gates promotion):** a local-user call sets up, lk-jwt's CreateRoom succeeds, and Caddy saw a PRIVATE `remote_ip` for that `/livekit/sfu/twirp/*` request.
-- [ ] `curl` `/livekit/sfu/twirp/livekit.RoomService/ListRooms` from off-box → 403.
-- [ ] `curl -w '%{http_code}' https://dev.matrix.inblock.io/livekit/sfu` → 200, not 404.
-- [ ] After a `docker compose restart matrix_synapse` on a REBUILT synapse image: the MatrixRTC block is re-asserted (delete `rc_message` from the live `homeserver.yaml`, restart, confirm it is back).
-- [ ] Element browser check: the call widget URL is the bundled `/widgets/element-call/…`, and a call connects (H8).
+Executed 2026-08-01 (validation lead) on dev-aquafire. Verdict: **9 PASS, 1 PARTIAL, 0 FAIL.**
+
+- [x] `ufw allow 20100:20200/udp` applied BEFORE converging; old 50100 rule left until calls pass. **PASS** — added additively at 19:17Z, `50100:50200/udp` deleted only after the media checks below.
+- [x] lk-jwt logs `LIVEKIT_FULL_ACCESS_HOMESERVERS: [dev.matrix.inblock.io]` and is not restart-looping. **PASS** — `LIVEKIT_FULL_ACCESS_HOMESERVERS: [dev.matrix.inblock.io]`, `RestartCount=0`.
+- [x] `docker image inspect` digests match the pins. **PASS** — lk-jwt `sha256:29918567…`, synapse `sha256:67b27c4e…` (`:dev`, built from the dev merge, created 19:13:35Z).
+- [x] livekit `healthy` and lk-jwt started after it. **PASS** — converge order `livekit Healthy` → `lk-jwt-service Starting`.
+- [x] `ss -ulnp` across 20100-20200, nothing on 50100-50200; media packets > 0. **PASS** — 101 UDP listeners on 20100-20200, 0 on 50100-50200; `lk perf load-test` through `wss://dev.matrix.inblock.io/livekit/sfu`: audio 750 pkts @ 20.9kbps, video 2040 pkts @ 1.2mbps, 0% loss; selected publisher candidate `udp4 host 207.154.209.103:20199`. Caveat: the test client ran ON the box, so the DNAT + range are proven but no off-box UDP source was used.
+- [x] **Twirp hairpin (T6, gates promotion).** **PASS on dev** — a real lk-jwt `POST /livekit/jwt/sfu/get` (Matrix OpenID token from a throwaway `did:key` login) returned a full-access JWT, and the Caddy access log shows its `CreateRoom` as `remote_ip: 172.18.0.1` (the Docker bridge gateway — PRIVATE) with `status: 200`. Same log window: the off-box `ListRooms` shows `remote_ip: 95.90.182.63` (public) → `403`. **This does NOT transfer to prod** — re-run it there before trusting the block (prod's floating/anchor IP is exactly the failure mode; see the runbook).
+- [x] off-box `ListRooms` → 403. **PASS** — `status=403`, empty body.
+- [x] bare `https://dev.matrix.inblock.io/livekit/sfu` → 200. **PASS** — `status=200` (control: `/livekit/sfu/rtc/validate` → 401, i.e. it still reaches the SFU).
+- [x] entrypoint re-asserts the MatrixRTC block after a restart. **PASS** — `rc_message` deleted from the live `/data/homeserver.yaml` (copy-edit-`docker cp` back, original backed up in-container), `docker restart` → healthy → `rc_message: {per_second: 0.5, burst_count: 30}` present again.
+- [ ] Element browser check (H8). **PARTIAL** — served `config.json` has no `element_call.url` (the `branding` block survives), the bundled widget is served (`/widgets/element-call/index.html` → 200), `.well-known` still advertises `livekit_service_url: https://dev.matrix.inblock.io/livekit/jwt`, and headless Chromium boots Element cleanly through to the siwx-oidc sign-in page. NOT verified: an in-browser click producing a `/widgets/element-call/…` widget URL and a connected call — that needs an interactive wallet/passkey login.
+
+Drift found and fixed during validation: the dev box's bind-mounted `config/element-config.json` still carried `element_call.url` (it is scp'd separately from the images, so T8 does not reach a box by merging alone). Applied from the merged `dev` branch file, preserving the box's welcome-branding block.
+
+Infrastructure finding (affects how much the UFW step is worth): `DOCKER-USER` is empty on dev, so ufw does NOT filter docker-published ports — media reaches 20100-20200 through the FORWARD/DNAT path regardless of the ufw rule. The rule is defence-in-depth and documentation, not the thing that opens the range. Expect the same on prod; do not read a green call as proof the firewall rule worked.
+
+## Prod promotion runbook (NOT executed — manual, deliberate)
+
+Written 2026-08-01 by the validation lead after the dev-staging gate above.
+Nothing here has been run against prod. Prod is `deploy@142.93.168.4`
+(`agentic.inblock.io`); stack dir `/home/deploy/matrix/stack/` (compose + `.env`
+only, no git checkout); edge is `portal-caddy-1` with the **bind-mounted**
+`/home/portal/portal/Caddyfile`.
+
+**Read first — three prod-specific traps.**
+
+1. **`deploy.sh` APPENDS Caddy blocks.** `deploy.sh` step [3/4] does
+   `grep -q "matrix.inblock.io" "$CADDYFILE" || cat >> "$CADDYFILE"` with a
+   hard-coded 2024-era vhost body (no `/livekit/*` routes, no MSC4143 rtc_foci
+   in `.well-known`). It is skipped only because the string is already present.
+   Never let it run against a Caddyfile that has been repaired by hand, and
+   never "clean up" the existing block hoping deploy.sh will re-add a good one —
+   it will append a WORSE one.
+2. **Never `mv` or `sed -i` the portal Caddyfile.** It is bind-mounted into
+   `portal-caddy-1`; `mv`/`sed -i` replace the inode and the container keeps
+   reading the old file (or an empty one). Always: back up, write a NEW file
+   elsewhere, `cp` it over the original (preserving the inode), validate, reload.
+3. **Ordering: `LIVEKIT_FULL_ACCESS_HOMESERVERS` must exist BEFORE the pinned
+   lk-jwt image first boots.** v0.5.0 exits at startup without it. In this diff
+   the var lives in `docker-compose.yml` (`${MATRIX_HOST}`), so it arrives with
+   the compose file — copy compose BEFORE `pull`/`up -d`, and confirm
+   `MATRIX_HOST` in prod's `.env` equals Synapse's `server_name`
+   (`matrix.inblock.io`), or local users lose full access.
+
+### 0. Pre-flight (record the rollback target)
+
+```bash
+ssh deploy@142.93.168.4
+cd /home/deploy/matrix/stack
+TS=$(date +%Y%m%d-%H%M)
+docker compose ps
+docker inspect $(docker compose ps -q lk-jwt-service) --format '{{.Image}}'
+docker compose images                     # record every digest, this is the rollback target
+sudo ufw status numbered
+grep -c '^MATRIX_HOST=matrix.inblock.io$' .env      # want 1
+docker exec matrix_synapse grep -E '^(server_name|rc_message)' /data/homeserver.yaml
+cp -p docker-compose.yml docker-compose.yml.bak-$TS
+cp -p .env .env.bak-$TS
+cp -p config/livekit.yaml config/livekit.yaml.bak-$TS
+cp -p config/element-config.json config/element-config.json.bak-$TS
+sudo cp -p /home/portal/portal/Caddyfile /home/portal/portal/Caddyfile.bak-$TS
+```
+
+### 1. Firewall (additive; keep the old rule)
+
+```bash
+sudo ufw allow 20100:20200/udp comment 'livekit media (new range)'
+sudo ufw status numbered            # both ranges present now
+sudo iptables -S DOCKER-USER        # if empty, ufw does NOT filter docker-published
+                                    # ports — the rule is defence-in-depth only
+```
+Do **not** delete `50100:50200/udp` until step 6's media check passes. Also check
+the DigitalOcean cloud firewall for the droplet (dev-aquafire has none; prod was
+**not verified** by this pipeline — if a cloud firewall exists it must allow
+20100-20200/udp too, and that is invisible from inside the box).
+
+### 2. Configs (copy, never `mv`; `livekit.yaml` and `element-config.json` are bind-mounted)
+
+From the workstation, with `fix/av-hardening-config` merged to `main`:
+
+```bash
+scp docker-compose.yml       deploy@142.93.168.4:/home/deploy/matrix/stack/.staging-compose.yml
+scp config/livekit.yaml      deploy@142.93.168.4:/home/deploy/matrix/stack/.staging-livekit.yaml
+scp config/element-config.json deploy@142.93.168.4:/home/deploy/matrix/stack/.staging-element.json
+```
+On the box (backups from step 0 already exist):
+```bash
+cd /home/deploy/matrix/stack
+cp .staging-compose.yml  docker-compose.yml
+cp .staging-livekit.yaml config/livekit.yaml
+cp .staging-element.json config/element-config.json     # diff FIRST — prod may carry
+                                                        # branding/host edits not in git
+docker compose config >/dev/null && echo "compose parses"
+```
+`config/element-config.json` is the one file most likely to have hand-applied
+prod-only content: `diff` it against the repo copy and hand-merge rather than
+blind-overwrite (this exact drift bit dev — see the checklist note).
+
+### 3. Portal Caddyfile (the bind-mount procedure)
+
+```bash
+sudo cp -p /home/portal/portal/Caddyfile /tmp/Caddyfile.work
+# edit /tmp/Caddyfile.work: inside the matrix.inblock.io site block, replace the
+# single `handle_path /livekit/sfu/*` with the three blocks from
+# Caddyfile.production (@livekit_twirp_public + handle /livekit/sfu/twirp/*,
+# handle_path /livekit/sfu, handle_path /livekit/sfu/*), in that order.
+grep -n 'livekit' /tmp/Caddyfile.work            # sanity: twirp block precedes the wildcard
+sudo cp /tmp/Caddyfile.work /home/portal/portal/Caddyfile    # cp, NOT mv — keeps the inode
+docker exec portal-caddy-1 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+docker exec portal-caddy-1 caddy reload  --config /etc/caddy/Caddyfile
+```
+Duplication check before editing: `grep -c 'matrix.inblock.io {' /home/portal/portal/Caddyfile`
+must be 1. If deploy.sh ever appended a second block, fix that first — Caddy
+merges duplicate site blocks and the routing becomes unreadable.
+
+### 4. Images (digest-pinned; T7 needs the REBUILT synapse)
+
+Prod runs digest-pinned refs. Update `.env` image refs to the digests validated
+on dev (lk-jwt `sha256:29918567…` — same bytes as today's `latest`, only the tag
+label changes; synapse to the new `main` build that carries the
+`apply_matrixrtc_config` entrypoint — **T7 does nothing until that image is
+promoted**):
+
+```bash
+cd /home/deploy/matrix/stack
+sed 's|^LK_JWT_IMAGE_REF=.*|LK_JWT_IMAGE_REF=ghcr.io/element-hq/lk-jwt-service:0.5.0@sha256:29918567e6b7cd920e2853b4cd6848ce01b79947c3d19a9f1ed5b74f0a2a88bf|' .env > .env.new
+cp .env.new .env && rm .env.new && chmod 600 .env      # cp, not mv
+docker compose pull
+docker compose up -d
+docker compose ps                                       # livekit healthy, lk-jwt after it
+```
+
+### 5. Verification (each one is a gate)
+
+```bash
+# lk-jwt booted with an EXPLICIT allowlist, no restart loop
+docker logs --tail 5 $(docker compose ps -q lk-jwt-service)   # LIVEKIT_FULL_ACCESS_HOMESERVERS: [matrix.inblock.io]
+docker inspect $(docker compose ps -q lk-jwt-service) --format '{{.RestartCount}}'   # 0
+
+# media range moved, old range empty
+sudo ss -ulnp | grep -cE ':201[0-9][0-9]\b'      # 101
+sudo ss -ulnp | grep -cE ':50[12][0-9][0-9]\b'   # 0
+
+# entrypoint re-assert (only meaningful on the rebuilt image)
+docker exec matrix_synapse grep -c apply_matrixrtc_config /matrix_server.sh   # >0
+```
+From OFF the box:
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+  https://matrix.inblock.io/livekit/sfu/twirp/livekit.RoomService/ListRooms      # 403
+curl -s -o /dev/null -w '%{http_code}\n' https://matrix.inblock.io/livekit/sfu   # 200 (was 404)
+curl -s https://matrix.inblock.io/.well-known/matrix/client | jq '.["org.matrix.msc4143.rtc_foci"]'
+curl -s https://element.inblock.io/config.json | jq '.element_call'              # no "url" key
+```
+
+**The prod-specific gate — re-run the hairpin check here.** The dev result
+(`remote_ip 172.18.0.1`, private) does **not** transfer: prod has a
+floating/anchor IP, which is precisely the arrangement that would make lk-jwt's
+hairpin arrive with a PUBLIC source address and start 403ing full-access room
+creation. Prod's Caddy has **no access log**, so add one temporarily using the
+same bind-mount procedure as step 3 (`log { output stdout \n format json }`
+inside the `matrix.inblock.io` block), then:
+
+1. Start a real call as a local user (or replay the dev method: register an OIDC
+   client, authenticate a throwaway `did:key` with `siwx-oidc-auth`, mint a
+   Matrix OpenID token via `POST /_matrix/client/v3/user/{mxid}/openid/request_token`,
+   `POST /livekit/jwt/sfu/get`). Deactivate the throwaway account afterwards.
+2. `docker logs --since 5m portal-caddy-1 | grep CreateRoom` — the request must
+   show a PRIVATE `remote_ip` and `status: 200`.
+3. If it is PUBLIC: **roll back the Caddy change immediately** (step 7) and
+   re-scope the block (method/path-scoped, or `extra_hosts` + an internal
+   listener) before retrying. Calling is broken while it is public.
+
+Only after the media check passes:
+```bash
+sudo ufw delete allow 50100:50200/udp
+```
+
+### 6. Post-checks
+`docker compose ps` all healthy · a real Element Web call connects with audio and
+video · `docker logs matrix_synapse | grep -i cross-signing` clean ·
+`scripts/element-deploy-audit.sh` still 21/0.
+
+### 7. Rollback (any step, in reverse)
+
+```bash
+cd /home/deploy/matrix/stack
+cp docker-compose.yml.bak-$TS docker-compose.yml
+cp config/livekit.yaml.bak-$TS config/livekit.yaml
+cp config/element-config.json.bak-$TS config/element-config.json
+cp .env.bak-$TS .env && chmod 600 .env
+docker compose up -d                              # back to the recorded digests
+sudo cp /home/portal/portal/Caddyfile.bak-$TS /home/portal/portal/Caddyfile   # cp, not mv
+docker exec portal-caddy-1 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+docker exec portal-caddy-1 caddy reload  --config /etc/caddy/Caddyfile
+sudo ufw allow 50100:50200/udp comment 'livekit media (rollback)'
+sudo ufw delete allow 20100:20200/udp
+```
+The Caddy revert alone is enough to un-break calling if the hairpin turns out
+public — it is the only change in this set that can break a working call
+(the media-range move is the other; it reverts with the compose + livekit.yaml
+pair, which must move together).
 
 ## Boundary conditions
 - Work in a fresh git worktree off `main`; do not touch the dirty `fix/4s-tombstone-probe` checkout.
