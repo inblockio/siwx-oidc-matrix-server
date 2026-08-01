@@ -8,7 +8,7 @@
 #
 # Distinct host ports vs siwx-real-* (8081/8448/8450) and the mock (8080/8090):
 #   caddy edge 18080, siwx-oidc 18081 (via caddy), synapse 18448,
-#   livekit 7880 + 7881/tcp + 50100-50200/udp.
+#   livekit 7880 + 7881/tcp + 20100-20200/udp.
 #
 # Run (where a compose engine exists):
 #   scripts/gen-e2e-env.sh
@@ -99,24 +99,37 @@ services:
     ports:
       - "7880:7880"
       - "7881:7881/tcp"
-      - "50100-50200:50100-50200/udp"
+      # Must match rtc.port_range_start/end in config/livekit.e2e.yaml (and the
+      # LIVEKIT_RTC_UDP_* values scripts/gen-e2e-env.sh writes for up.sh, which
+      # is the live bring-up on this box). This publish had been left on the old
+      # 50100-50200 range after the config moved, so the compose spec bound 101
+      # ports the SFU was never listening on.
+      - "20100-20200:20100-20200/udp"
     volumes:
       - ./config/livekit.e2e.yaml:/etc/livekit.yaml:ro
     networks:
       - siwx-e2eh-net
 
   siwx-e2eh-lk-jwt:
-    image: ghcr.io/element-hq/lk-jwt-service:latest
+    # Same digest pin as docker-compose.yml, so the harness exercises the binary
+    # production runs instead of the moving `latest` label.
+    image: ${LK_JWT_IMAGE_REF:-ghcr.io/element-hq/lk-jwt-service:0.5.0@sha256:29918567e6b7cd920e2853b4cd6848ce01b79947c3d19a9f1ed5b74f0a2a88bf}
     container_name: siwx-e2eh-lk-jwt
     restart: unless-stopped
     environment:
+      # Internal URL, unlike production's public wss:// one: nothing in this
+      # harness consumes the SFU URL from a browser, so lk-jwt's RoomService
+      # hairpin never crosses the Caddy edge here (see T6 in
+      # docs/superpowers/plans/2026-08-01-av-hardening-config.md for why
+      # production cannot do the same).
       LIVEKIT_URL: "ws://siwx-e2eh-livekit:7880"
       LIVEKIT_KEY: "${LIVEKIT_KEY}"
       LIVEKIT_SECRET: "${LIVEKIT_SECRET}"
       LIVEKIT_JWT_BIND: ":8080"
-      # Required by recent lk-jwt-service builds: homeservers allowed to create
-      # rooms. "*" = any (fine for a hermetic single-homeserver harness).
-      LIVEKIT_FULL_ACCESS_HOMESERVERS: "*"
+      # Mandatory since v0.5.0 (the container exits at startup without it).
+      # Kept an EXPLICIT host — the harness's own server name — rather than "*",
+      # so it exercises the same allowlist parsing production does.
+      LIVEKIT_FULL_ACCESS_HOMESERVERS: "${MATRIX_SERVER_NAME}"
       # MUST be this EXACT magic string ("true" is silently ignored) so lk-jwt
       # accepts the self-signed cert the federation TLS shim presents on
       # localhost:8448 (see siwx-e2eh-fed-proxy below + R3 root-cause notes).

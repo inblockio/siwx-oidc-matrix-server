@@ -102,7 +102,28 @@
         reverse_proxy lk-jwt-service:8080
     }
 
-    # MatrixRTC: LiveKit SFU WebSocket signaling
+    # MatrixRTC: LiveKit SFU. Port 7880 muxes WebSocket signaling AND the Twirp
+    # management API, which no upstream flag can split or disable, so the edge
+    # is the only place to restrict it (S3, 2026-08-01 av-hardening audit;
+    # parity with Caddyfile.production, which carries the full rationale).
+    # Private-range callers pass through because lk-jwt's own CreateRoom call
+    # hairpins back in through here.
+    @livekit_twirp_public {
+        not remote_ip private_ranges
+    }
+    handle /livekit/sfu/twirp/* {
+        respond @livekit_twirp_public 403
+        uri strip_prefix /livekit/sfu
+        reverse_proxy livekit:7880
+    }
+
+    # Bare path: `/livekit/sfu/*` does not match `/livekit/sfu`, so without this
+    # exact-match block the bare path 404s. Same idiom as /livekit/jwt.
+    handle_path /livekit/sfu {
+        reverse_proxy livekit:7880
+    }
+
+    # Everything else under the SFU (/rtc, /rtc/validate, …).
     handle_path /livekit/sfu/* {
         reverse_proxy livekit:7880
     }

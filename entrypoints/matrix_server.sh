@@ -74,29 +74,14 @@ if [ -n "${SIWEOIDC_INTERNAL_URL:-}" ]; then
   yq -i ".experimental_features.msc3861.issuer_metadata.introspection_endpoint = \"${INTERNAL}/oauth2/introspect\"" /data/homeserver.yaml
 fi
 
-# Enable QR code login rendezvous server (MSC4108 2024 version)
-yq -i ".experimental_features.msc4108_enabled = true" /data/homeserver.yaml
-
-# MatrixRTC: enable experimental features for Element Call
-yq -i ".experimental_features.msc4143_enabled = true" /data/homeserver.yaml
-yq -i ".experimental_features.msc3266_enabled = true" /data/homeserver.yaml
-yq -i ".experimental_features.msc4222_enabled = true" /data/homeserver.yaml
-
-# Delayed events (MSC4140): auto-quit interrupted calls
-yq -i ".max_event_delay_duration = \"24h\"" /data/homeserver.yaml
-
-# Rate limiting for call heartbeats (every 5s per participant)
-yq -i ".rc_delayed_event_mgmt.per_second = 1" /data/homeserver.yaml
-yq -i ".rc_delayed_event_mgmt.burst_count = 20" /data/homeserver.yaml
-
-# Rate limiting for in-call E2EE key sharing (bursty room messages); values from
-# Element Call docs/self_hosting.md. Synapse defaults (0.2/10) can rate-limit calls.
-yq -i ".rc_message.per_second = 0.5" /data/homeserver.yaml
-yq -i ".rc_message.burst_count = 30" /data/homeserver.yaml
-
-# MatrixRTC transport: LiveKit SFU
-yq -i ".matrix_rtc.transports[0].type = \"livekit\"" /data/homeserver.yaml
-yq -i ".matrix_rtc.transports[0].livekit_service_url = \"https://${MATRIX_HOST}/livekit/jwt\"" /data/homeserver.yaml
+# MatrixRTC / call-hardening config (MSC4108/4143/3266/4222, delayed events,
+# rc_delayed_event_mgmt, rc_message, matrix_rtc.transports) used to live here,
+# first-boot-only. It is now applied by apply_matrixrtc_config() in the
+# always-run section below the first-boot guard, so template changes reach
+# already-provisioned deployments too (T7,
+# docs/superpowers/plans/2026-08-01-av-hardening-config.md; see
+# docs/2026-06-11-call-drop-analysis.md for the incident where rc_message had
+# to be hand-applied live with yq because this block was first-boot-only).
 
 #federation via well-known delegation (Caddy serves .well-known on port 443)
 yq -i ".serve_server_wellknown = false" /data/homeserver.yaml
@@ -117,6 +102,54 @@ echo "First boot: Synapse configured with MSC3861 delegated auth."
 
 else
   echo "Setup already completed! Skipping Setup"
+fi
+
+# -----------------------------------------------------------------------------
+# MatrixRTC / call-hardening config — ALWAYS RE-ASSERTED, EVERY BOOT.
+#
+# These are pure `yq -i` key assignments — idempotent, since re-applying the
+# same value is a no-op — so they are safe (and necessary) to run
+# unconditionally whenever /data/homeserver.yaml exists: right after
+# /start.py generate on first boot (above), AND on every later restart
+# against an already-generated homeserver.yaml. Before this restructure, this
+# block lived only inside the first-boot guard, so a template change here
+# would silently never reach an existing deployment — see
+# docs/2026-06-11-call-drop-analysis.md, where rc_message had to be
+# hand-applied live with yq plus a manual restart. T7,
+# docs/superpowers/plans/2026-08-01-av-hardening-config.md.
+# -----------------------------------------------------------------------------
+apply_matrixrtc_config() {
+  # Enable QR code login rendezvous server (MSC4108 2024 version)
+  yq -i ".experimental_features.msc4108_enabled = true" /data/homeserver.yaml
+
+  # MatrixRTC: enable experimental features for Element Call
+  yq -i ".experimental_features.msc4143_enabled = true" /data/homeserver.yaml
+  yq -i ".experimental_features.msc3266_enabled = true" /data/homeserver.yaml
+  yq -i ".experimental_features.msc4222_enabled = true" /data/homeserver.yaml
+
+  # Delayed events (MSC4140): auto-quit interrupted calls
+  yq -i ".max_event_delay_duration = \"24h\"" /data/homeserver.yaml
+
+  # Rate limiting for call heartbeats (every 5s per participant)
+  yq -i ".rc_delayed_event_mgmt.per_second = 1" /data/homeserver.yaml
+  yq -i ".rc_delayed_event_mgmt.burst_count = 20" /data/homeserver.yaml
+
+  # Rate limiting for in-call E2EE key sharing (bursty room messages); values from
+  # Element Call docs/self_hosting.md. Synapse defaults (0.2/10) can rate-limit calls.
+  yq -i ".rc_message.per_second = 0.5" /data/homeserver.yaml
+  yq -i ".rc_message.burst_count = 30" /data/homeserver.yaml
+
+  # MatrixRTC transport: LiveKit SFU
+  yq -i ".matrix_rtc.transports[0].type = \"livekit\"" /data/homeserver.yaml
+  yq -i ".matrix_rtc.transports[0].livekit_service_url = \"https://${MATRIX_HOST}/livekit/jwt\"" /data/homeserver.yaml
+}
+
+if [ -f /data/homeserver.yaml ]; then
+  apply_matrixrtc_config
+else
+  # /start.py generate above should have created this; if it somehow didn't,
+  # the final /start.py below will fail loudly on its own missing config.
+  echo "WARNING: /data/homeserver.yaml still missing after setup — skipping MatrixRTC config re-assert." >&2
 fi
 
 # Promote admin user if MATRIX_ADMIN_DID is set (idempotent, runs every boot).

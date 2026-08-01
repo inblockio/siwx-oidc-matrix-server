@@ -168,9 +168,23 @@ services:
       LIVEKIT_KEYS: "${LIVEKIT_KEY}: ${LIVEKIT_SECRET}"
     ports:
       - "7881:7881/tcp"
-      - "50100-50200:50100-50200/udp"
+      # Below the Linux ephemeral range (32768-60999). MUST match
+      # rtc.port_range_start/end in config/livekit.yaml — this file mounts the
+      # SAME config as production, so the two move together. `ufw allow
+      # 20100:20200/udp` on this box before converging, or media dies silently
+      # (T4, docs/superpowers/plans/2026-08-01-av-hardening-config.md).
+      - "20100-20200:20100-20200/udp"
     volumes:
       - ./config/livekit.yaml:/etc/livekit.yaml:ro
+    healthcheck:
+      # busybox wget (no curl in the image); GET / 406s until the node's first
+      # stats tick (~8s from start, mostly the use_external_ip STUN lookup),
+      # hence start_period. Mirrors docker-compose.yml.
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:7880/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     networks:
       - default
       - proxy_net
@@ -181,7 +195,10 @@ services:
     # run the IDENTICAL digest here (unlike redis), so the same default is
     # safe for both boxes; set explicitly in dev's .env anyway for clarity/
     # symmetry with REDIS_IMAGE_REF, not because the default would diverge.
-    image: ${LK_JWT_IMAGE_REF:-ghcr.io/element-hq/lk-jwt-service:latest@sha256:29918567e6b7cd920e2853b4cd6848ce01b79947c3d19a9f1ed5b74f0a2a88bf}
+    # Tag is "0.5.0" (GHCR drops the "v" of the v0.5.0 release); same digest as
+    # the previous `latest` pin, just no longer a moving label. See
+    # docker-compose.yml.
+    image: ${LK_JWT_IMAGE_REF:-ghcr.io/element-hq/lk-jwt-service:0.5.0@sha256:29918567e6b7cd920e2853b4cd6848ce01b79947c3d19a9f1ed5b74f0a2a88bf}
     restart: unless-stopped
     environment:
       LIVEKIT_URL: "wss://${MATRIX_HOST}/livekit/sfu"
@@ -201,6 +218,8 @@ services:
       LIVEKIT_FULL_ACCESS_HOMESERVERS: "${MATRIX_HOST}"
     depends_on:
       matrix_synapse:
+        condition: service_healthy
+      livekit:
         condition: service_healthy
     networks:
       - default

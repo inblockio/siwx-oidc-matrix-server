@@ -19,7 +19,6 @@
   },
   "default_theme": "custom-inblock.io Dark",
   "element_call": {
-    "url": "https://call.element.io",
     "use_exclusively": true,
     "brand": "inblock.io Call"
   },

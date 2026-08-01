@@ -132,9 +132,25 @@ services:
       LIVEKIT_KEYS: "${LIVEKIT_KEY}: ${LIVEKIT_SECRET}"
     ports:
       - "7881:7881/tcp"
-      - "50100-50200:50100-50200/udp"
+      # Below the Linux ephemeral range (32768-60999) so these listeners cannot
+      # collide with the host's own ephemeral source ports. MUST match
+      # rtc.port_range_start/end in config/livekit.yaml exactly, and the host
+      # firewall must allow 20100:20200/udp before this is rolled out (T4,
+      # docs/superpowers/plans/2026-08-01-av-hardening-config.md).
+      - "20100-20200:20100-20200/udp"
     volumes:
       - ./config/livekit.yaml:/etc/livekit.yaml:ro
+    healthcheck:
+      # busybox wget (the image has no curl); GET / is LiveKit's unauthenticated
+      # liveness endpoint. It answers 406 until the node publishes its first
+      # stats tick — measured 8s from container start on v1.12.0, most of it the
+      # use_external_ip STUN lookup — hence start_period. Verified against
+      # livekit/livekit-server:v1.12.0 + this config on 2026-08-01.
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:7880/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     networks:
       - portal-net
       - default
@@ -145,23 +161,39 @@ services:
     # (verified 2026-07-31 via `docker inspect` on agentic.inblock.io;
     # dev-staging runs the SAME digest, so this default is safe for both
     # boxes' next `up -d`).
-    image: ${LK_JWT_IMAGE_REF:-ghcr.io/element-hq/lk-jwt-service:latest@sha256:29918567e6b7cd920e2853b4cd6848ce01b79947c3d19a9f1ed5b74f0a2a88bf}
+    # Tag is "0.5.0": GHCR drops the "v" of the v0.5.0 release (2026-06-03), and
+    # both `0.5.0` and `latest` resolved to the digest below when checked
+    # against the GHCR API on 2026-08-01. Same bytes as the previous pin — this
+    # only replaces the moving `latest` label, so a `compose pull` can no longer
+    # change call behavior unannounced (which is how the hard
+    # LIVEKIT_FULL_ACCESS_HOMESERVERS requirement below arrived unnoticed).
+    image: ${LK_JWT_IMAGE_REF:-ghcr.io/element-hq/lk-jwt-service:0.5.0@sha256:29918567e6b7cd920e2853b4cd6848ce01b79947c3d19a9f1ed5b74f0a2a88bf}
     restart: unless-stopped
     environment:
+      # MUST stay the PUBLIC wss:// URL — do not "fix" it to http://livekit:7880.
+      # v0.5.0 uses LIVEKIT_URL for BOTH the client-facing SFU URL it hands out
+      # AND its own server-side RoomService (CreateRoom) client; there is no
+      # separate override for the latter (LIVEKIT_CS_API_URL_OVERRIDES on `main`
+      # is the Matrix CS-API, not LiveKit). So the CreateRoom call hairpins back
+      # in through Caddy, which is why the /livekit/sfu/twirp/* block there is
+      # scoped to non-private source IPs. Rationale + the live check this still
+      # needs: T6/H5, docs/superpowers/plans/2026-08-01-av-hardening-config.md.
       LIVEKIT_URL: "wss://${MATRIX_HOST}/livekit/sfu"
       LIVEKIT_KEY: "${LIVEKIT_KEY}"
       LIVEKIT_SECRET: "${LIVEKIT_SECRET}"
       LIVEKIT_JWT_BIND: ":8080"
       LIVEKIT_INSECURE_SKIP_VERIFY_TLS: "${LIVEKIT_INSECURE_SKIP_VERIFY_TLS:-false}"
-      # Required as of a recent lk-jwt-service release (was previously
-      # optional/absent) — the container now refuses to start without it,
-      # restart-looping with "LIVEKIT_FULL_ACCESS_HOMESERVERS environment
-      # variable must be set". Found 2026-07-30 on dev-staging; :latest is
-      # unpinned and had drifted. Grants full LiveKit room-creation access
-      # to our own homeserver only (element-hq/lk-jwt-service README).
+      # Mandatory since v0.5.0: without it the container exits at startup with
+      # "LIVEKIT_FULL_ACCESS_HOMESERVERS environment variable must be set"
+      # (reproduced against the pinned digest, 2026-08-01). Must stay an
+      # explicit hostname — "*" would grant LiveKit room-creation to users of
+      # ANY federated homeserver. Startup echoes the parsed value, so the
+      # deployed setting is checkable in the logs.
       LIVEKIT_FULL_ACCESS_HOMESERVERS: "${MATRIX_HOST}"
     depends_on:
       matrix_synapse:
+        condition: service_healthy
+      livekit:
         condition: service_healthy
     networks:
       - portal-net
