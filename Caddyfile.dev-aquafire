@@ -238,7 +238,41 @@ dev.matrix.inblock.io {
         reverse_proxy lk-jwt-service:8080
     }
 
-    # MatrixRTC: LiveKit SFU WebSocket signaling
+    # MatrixRTC: LiveKit SFU. Port 7880 muxes WebSocket signaling AND the Twirp
+    # management API (/twirp/livekit.RoomService/* plus Egress/Ingress/SIP),
+    # with no upstream flag to split or disable it — so the edge is the only
+    # place it can be restricted (S3, 2026-08-01 av-hardening audit).
+    #
+    # The carve-out is NOT decoration: lk-jwt-service's own CreateRoom call
+    # uses its public LIVEKIT_URL (v0.5.0 has no internal-API override, see
+    # docker-compose.dev-staging.yml), so it hairpins back in through Caddy and
+    # MUST keep working. It is expected to arrive with a private (Docker NAT)
+    # source address. Caddy resolves `private_ranges` to 10/8, 172.16/12,
+    # 192.168/16, 127.0.0.1/8, fd00::/8, ::1.
+    #
+    # Ordering: `handle` sorts ahead of `handle_path` in Caddy's directive
+    # order and all of them share one mutually-exclusive group, so this block
+    # is reached first; it is also written first so the file reads the way it
+    # behaves. Parity with Caddyfile.production.
+    @livekit_twirp_public {
+        not remote_ip private_ranges
+    }
+    handle /livekit/sfu/twirp/* {
+        respond @livekit_twirp_public 403
+        uri strip_prefix /livekit/sfu
+        reverse_proxy livekit:7880
+    }
+
+    # Bare path: lk-jwt-service's LIVEKIT_URL ends at "/livekit/sfu" with no
+    # trailing segment, and `/livekit/sfu/*` does NOT match it, so without this
+    # exact-match block the bare path 404s. handle_path strips the whole matched
+    # path, leaving "/" upstream — same idiom as /livekit/jwt.
+    handle_path /livekit/sfu {
+        reverse_proxy livekit:7880
+    }
+
+    # Everything else under the SFU (/rtc, /rtc/validate, …) — deliberately not
+    # enumerated, so unknown-but-legitimate SFU endpoints keep working.
     handle_path /livekit/sfu/* {
         reverse_proxy livekit:7880
     }
