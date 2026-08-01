@@ -115,6 +115,11 @@ services:
     container_name: siwx-e2eh-lk-jwt
     restart: unless-stopped
     environment:
+      # Internal URL, unlike production's public wss:// one: nothing in this
+      # harness consumes the SFU URL from a browser, so lk-jwt's RoomService
+      # hairpin never crosses the Caddy edge here (see T6 in
+      # docs/superpowers/plans/2026-08-01-av-hardening-config.md for why
+      # production cannot do the same).
       LIVEKIT_URL: "ws://siwx-e2eh-livekit:7880"
       LIVEKIT_KEY: "${LIVEKIT_KEY}"
       LIVEKIT_SECRET: "${LIVEKIT_SECRET}"

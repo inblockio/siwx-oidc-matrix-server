@@ -195,7 +195,10 @@ services:
     # run the IDENTICAL digest here (unlike redis), so the same default is
     # safe for both boxes; set explicitly in dev's .env anyway for clarity/
     # symmetry with REDIS_IMAGE_REF, not because the default would diverge.
-    image: ${LK_JWT_IMAGE_REF:-ghcr.io/element-hq/lk-jwt-service:latest@sha256:29918567e6b7cd920e2853b4cd6848ce01b79947c3d19a9f1ed5b74f0a2a88bf}
+    # Tag is "0.5.0" (GHCR drops the "v" of the v0.5.0 release); same digest as
+    # the previous `latest` pin, just no longer a moving label. See
+    # docker-compose.yml.
+    image: ${LK_JWT_IMAGE_REF:-ghcr.io/element-hq/lk-jwt-service:0.5.0@sha256:29918567e6b7cd920e2853b4cd6848ce01b79947c3d19a9f1ed5b74f0a2a88bf}
     restart: unless-stopped
     environment:
       LIVEKIT_URL: "wss://${MATRIX_HOST}/livekit/sfu"
