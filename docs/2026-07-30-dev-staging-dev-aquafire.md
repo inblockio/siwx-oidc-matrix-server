@@ -272,9 +272,14 @@ does not have to touch the firewall during a stack bring-up. Touch nothing else.
 
 ```bash
 sudo ufw allow 7881/tcp comment 'livekit sfu'
-sudo ufw allow 50100:50200/udp comment 'livekit media'
+sudo ufw allow 20100:20200/udp comment 'livekit media'
 sudo ufw status verbose
 ```
+
+The media range moved from 50100-50200 to 20100-20200 on 2026-08-01 (below the
+Linux ephemeral range; see the av-hardening plan, T4). A box provisioned before
+that has the old rule: add the new one BEFORE converging the stack, then
+`sudo ufw delete allow 50100:50200/udp` once calls are verified on the new range.
 
 No `8448` rule is needed — federation uses `.well-known` delegation to 443.
 

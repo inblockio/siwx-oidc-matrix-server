@@ -30,7 +30,7 @@ Element Web
    |  1. GET /.well-known/matrix/client  (discovers rtc_foci -> livekit_service_url)
    |  2. POST /livekit/jwt               (sends Matrix OpenID token, gets LiveKit JWT)
    |  3. WSS  /livekit/sfu/              (WebSocket signaling to LiveKit)
-   |  4. UDP  :50100-50200               (WebRTC media, direct to host)
+   |  4. UDP  :20100-20200               (WebRTC media, direct to host)
    v
 Caddy (reverse proxy)
    |           |              |
@@ -71,7 +71,7 @@ livekit:
   command: --config /etc/livekit.yaml
   ports:
     - "7881:7881/tcp"
-    - "50100-50200:50100-50200/udp"
+    - "20100-20200:20100-20200/udp"
   volumes:
     - ./config/livekit.yaml:/etc/livekit.yaml:ro
   networks:
@@ -101,9 +101,12 @@ curl. Do not add a Docker healthcheck; monitor via Caddy route (`/livekit/jwt/he
 ### Why these port choices
 
 - **7881/tcp**: LiveKit WebRTC-over-TCP fallback (for clients behind strict UDP firewalls)
-- **50100-50200/udp**: WebRTC media. Keep the range small (100 ports); Docker creates
-  individual iptables rules per port, and large ranges cause slow container startup.
-  100 ports supports ~50 concurrent participants.
+- **20100-20200/udp**: WebRTC media. Must sit BELOW the Linux ephemeral range
+  (32768-60999) or the host's own outbound sockets can squat the ports the SFU
+  needs — the stack was on 50100-50200 until 2026-08-01 for exactly that reason.
+  Keep the range small (100 ports); Docker creates individual iptables rules per
+  port, and large ranges cause slow container startup. 100 ports supports ~50
+  concurrent participants.
 - **7880** is NOT exposed to host; Caddy proxies it internally via Docker network.
 
 ## New file: config/livekit.yaml
@@ -114,8 +117,8 @@ bind_addresses:
   - "0.0.0.0"
 rtc:
   tcp_port: 7881
-  port_range_start: 50100
-  port_range_end: 50200
+  port_range_start: 20100
+  port_range_end: 20200
   use_external_ip: true
 room:
   auto_create: false
@@ -123,9 +126,10 @@ logging:
   level: info
 turn:
   enabled: false
-keys:
-  LIVEKIT_API_KEY: "LIVEKIT_API_SECRET_PLACEHOLDER"
 ```
+
+No `keys:` block: `LIVEKIT_KEYS` in the environment replaces file keys entirely,
+so a placeholder here is dead config that only invites someone to trust it.
 
 **Note:** The `keys` section uses placeholder values. The entrypoint or start-matrix.sh
 must template the actual `LIVEKIT_KEY` and `LIVEKIT_SECRET` into this file, or use
@@ -328,7 +332,7 @@ The production server must allow:
 | Port | Protocol | Purpose |
 |---|---|---|
 | 7881 | TCP | LiveKit WebRTC-over-TCP fallback |
-| 50100-50200 | UDP | WebRTC media (audio/video) |
+| 20100-20200 | UDP | WebRTC media (audio/video) |
 
 These are in addition to existing ports (22, 80, 443, 8448).
 
@@ -377,7 +381,7 @@ docker compose ps
 | MISSING_MATRIX_RTC_TRANSPORT | `msc4143_enabled` not set, or Synapse < 1.140.0 | Enable MSC4143 in homeserver.yaml; verify Synapse version |
 | 1:1 call ends for both ~18s after one side's network blips, even though LiveKit logged a successful resume ("ice reconnected or switched pair") | MSC4140 delayed-leave dead-man's switch fired: that client's heartbeat (`POST .../delayed_events/<id>/restart`, every ~4-5s) stopped for >18s, so Synapse sent its scheduled `m.call.member` leave; the peer's client then hangs up cleanly (`CLIENT_REQUEST_LEAVE` in LiveKit + its own `/send`) | Not server-configurable: the 18s expiry is chosen by the client SDK, and Element Call v0.15.0 removed the `membership_server_side_expiry_timeout` config. Root cause is client connectivity; see "Diagnosing call drops" below |
 | MISSING_MATRIX_RTC_FOCUS | `.well-known/matrix/client` missing `rtc_foci` | Add `org.matrix.msc4143.rtc_foci` to well-known response |
-| Call connects but no audio/video | UDP ports blocked by firewall | Open 50100-50200/udp on the host |
+| Call connects but no audio/video | UDP ports blocked by firewall | Open 20100-20200/udp on the host |
 | "Failed to get SFU config" | lk-jwt-service unreachable or misconfigured | Check Caddy route for `/livekit/jwt`; check lk-jwt-service logs |
 | lk-jwt-service rejects OpenID token | Synapse not reachable from lk-jwt-service container | Verify Docker network; lk-jwt-service validates tokens against Synapse's federation endpoint |
 | Calls stuck / never end | MSC4140 (delayed events) not configured | Set `max_event_delay_duration: 24h` in homeserver.yaml |
@@ -437,5 +441,5 @@ if in-call key sharing is rate-limited, fix `rc_message` (values above).
 8. Update `Caddyfile.local` (same for local dev)
 9. Deploy: `./deploy.sh <ref> --build --restart`
 10. Apply Synapse config on existing deployment (yq commands above)
-11. Open firewall ports 7881/tcp and 50100-50200/udp
+11. Open firewall ports 7881/tcp and 20100-20200/udp
 12. Verify with checklist above
