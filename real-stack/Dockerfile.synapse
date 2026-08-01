@@ -1,6 +1,11 @@
 # Local real-stack Synapse image: base Synapse + yq + custom entrypoint that
 # writes homeserver.yaml with MSC3861 + issuer_metadata on first boot.
-FROM matrixdotorg/synapse:latest
+# Pinned to v1.154.0 (2026-08-01): matches what dockerfiles/Dockerfile pins
+# and what prod runs today, exactly. An unpinned :latest silently jumped
+# Synapse versions on rebuild and broke this schema once already (upstream
+# 1.157.1 removed experimental_features.msc3861 — see dockerfiles/Dockerfile's
+# FROM-line comment and .env.dev-staging.example). Upgrades are deliberate now.
+FROM matrixdotorg/synapse:v1.154.0
 USER root
 RUN apt-get update && apt-get install -y wget curl && apt-get clean
 RUN wget -q https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/bin/yq && chmod +x /usr/bin/yq
