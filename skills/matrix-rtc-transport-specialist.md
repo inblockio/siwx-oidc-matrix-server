@@ -120,6 +120,16 @@ rtc:
   port_range_start: 20100
   port_range_end: 20200
   use_external_ip: true
+  # If the LiveKit container is attached to more than one docker network (e.g.
+  # a compose-default net PLUS a shared reverse-proxy net so Caddy can reach
+  # :7880), STUN can succeed on one interface and fail with "context canceled"
+  # on the other — and LiveKit then advertises the OTHER network's private IP
+  # as if it were external. Exclude that subnet so it's never offered as an
+  # ICE candidate. See the troubleshooting entry below ("call connects, zero
+  # media").
+  ips:
+    excludes:
+      - "172.18.0.0/16"
 room:
   auto_create: false
 logging:
@@ -387,6 +397,7 @@ docker compose ps
 | Calls stuck / never end | MSC4140 (delayed events) not configured | Set `max_event_delay_duration: 24h` in homeserver.yaml |
 | "Room not found" in LiveKit | `room.auto_create: true` but LIVEKIT_FULL_ACCESS_HOMESERVERS not set | Either set `auto_create: false` (lk-jwt-service creates rooms) or set LIVEKIT_FULL_ACCESS_HOMESERVERS |
 | WebSocket 502 on /livekit/sfu/ | Caddy not routing to LiveKit container | Check Caddy handle block; ensure LiveKit container is on `portal-net` network |
+| Call connects, zero media, DTLS timeouts in LiveKit logs; works when both peers are on-box but not for real external clients | LiveKit is multi-homed (attached to both the compose-default net and a shared reverse-proxy net). STUN fails on the proxy-net interface and LiveKit advertises that private bridge IP as an external ICE candidate alongside the real one. A remote client that selects the private candidate can never complete DTLS. | Check `docker logs <livekit> \| grep 'using external IPs'` — more than one IP in the list confirms it. Add `rtc.ips.excludes` for the private subnet (see the `config/livekit.yaml` example above); restart LiveKit; re-check the log line shows exactly one (public) IP. |
 
 ## Diagnosing call drops
 
