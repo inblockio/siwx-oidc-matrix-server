@@ -1,0 +1,20 @@
+# Install (dev-staging box, dev-aquafire):
+#   sudo cp systemd/livekit-turn-cert-sync.service systemd/livekit-turn-cert-sync.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now livekit-turn-cert-sync.timer
+#   systemctl list-timers livekit-turn-cert-sync.timer
+
+[Unit]
+Description=Daily LiveKit TURN-TLS cert-sync (+ 5min after boot)
+Documentation=https://github.com/inblockio/siwx-oidc-matrix-server
+
+[Timer]
+# Catch a cert that renewed while the box was down; then daily thereafter.
+# Let's Encrypt certs here run ~90d validity with Caddy renewing well before
+# expiry, so daily cadence is comfortably ahead of any renewal.
+OnBootSec=5min
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target
