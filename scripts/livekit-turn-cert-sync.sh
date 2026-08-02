@@ -112,10 +112,13 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
   if [ "$ext_ip_ok" -eq 0 ]; then
     ext_line="$(printf '%s\n' "$logs" | grep 'using external IPs' | tail -1 || true)"
     if [ -n "$ext_line" ]; then
-      ip_count="$(printf '%s' "$ext_line" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | wc -l)"
+      # Count ips-array ELEMENTS, not raw IPv4s: each healthy element is an
+      # "external/local" PAIR (two IPv4s), so counting bare addresses reads a
+      # healthy single-entry line as 2. An element starts with `"<ip>/`.
+      ip_count="$(printf '%s' "$ext_line" | grep -oE '"([0-9]{1,3}\.){3}[0-9]{1,3}/' | wc -l)"
       if [ "$ip_count" -eq 1 ]; then
         ext_ip_ok=1
-        log "single external IP confirmed: $(printf '%s' "$ext_line" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}')"
+        log "single external IP entry confirmed: $(printf '%s' "$ext_line" | grep -oE '"([0-9]{1,3}\.){3}[0-9]{1,3}/' | tr -d '"/')"
       else
         log "WARNING: 'using external IPs' has ${ip_count} entries (want exactly 1): ${ext_line}"
       fi
