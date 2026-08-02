@@ -1,6 +1,20 @@
 # LiveKit embedded TURN for UDP-hostile networks (dev-staging first)
 
-**Status:** PLAN — gates pre-authorized (unsupervised operator instruction, 2026-08-02). Successor to the TURN gap recorded in `2026-08-02-video-call-audit.md`.
+**Status:** EXECUTED + e2e-VERIFIED on dev-staging, 2026-08-02 (~10:40–10:50Z). Gates pre-authorized (unsupervised operator instruction). Successor to the TURN gap recorded in `2026-08-02-video-call-audit.md`.
+
+## Hypothesis trace (all verified with commands, 2026-08-02)
+
+| ID | Status | Evidence |
+|----|--------|----------|
+| H1 | **Confirmed** | livekit log `Starting TURN server {…portTLS: 5349…portUDP: 3478, relay_range 30000–40000}`; box `ss` shows 5349/tcp + 3478/udp bound; off-box `openssl s_client :5349` served `CN=dev.matrix.inblock.io` (LE, notAfter 2026-10-28) |
+| H2 | **Confirmed** | implied by H3: relay-only clients can only work with valid join-response TURN credentials |
+| H3 | **Confirmed** | `AQUA_E2E_FORCE_RELAY=1` round vs dev: 13/13 PASS, STT 100% both ways (`~/.cache/aqua-e2e-logs/round5-dev-relay-1245.log`); livekit `participant active` shows remote candidates exclusively `udp relay 207.154.209.…:3xxxx` in the TURN relay range, selected pairs on those same ports (surfacing as prflx `172.21.0.1:<same-port>` because the relay socket is host-local — expected shape, don't misread it) |
+| H4 | **Confirmed** | normal round vs dev with TURN on: 13/13 PASS (`round4-dev-turnon-*.log`) |
+| H5 | **Confirmed (expected limitation)** | 443 serves Caddy (healthz 200); advertised `turns:…:443` leg inert until the graduation decision |
+| H6 | **Confirmed** | sync run with state removed: change → copy → restart → `verification OK` rc=0; second run `up to date… no restart` rc=0; timer active (daily + boot) |
+| H7 | **Confirmed** | relay allocations to the public node IP succeeded; zero permission-denied lines in TURN logs |
+
+**Discovered during execution:** (1) the script's post-restart "single external IP" check originally counted raw IPv4s — a healthy entry is an external/local PAIR, so a green line read as 2; fixed to count ips-array elements (commit in this branch). (2) Relay traffic surfaces at the SFU as peer-reflexive `172.21.0.1:<relay-port>` (bridge gateway) — documented in H3 so future log-readers don't mistake it for a candidate leak.
 **Scope:** repo config/scripts/docs + dev-staging live deployment + aqua-e2e relay-forced verification. Prod is NOT touched; graduation checklist at the end.
 
 ## Context (evidence, all source-verified 2026-08-02)
