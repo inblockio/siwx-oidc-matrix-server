@@ -1,0 +1,24 @@
+# Install (dev-staging box, dev-aquafire):
+#   sudo cp systemd/livekit-turn-cert-sync.service systemd/livekit-turn-cert-sync.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now livekit-turn-cert-sync.timer
+#
+# The service itself is NOT enabled directly — the timer activates it.
+# Run it once by hand after install to seed the initial sync:
+#   sudo systemctl start livekit-turn-cert-sync.service
+#   sudo systemctl status livekit-turn-cert-sync.service
+#   sudo journalctl -u livekit-turn-cert-sync.service -n 50
+
+[Unit]
+Description=Sync LiveKit TURN-TLS cert from Caddy's ACME storage, restart livekit on change
+Documentation=https://github.com/inblockio/siwx-oidc-matrix-server
+# Reads a bind-mounted docker volume path and drives `docker compose restart`.
+After=docker.service
+ConditionPathExists=/home/dev/matrix-staging/scripts/livekit-turn-cert-sync.sh
+
+[Service]
+Type=oneshot
+# Root is required: Caddy's ACME certificate directory is 700 root:root, and
+# the synced cert/key are written root:root 600 (see script header).
+ExecStart=/home/dev/matrix-staging/scripts/livekit-turn-cert-sync.sh
+Nice=10
