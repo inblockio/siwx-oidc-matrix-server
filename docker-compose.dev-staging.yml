@@ -169,13 +169,28 @@ services:
     ports:
       - "7881:7881/tcp"
       # Below the Linux ephemeral range (32768-60999). MUST match
-      # rtc.port_range_start/end in config/livekit.yaml — this file mounts the
-      # SAME config as production, so the two move together. `ufw allow
+      # rtc.port_range_start/end in config/livekit.dev-staging.yaml (kept in
+      # sync with production's config/livekit.yaml — the rtc: block is
+      # identical between the two, only turn: differs). `ufw allow
       # 20100:20200/udp` on this box before converging, or media dies silently
       # (T4, docs/superpowers/plans/2026-08-01-av-hardening-config.md).
       - "20100-20200:20100-20200/udp"
+      # Embedded TURN (dev-staging only — see
+      # config/livekit.dev-staging.yaml and
+      # docs/superpowers/plans/2026-08-02-livekit-embedded-turn.md). TURN-TLS
+      # advertisement hardcodes :443 regardless of tls_port (Caddy owns 443
+      # on this box), so the 5349/tcp leg is inert until the plan doc's 443
+      # graduation decision; TURN-UDP on 3478 works immediately. `ufw allow
+      # 5349/tcp` + `ufw allow 3478/udp` on this box before converging.
+      - "5349:5349/tcp"
+      - "3478:3478/udp"
     volumes:
-      - ./config/livekit.yaml:/etc/livekit.yaml:ro
+      # Dev-staging mounts its OWN livekit config (turn: enabled), not the
+      # production one — see config/livekit.dev-staging.yaml for why.
+      - ./config/livekit.dev-staging.yaml:/etc/livekit.yaml:ro
+      # Synced TURN-TLS cert/key (never Caddy's live files directly — see
+      # scripts/livekit-turn-cert-sync.sh).
+      - ./config/livekit-tls:/etc/livekit-turn:ro
     healthcheck:
       # busybox wget (no curl in the image); GET / 406s until the node's first
       # stats tick (~8s from start, mostly the use_external_ip STUN lookup),
