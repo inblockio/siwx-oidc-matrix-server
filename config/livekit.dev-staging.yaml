@@ -1,0 +1,77 @@
+# LiveKit SFU config for the dev-staging box (dev-aquafire, 207.154.209.103).
+#
+# Identical to config/livekit.yaml (production) except for the `turn:` block
+# at the bottom, which enables the embedded TURN server here first. See
+# docs/superpowers/plans/2026-08-02-livekit-embedded-turn.md for the full
+# hypothesis register, verification plan, and prod-graduation checklist.
+port: 7880
+bind_addresses:
+  - "0.0.0.0"
+rtc:
+  tcp_port: 7881
+  # Below the Linux ephemeral range (32768-60999) so these listeners cannot be
+  # squatted by the host's own ephemeral source ports; matches
+  # config/livekit.e2e.yaml. MUST match the docker-compose.dev-staging.yml
+  # ports mapping, and the host firewall must allow 20100:20200/udp.
+  port_range_start: 20100
+  port_range_end: 20200
+  use_external_ip: true
+  # The livekit container is attached to TWO docker networks: its own compose
+  # default net (STUN maps it to the host's public IP) and the shared reverse-
+  # proxy net (172.18.0.0/16) that exists only so Caddy can reach :7880. STUN
+  # fails on the proxy-net interface and LiveKit then advertises that private
+  # bridge IP AS IF it were external ("using external IPs" lists two entries).
+  # When a real client's ICE selects it, DTLS times out and the call carries
+  # no media. Excluding the proxy-net subnet removes that candidate entirely.
+  # VERIFY after every restart: `docker logs <livekit> | grep 'using external
+  # IPs'` must show exactly ONE entry (the public IP).
+  ips:
+    excludes:
+      - "172.18.0.0/16"
+room:
+  auto_create: false
+logging:
+  level: info
+
+# --- Embedded TURN (dev-staging first) ----------------------------------
+# All facts below verified 2026-08-02 against livekit-server v1.12.0
+# (config-sample.yaml + pkg/config/config.go + pkg/service/turn.go +
+# pkg/service/roommanager.go at the v1.12.0 tag). Full detail and the
+# hypothesis register: docs/superpowers/plans/2026-08-02-livekit-embedded-turn.md
+#
+# (a) tls_port AND udp_port are MANDATORY — v1.12.0 ships NO compiled
+#     defaults for either. Omit one and TURN startup fails with "invalid
+#     TURN ports". Both are set explicitly below.
+#
+# (b) THE 443 GOTCHA — read this before assuming TLS TURN works end to end.
+#     livekit-server v1.12.0 hardcodes the advertised TURN-TLS URL to port
+#     443 regardless of tls_port (pkg/service/turn.go builds the ICE server
+#     list consumed by roommanager.go's iceServersForParticipant, which does:
+#       fmt.Sprintf("turns:%s:443?transport=tcp", domain)
+#     Caddy owns 443 on this box (and on prod), so a client that dials the
+#     advertised `turns:dev.matrix.inblock.io:443` lands on Caddy, not on
+#     LiveKit's TURN-TLS listener bound to tls_port (5349) below — that TLS
+#     leg is INERT until the 443 graduation decision (dedicated IP + DNS, or
+#     an SNI/L4-demux edge proxy in front of Caddy; see the plan doc).
+#     TURN-UDP is NOT affected: it is advertised correctly as
+#     `turn:<node-ip>:<udp_port>?transport=udp` and is the leg dev-staging
+#     verification actually exercises (relay-forced aqua-e2e rounds).
+#
+# (c) CERTS are never bind-mounted from Caddy's live ACME directory — Caddy
+#     renews by atomic rename, which would pin a bind-mount to a stale
+#     inode. scripts/livekit-turn-cert-sync.sh sync-copies
+#     dev.matrix.inblock.io.crt/.key out of Caddy's certificate storage into
+#     config/livekit-tls/, which docker-compose.dev-staging.yml mounts
+#     read-only at /etc/livekit-turn/ (cert_file/key_file below).
+#
+# (d) NO HOT RELOAD — livekit-server reads cert_file/key_file once at
+#     process start. A cert rotation requires a container restart to take
+#     effect; the cert-sync script restarts `livekit` automatically, but
+#     ONLY when the synced cert/key bytes actually changed (checksum-gated).
+turn:
+  enabled: true
+  domain: dev.matrix.inblock.io
+  cert_file: /etc/livekit-turn/tls.crt
+  key_file: /etc/livekit-turn/tls.key
+  tls_port: 5349
+  udp_port: 3478
