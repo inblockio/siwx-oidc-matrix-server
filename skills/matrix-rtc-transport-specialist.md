@@ -427,11 +427,112 @@ There is no supported server-side knob to lengthen it. If heartbeat restarts
 return 429/M_LIMIT_EXCEEDED instead of gapping, fix `rc_delayed_event_mgmt`;
 if in-call key sharing is rate-limited, fix `rc_message` (values above).
 
+## Embedded TURN
+
+**Status (2026-08-02): enabled on dev-staging only** (`config/livekit.dev-staging.yaml`),
+production stays `turn: enabled: false` (`config/livekit.yaml`) pending the 443
+decision below. Full hypothesis register, verification evidence, and the
+prod-graduation checklist live in
+`docs/superpowers/plans/2026-08-02-livekit-embedded-turn.md` — read it before
+touching prod TURN config. ~10-20% of real-world sessions need TURN (LiveKit
+guidance); before this, ICE-TCP on 7881 was the only UDP-hostile-network
+fallback.
+
+### The dev-staging turn block
+
+```yaml
+turn:
+  enabled: true
+  domain: dev.matrix.inblock.io
+  cert_file: /etc/livekit-turn/tls.crt
+  key_file: /etc/livekit-turn/tls.key
+  tls_port: 5349
+  udp_port: 3478
+```
+
+`tls_port` and `udp_port` have **no compiled defaults** in livekit-server
+v1.12.0 — omit either and TURN fails to start ("invalid TURN ports"). Both
+must always be given explicitly.
+
+### THE 443 GOTCHA (read this before assuming TLS TURN works)
+
+livekit-server v1.12.0 hardcodes the advertised TURN-TLS client URL to port
+443 **regardless of `tls_port`** — the ICE-server list LiveKit hands clients
+in `JoinResponse` builds the URL as:
+
+```go
+fmt.Sprintf("turns:%s:443?transport=tcp", domain)
+```
+
+(`pkg/service/roommanager.go`, `iceServersForParticipant`, v1.12.0 tag; TURN
+server startup itself lives in `pkg/service/turn.go`.) Caddy owns 443 on both
+dev-staging and prod, so a client that dials the advertised
+`turns:dev.matrix.inblock.io:443` lands on Caddy, not on LiveKit's TURN-TLS
+listener bound to `tls_port` — **that TLS leg is inert** until one of the
+graduation options in the plan doc is taken (dedicated IP + `turn.` DNS, or
+an SNI/L4-demux edge proxy in front of Caddy). **TURN-UDP is not affected**:
+it's advertised correctly as `turn:<node-ip>:<udp_port>?transport=udp` and
+works immediately — this is the leg dev-staging verification actually
+exercises (relay-forced `aqua-e2e` rounds, see below).
+
+### Cert-sync design
+
+Caddy renews `dev.matrix.inblock.io`'s Let's Encrypt cert by atomic rename
+inside its own ACME storage volume (700 root:root). **Never bind-mount those
+files directly into the livekit container** — a bind-mount pins the mount to
+whatever inode existed at container-start and silently stops tracking
+renewals. Instead `scripts/livekit-turn-cert-sync.sh` (root; run via
+`systemd/livekit-turn-cert-sync.{service,timer}`, daily + 5min-after-boot)
+sync-copies `dev.matrix.inblock.io.{crt,key}` into `config/livekit-tls/`
+(mounted read-only at `/etc/livekit-turn/` in the compose file), gated by a
+sha256 checksum state file so `docker compose restart livekit` only fires
+when the cert bytes actually changed. livekit-server has **no TLS hot
+reload** — cert_file/key_file are read once at process start, so a restart
+is the only way a renewed cert takes effect. The script polls up to 60s
+after a restart for both `Starting TURN server` and a single-entry `using
+external IPs` line in `docker logs`, failing loudly (script exit nonzero +
+log dump) if either is missing.
+
+### Verification one-liners
+
+```bash
+# Both TURN listeners bound (box: dev-aquafire)
+ss -tlnp | grep 5349
+ss -ulnp | grep 3478
+
+# TLS listener serves the expected LE cert (confirms tls_port works even
+# though clients can't reach it via the advertised :443 URL — see gotcha)
+openssl s_client -connect dev.matrix.inblock.io:5349 </dev/null 2>/dev/null | openssl x509 -noout -subject
+
+# Force a client onto the relay path to prove the UDP leg actually carries
+# media (aqua-agents, AQUA_E2E_FORCE_RELAY=1 — see T2 in the plan doc)
+AQUA_E2E_FORCE_RELAY=1 <aqua-e2e run command> # relay-forced round vs dev-staging
+```
+
+### Firewall
+
+`5349/tcp` (TURN-TLS listener; inert behind the 443 gotcha above, but still
+needs to be open for the eventual graduation) and `3478/udp` (TURN-UDP,
+functional immediately) must be allowed on **both** layers on dev-aquafire:
+`ufw allow 5349/tcp`, `ufw allow 3478/udp`, and the DigitalOcean cloud
+firewall for the droplet. Neither existed before this change — verify both,
+not just one; a cloud firewall miss looks identical to a dead process from
+inside the box.
+
+### Restricted-peer CIDR default — no action needed
+
+livekit-server v1.12.0 denies TURN relay to restricted (private/loopback/
+link-local) peer IPs by default (`allow_restricted_peer_cidrs` /
+`deny_peer_cidrs` in the schema, both left unset here). Our SFU advertises
+only the public node IP (the `rtc.ips.excludes` fix above ensures this), so
+the default never blocks a real client and no override is needed.
+
 ## Known limitations
 
-- **LiveKit built-in TURN is disabled** in this config. Clients behind symmetric NAT
-  or strict corporate firewalls may fail to connect. To enable, set `turn.enabled: true`
-  in `config/livekit.yaml` with a valid TLS cert (requires a dedicated subdomain).
+- **LiveKit built-in TURN**: enabled on **dev-staging only** as of 2026-08-02
+  (see "Embedded TURN" above); production remains disabled pending the 443
+  graduation decision. Until then, clients behind symmetric NAT or strict
+  corporate firewalls may fail to connect on prod.
 - **No TURN for legacy calls**: the stack has no coturn. Legacy 1:1 VoIP calls
   (non-MatrixRTC) will fail behind NAT. This is acceptable because
   `use_exclusively: true` routes all calls through MatrixRTC/LiveKit.
