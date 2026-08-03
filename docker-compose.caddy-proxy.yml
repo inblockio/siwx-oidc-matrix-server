@@ -46,7 +46,23 @@ name: caddy-proxy
 
 services:
   caddy:
-    image: caddy:2-alpine
+    # TURN-TLS edge termination (caddy-l4) requires the `layer4` Caddy module,
+    # which stock caddy:2-alpine does not ship — see
+    # docs/superpowers/plans/2026-08-03-turn-tls-edge-termination.md and
+    # dockerfiles/Dockerfile.caddy-l4. This repo's canonical ref is the
+    # CI-published image (.github/workflows/docker.yml, `image: caddy-l4`
+    # matrix entry) so the box can `docker compose pull` a digest-pinnable
+    # artifact like every other service here, rather than building on the
+    # box long-term.
+    #
+    # NOTE (dev bring-up, T2): the FIRST deploy of this image predates that
+    # CI job landing a published `:main`/`:dev` tag, so the box built
+    # dockerfiles/Dockerfile.caddy-l4 directly and ran it under a
+    # locally-built tag (e.g. `docker build -t caddy-l4:local -f
+    # dockerfiles/Dockerfile.caddy-l4 . && ` this file's image temporarily
+    # set to `caddy-l4:local`). Once the CI tag below has actually been
+    # published and pulled once, replace any local override with this ref.
+    image: ghcr.io/inblockio/siwx-oidc-matrix-server/caddy-l4:main
     # Explicit, stable name so ops/rollback commands (and `docker exec ...
     # caddy reload`) do not depend on the compose-generated suffix. Mirrors
     # the `aqua_proxy` / `aqua_acme` naming of the stack it replaces.
