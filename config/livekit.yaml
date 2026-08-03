@@ -46,11 +46,9 @@ logging:
 # external_tls but no SNI-split edge in front of 443, the advertised
 # `turns:matrix.inblock.io:443` URL has nothing correct to land on.
 #
-# turn:
-#   enabled: true
-#   domain: turn.matrix.inblock.io
-#   external_tls: true
-#   tls_port: 5349
-#   udp_port: 3478
 turn:
-  enabled: false
+  enabled: true
+  domain: turn.matrix.inblock.io
+  external_tls: true
+  tls_port: 5349
+  udp_port: 3478
