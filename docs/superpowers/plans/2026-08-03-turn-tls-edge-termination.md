@@ -1,6 +1,20 @@
 # TURN-TLS edge termination via caddy-l4 (dev first)
 
-**Status:** PLAN — gates pre-authorized (operator instruction 2026-08-03: build xcaddy image, deploy to dev, e2e via dev.turn.matrix.inblock.io). Successor to `2026-08-02-livekit-embedded-turn.md` (which left the TLS leg inert behind the `turns:<domain>:443` vendor hardcode).
+**Status:** EXECUTED + VERIFIED on dev, 2026-08-03. Gates pre-authorized (operator instruction: build xcaddy image, deploy to dev, e2e via dev.turn.matrix.inblock.io). Successor to `2026-08-02-livekit-embedded-turn.md`.
+
+## Hypothesis trace (2026-08-03, all evidence from commands run this session)
+
+| ID | Status | Evidence |
+|----|--------|----------|
+| H1 | **Confirmed** | Image `caddy-l4:2.11.4-l4v0.1.2` built on dev box; `caddy list-modules` in it shows 42 layer4.* modules; new Caddyfile validates INSIDE the image (`Valid configuration`) |
+| H2 | **Confirmed** | Post-swap vhost regression identical to pre-swap baseline (302 + 7×200 across all 8 vhosts); single edge-owned CORS header on dev.siwx preserved |
+| H3 | **Confirmed** | Fresh LE cert (notAfter 2026-11-01) issued via HTTP-01 and served on :443 for the TURN SNI through the l4 tls terminator (off-box openssl) |
+| H4 | **Confirmed** | livekit `Starting TURN server {…externalTLS: true…}`; no host 5349 listener; ufw 5349 rule removed; cert-sync timer disabled |
+| H5 | **Confirmed for infrastructure; harness media composite blocked by a CLIENT limitation** | TLS-only relay round FAILED (`wait_pc_connection timed out`) — caddy debug logs pin the exact cause: repeated client dials answered with the LE cert, each rejected by the client with `remote error: tls: unknown certificate authority` (the harness's bundled libwebrtc/BoringSSL has no system CA roots — real clients trust LE natively). Infrastructure then proven independently end-to-end: (a) curl probe: HTTPS bytes to the TURN SNI reach the TURN listener (l4 match + proxy verified); (b) `scripts/turnprobe` (pion/turn + system-CA crypto/tls, creds minted with livekit's own base62+sha256 scheme): **TLS 1.3 verified-chain handshake + TURN allocation `207.154.209.103:36451` on-box AND `…:39468` OFF-BOX from the workstation** — the complete turns:443 → caddy-l4 → livekit external_tls → auth → relay-allocation chain works from the open internet |
+| H6 | **Confirmed** | Combined state (udp 3478 restored): relay-forced round 13/13 (`round7-dev-combined-relay.log`); final normal round see round8 log |
+| H7 | **Confirmed (scoped)** | `caddy reload` fired mid-run during round 7 (16:56:12Z): round still 13/13 — edge reload non-disruptive to in-flight calls incl. signaling websockets. TLS-TURN-session-specific drain untested (harness limitation above); re-verify with a real client at prod graduation |
+
+**Discovered during execution:** (1) livekit rust-sdk 0.7.44's prebuilt libwebrtc cannot validate public-CA TURN-TLS certs (no system roots) — harness relay tests exercise the UDP leg; the TLS leg's gate tool is `scripts/turnprobe` (also the prod-graduation gate: `TURN_PROBE_HOST=turn.matrix.inblock.io`, mint creds on the prod box from its .env, run probe off-box). (2) The curl-to-TURN-SNI probe (times out with 0 bytes = l4 matched and proxied; 200 body = NOT matched) is a fast edge-path discriminator. (3) `caddy fmt` warning at Caddyfile line 52 is pre-existing cosmetic.
 **Decision (Tim, 2026-08-03):** variant 2 — terminate TURN-TLS at the edge (caddy-l4), LiveKit `external_tls: true`. DNS created: `turn.matrix.inblock.io` → 142.93.168.4 (prod), `dev.turn.matrix.inblock.io` → 207.154.209.103 (dev).
 
 ## NAMING CONVENTION (operator-mandated, document everywhere)
