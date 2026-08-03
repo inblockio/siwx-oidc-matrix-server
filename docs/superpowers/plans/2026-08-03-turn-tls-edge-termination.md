@@ -51,3 +51,21 @@ TLS-only round → restore → combined rounds → reload smoke.
 
 ## Prod graduation (pre-written)
 Portal Caddy on prod is a DIFFERENT deployment (bind-mounted /home/portal/portal/Caddyfile, image managed by the portal project) — graduating needs: the CI-built caddy-l4 image adopted for portal-caddy-1, the same global l4 block + `turn.matrix.inblock.io` dummy site added via the bind-mount cp procedure, livekit.yaml turn block enabled with external_tls + domain turn.matrix.inblock.io, NO host publish of 5349, ufw 3478/udp only, then the relay-forced round vs prod (TLS-only state first). Plus the still-pending ICE-fix + TURN-UDP promotion items from the two predecessor plan docs.
+
+## PROD PROMOTION EXECUTED (2026-08-03 ~17:00–17:20Z, operator-authorized)
+
+Everything above plus the 08-01/08-02 batches promoted to prod in one gated
+sequence. Deployed: dev-validated compose+livekit.yaml (ICE excludes → single
+external IP 142.93.168.4; UDP range 20100-20200; TURN udp 3478 + external_tls),
+portal edge swapped to the CI image `caddy-l4:dev` (rename-rollback; old
+container kept as portal-caddy-1-old), portal Caddyfile l4 SNI split +
+turn.matrix.inblock.io cert site + twirp/bare-path hardening, element-config
+element_call.url removed. Gates all GREEN: 9/9 vhost baseline match; twirp 403 /
+bare sfu 200; LE cert issued+served for turn.matrix.inblock.io; off-box
+turnprobe allocation 142.93.168.4:37516; aqua-e2e rounds 9 (normal) + 10
+(relay-forced) both 13/13 (round 9 green = hairpin gate passed); DTLS lines in
+the window 18/18 teardown-type, zero establishment failures; zero TURN
+permission denials; ufw 50100:50200/udp removed after the media gate.
+Rollback bundle: `.bak-20260803-prodav` files + portal-caddy-1-old (see memory
+prod-av-promotion-20260803). Deferred deliberately: synapse T7 image promotion
+(config values already live in /data/homeserver.yaml).
