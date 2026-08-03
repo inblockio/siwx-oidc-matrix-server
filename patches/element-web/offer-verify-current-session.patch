@@ -1,0 +1,110 @@
+diff --git a/apps/web/src/components/views/settings/devices/DeviceVerificationStatusCard.tsx b/apps/web/src/components/views/settings/devices/DeviceVerificationStatusCard.tsx
+index 87cb911..21cb9cd 100644
+--- a/apps/web/src/components/views/settings/devices/DeviceVerificationStatusCard.tsx
++++ b/apps/web/src/components/views/settings/devices/DeviceVerificationStatusCard.tsx
+@@ -7,6 +7,7 @@ Please see LICENSE files in the repository root for full details.
+ */
+ 
+ import React from "react";
++import { Text } from "@vector-im/compound-web";
+ 
+ import { _t } from "../../../../languageHandler";
+ import AccessibleButton from "../../elements/AccessibleButton";
+@@ -43,7 +44,14 @@ const getCardProps = (
+             ),
+         };
+     }
+-    if (device.isVerified === null) {
++    // `isVerified === null` means "unknown device, or a device that has published no encryption
++    // keys" (`isDeviceVerified`). For ANOTHER session that reads as unverifiable, which is what
++    // the copy below says. For the CURRENT session it does not: this session is an Element
++    // session, it does support encryption, and `null` here only means its own status could not
++    // be read (crypto not initialised/restored yet). Telling the user their current session
++    // "doesn't support encryption and thus can't be verified" is false, and it is the sentence
++    // that removes the verify action below. Fall through to the ordinary unverified copy.
++    if (device.isVerified === null && !isCurrentDevice) {
+         return {
+             variation: DeviceSecurityVariation.Unverified,
+             heading: _t("settings|sessions|unverified_session"),
+@@ -78,10 +86,28 @@ export const DeviceVerificationStatusCard: React.FC<DeviceVerificationStatusCard
+ }) => {
+     const securityCardProps = getCardProps(device, isCurrentDevice);
+ 
++    // For another session, only an explicit `false` may offer verification - `null` means the
++    // device published no encryption keys and genuinely cannot be verified.
++    //
++    // For the CURRENT session that exclusion is wrong. The action offered here is not a request
++    // sent to the device; it is a local ceremony this session runs for ITSELF
++    // (`SetupEncryptionDialog`), and an unknown-status session is precisely the one that needs
++    // it. Excluding `null` meant an unverified current session could be shown a card that
++    // states it is unverified and offers nothing at all - no button, no reason, no route - which
++    // left the destructive identity reset as the only exit the user could see.
++    const canOfferVerify = isCurrentDevice ? device.isVerified !== true : device.isVerified === false;
++
++    // Another session's "Verify session" is withheld while THIS session is unverified:
++    // `useOwnDevices` leaves `requestDeviceVerification` undefined unless the current device is
++    // verified, and that gate is CORRECT - an unverified session must not vouch for another one.
++    // What was missing is that the affordance simply vanished, with no reason given and no
++    // alternative offered. State the reason; the route is the current session's own verify
++    // action, one section up.
++    const blockedByCurrentSession = !isCurrentDevice && device.isVerified === false && !onVerifyDevice;
++
+     return (
+         <DeviceSecurityCard {...securityCardProps}>
+-            {/* check for explicit false to exclude unverifiable devices */}
+-            {device.isVerified === false && !!onVerifyDevice && (
++            {canOfferVerify && !!onVerifyDevice && (
+                 <AccessibleButton
+                     kind="primary"
+                     onClick={onVerifyDevice}
+@@ -90,6 +116,11 @@ export const DeviceVerificationStatusCard: React.FC<DeviceVerificationStatusCard
+                     {_t("settings|sessions|verify_session")}
+                 </AccessibleButton>
+             )}
++            {blockedByCurrentSession && (
++                <Text size="sm" data-testid={`verification-blocked-reason-${device.device_id}`}>
++                    {_t("settings|sessions|verify_blocked_current_session_unverified")}
++                </Text>
++            )}
+         </DeviceSecurityCard>
+     );
+ };
+diff --git a/apps/web/src/i18n/strings/en_EN.json b/apps/web/src/i18n/strings/en_EN.json
+index 64938cb..824f263 100644
+--- a/apps/web/src/i18n/strings/en_EN.json
++++ b/apps/web/src/i18n/strings/en_EN.json
+@@ -2987,6 +2987,7 @@
+             "verified_sessions_explainer_1": "Verified sessions have been confirmed your digital identity.",
+             "verified_sessions_explainer_2": "This means that you have all the keys needed to unlock your encrypted messages and confirm to other users that you trust this session.",
+             "verified_sessions_list_description": "For best security, remove any session that you don't recognize or use anymore.",
++            "verify_blocked_current_session_unverified": "Verify your current session first. An unverified session can't verify another one.",
+             "verify_session": "Verify session",
+             "web_session": "Web session"
+         },
+diff --git a/apps/web/test/unit-tests/components/views/settings/devices/DeviceVerificationStatusCard-test.tsx b/apps/web/test/unit-tests/components/views/settings/devices/DeviceVerificationStatusCard-test.tsx
+index 4059c9a..17f267a 100644
+--- a/apps/web/test/unit-tests/components/views/settings/devices/DeviceVerificationStatusCard-test.tsx
++++ b/apps/web/test/unit-tests/components/views/settings/devices/DeviceVerificationStatusCard-test.tsx
+@@ -48,14 +48,19 @@ describe("<DeviceVerificationStatusCard />", () => {
+             expect(getByText("Verify your current session for enhanced secure messaging.")).toBeTruthy();
+         });
+ 
+-        it("renders an unverifiable device", () => {
+-            const { getByText } = render(
++        it("offers verification for a device whose status could not be read", () => {
++            const { getByText, queryByTestId } = render(
+                 getComponent({
+                     device: unverifiableDevice,
+                     isCurrentDevice: true,
+                 }),
+             );
+-            expect(getByText("This session doesn't support encryption and thus can't be verified.")).toBeTruthy();
++            // The current session is an Element session, so it always supports encryption; a null
++            // status only means we could not read this session's own verification status. Saying
++            // "this session doesn't support encryption and thus can't be verified" here is false,
++            // and hiding the button with it left the card with no action, no reason and no route.
++            expect(getByText("Verify your current session for enhanced secure messaging.")).toBeTruthy();
++            expect(queryByTestId(verifyButtonTestId)).toBeTruthy();
+         });
+ 
+         it("renders a verified device", () => {
