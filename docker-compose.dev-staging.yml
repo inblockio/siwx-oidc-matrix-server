@@ -175,22 +175,31 @@ services:
       # 20100:20200/udp` on this box before converging, or media dies silently
       # (T4, docs/superpowers/plans/2026-08-01-av-hardening-config.md).
       - "20100-20200:20100-20200/udp"
-      # Embedded TURN (dev-staging only — see
-      # config/livekit.dev-staging.yaml and
-      # docs/superpowers/plans/2026-08-02-livekit-embedded-turn.md). TURN-TLS
-      # advertisement hardcodes :443 regardless of tls_port (Caddy owns 443
-      # on this box), so the 5349/tcp leg is inert until the plan doc's 443
-      # graduation decision; TURN-UDP on 3478 works immediately. `ufw allow
-      # 5349/tcp` + `ufw allow 3478/udp` on this box before converging.
-      - "5349:5349/tcp"
+      # Embedded TURN (dev-staging only — see config/livekit.dev-staging.yaml
+      # and docs/superpowers/plans/2026-08-03-turn-tls-edge-termination.md).
+      # TURN-TLS (5349/tcp) is now edge-internal: caddy-l4 on this box
+      # terminates TLS for turns:dev.turn.matrix.inblock.io:443 (SNI split)
+      # and proxies the decrypted stream to this container over `proxy_net`
+      # (`proxy tcp/livekit:5349` in Caddyfile.dev-aquafire), so 5349 is
+      # DELIBERATELY NOT published here — publishing it would let a client
+      # reach LiveKit's TURN port directly, bypassing the edge's TLS
+      # termination entirely (external_tls mode expects a plaintext
+      # connection only from the trusted edge). TURN-UDP (3478) has no such
+      # intermediary and is still published + firewalled directly:
+      # `ufw allow 3478/udp` on this box before converging. No ufw rule is
+      # needed for 5349 now that it isn't host-published.
       - "3478:3478/udp"
     volumes:
       # Dev-staging mounts its OWN livekit config (turn: enabled), not the
       # production one — see config/livekit.dev-staging.yaml for why.
       - ./config/livekit.dev-staging.yaml:/etc/livekit.yaml:ro
-      # Synced TURN-TLS cert/key (never Caddy's live files directly — see
-      # scripts/livekit-turn-cert-sync.sh).
-      - ./config/livekit-tls:/etc/livekit-turn:ro
+      # No cert volume: external_tls: true means LiveKit never reads a
+      # cert/key file — TLS termination happens at the edge (caddy-l4), not
+      # here. The old ./config/livekit-tls:/etc/livekit-turn:ro mount (fed by
+      # scripts/livekit-turn-cert-sync.sh) belonged to the superseded
+      # in-process-TLS variant; that script/its systemd units stay in the
+      # repo as tooling for the passthrough alternative but are unused by
+      # this compose file now.
     healthcheck:
       # busybox wget (no curl in the image); GET / 406s until the node's first
       # stats tick (~8s from start, mostly the use_external_ip STUN lookup),

@@ -429,32 +429,56 @@ if in-call key sharing is rate-limited, fix `rc_message` (values above).
 
 ## Embedded TURN
 
-**Status (2026-08-02): enabled on dev-staging only** (`config/livekit.dev-staging.yaml`),
-production stays `turn: enabled: false` (`config/livekit.yaml`) pending the 443
-decision below. Full hypothesis register, verification evidence, and the
-prod-graduation checklist live in
-`docs/superpowers/plans/2026-08-02-livekit-embedded-turn.md` — read it before
-touching prod TURN config. ~10-20% of real-world sessions need TURN (LiveKit
-guidance); before this, ICE-TCP on 7881 was the only UDP-hostile-network
-fallback.
+**Status (2026-08-03): enabled on dev-staging only** (`config/livekit.dev-staging.yaml`),
+via **TLS-edge termination (caddy-l4)**, production stays `turn: enabled:
+false` (`config/livekit.yaml`) pending graduation (checklist below). Full
+hypothesis register, verification evidence, and the prod-graduation
+checklist live in
+`docs/superpowers/plans/2026-08-03-turn-tls-edge-termination.md` (current
+design) and its predecessor
+`docs/superpowers/plans/2026-08-02-livekit-embedded-turn.md` (original
+embedded-TURN rollout, dev-staging-only pre-edge-termination) — read both
+before touching prod TURN config. ~10-20% of real-world sessions need TURN
+(LiveKit guidance); before this, ICE-TCP on 7881 was the only
+UDP-hostile-network fallback.
+
+### Architecture: edge termination
+
+```
+client
+  |  turns:dev.turn.matrix.inblock.io:443  (TLS, SNI = dev.turn.matrix.inblock.io)
+  v
+caddy-l4 (dockerfiles/Dockerfile.caddy-l4, layer4 listener_wrapper on :443)
+  |  inspects ClientHello SNI BEFORE any TLS termination; only this exact
+  |  SNI is diverted — every other :443 vhost on the box is untouched
+  |  terminates TLS itself (Caddy's shared cert cache)
+  v  tcp/livekit:5349  (plaintext, proxy_net, edge-internal — never host-published)
+livekit (turn.external_tls: true, tls_port: 5349)
+```
+
+Naming (operator-mandated, applies everywhere this is documented): **dev DNS
+puts `dev.` FIRST** — `dev.turn.matrix.inblock.io`, NOT
+`turn.dev.matrix.inblock.io`. Prod is the bare name,
+`turn.matrix.inblock.io`.
 
 ### The dev-staging turn block
 
 ```yaml
 turn:
   enabled: true
-  domain: dev.matrix.inblock.io
-  cert_file: /etc/livekit-turn/tls.crt
-  key_file: /etc/livekit-turn/tls.key
+  domain: dev.turn.matrix.inblock.io
+  external_tls: true
   tls_port: 5349
   udp_port: 3478
 ```
 
 `tls_port` and `udp_port` have **no compiled defaults** in livekit-server
 v1.12.0 — omit either and TURN fails to start ("invalid TURN ports"). Both
-must always be given explicitly.
+must always be given explicitly. `external_tls: true` (not
+`cert_file`/`key_file`) tells `pkg/service/turn.go` to open a bare plaintext
+`net.Listen` on `tls_port` — TLS is entirely the edge's job now.
 
-### THE 443 GOTCHA (read this before assuming TLS TURN works)
+### THE 443 HARDCODE (why the edge design exists)
 
 livekit-server v1.12.0 hardcodes the advertised TURN-TLS client URL to port
 443 **regardless of `tls_port`** — the ICE-server list LiveKit hands clients
@@ -466,58 +490,120 @@ fmt.Sprintf("turns:%s:443?transport=tcp", domain)
 
 (`pkg/service/roommanager.go`, `iceServersForParticipant`, v1.12.0 tag; TURN
 server startup itself lives in `pkg/service/turn.go`.) Caddy owns 443 on both
-dev-staging and prod, so a client that dials the advertised
-`turns:dev.matrix.inblock.io:443` lands on Caddy, not on LiveKit's TURN-TLS
-listener bound to `tls_port` — **that TLS leg is inert** until one of the
-graduation options in the plan doc is taken (dedicated IP + `turn.` DNS, or
-an SNI/L4-demux edge proxy in front of Caddy). **TURN-UDP is not affected**:
-it's advertised correctly as `turn:<node-ip>:<udp_port>?transport=udp` and
-works immediately — this is the leg dev-staging verification actually
-exercises (relay-forced `aqua-e2e` rounds, see below).
+dev-staging and prod, and stock Caddy has no way to route a raw TLS stream by
+SNI to anything but its own HTTP handling — so a bare Caddy in front of
+LiveKit left this leg permanently inert (the state described in the
+predecessor plan doc). **caddy-l4's `layer4` listener_wrapper is what fixes
+this**: it demuxes on SNI ahead of Caddy's normal `tls` wrapper, so the
+client's hardcoded `turns:dev.turn.matrix.inblock.io:443` now lands exactly
+where it needs to (see architecture diagram above). **TURN-UDP was never
+affected either way**: it's advertised correctly as
+`turn:<node-ip>:<udp_port>?transport=udp` straight against LiveKit's own
+`udp_port`.
 
-### Cert-sync design
+### The caddy-l4 image + Caddyfile wiring
 
-Caddy renews `dev.matrix.inblock.io`'s Let's Encrypt cert by atomic rename
-inside its own ACME storage volume (700 root:root). **Never bind-mount those
-files directly into the livekit container** — a bind-mount pins the mount to
-whatever inode existed at container-start and silently stops tracking
-renewals. Instead `scripts/livekit-turn-cert-sync.sh` (root; run via
-`systemd/livekit-turn-cert-sync.{service,timer}`, daily + 5min-after-boot)
-sync-copies `dev.matrix.inblock.io.{crt,key}` into `config/livekit-tls/`
-(mounted read-only at `/etc/livekit-turn/` in the compose file), gated by a
-sha256 checksum state file so `docker compose restart livekit` only fires
-when the cert bytes actually changed. livekit-server has **no TLS hot
-reload** — cert_file/key_file are read once at process start, so a restart
-is the only way a renewed cert takes effect. The script polls up to 60s
-after a restart for both `Starting TURN server` and a single-entry `using
-external IPs` line in `docker logs`, failing loudly (script exit nonzero +
-log dump) if either is missing.
+`dockerfiles/Dockerfile.caddy-l4` builds Caddy via `xcaddy` with
+`github.com/mholt/caddy-l4@v0.1.2`, whose `go.mod` pins
+`caddyserver/caddy/v2 v2.11.4` exactly — the Dockerfile's builder/final base
+tags must match that pin (see the Dockerfile header before bumping either
+version). Published by `.github/workflows/docker.yml` (matrix entry `image:
+caddy-l4`) to `ghcr.io/inblockio/siwx-oidc-matrix-server/caddy-l4` — this is
+the prod-graduation vehicle (portal-caddy-1 needs to adopt this image before
+prod TURN-TLS can graduate).
+
+`Caddyfile.dev-aquafire`'s global options block carries the actual wrapper:
+
+```
+servers :443 {
+    listener_wrappers {
+        layer4 {
+            @turn_sni tls sni dev.turn.matrix.inblock.io
+            route @turn_sni {
+                tls
+                proxy tcp/livekit:5349
+            }
+        }
+        tls
+    }
+}
+```
+
+`layer4` MUST precede `tls` in `listener_wrappers` — it reads the raw
+ClientHello before decryption. `listener_wrappers` are TCP-only, so
+h3/QUIC on udp/443 for every other vhost is untouched.
+
+**Dummy cert-automation site is required.** The `tls` handler inside the
+`route @turn_sni` block does no certificate management of its own — it reads
+from Caddy's shared cert cache, which is only populated if *something* in the
+Caddyfile owns automation for that hostname. That's this site block:
+
+```
+dev.turn.matrix.inblock.io {
+    tls {
+        issuer acme {
+            disable_tlsalpn_challenge
+        }
+    }
+    respond "TURN-over-TLS termination endpoint" 200
+}
+```
+
+`disable_tlsalpn_challenge` is load-bearing, not decorative: TLS-ALPN-01
+validation is itself a TLS handshake carrying this same SNI, so without
+disabling it the `@turn_sni` matcher above would intercept and break
+Let's Encrypt's own validation attempt. Issuance instead runs HTTP-01 on
+port 80, which sits outside the `:443`-scoped `layer4` wrapper entirely.
+
+### Cert-sync design — SUPERSEDED by edge termination
+
+The original design (LiveKit terminating TLS itself via
+`cert_file`/`key_file`, fed by a sync-copy of Caddy's ACME cert) is no longer
+what dev-staging runs. `scripts/livekit-turn-cert-sync.sh` and
+`systemd/livekit-turn-cert-sync.{service,timer}` are **retained in the repo**
+as tooling for the passthrough alternative (LiveKit terminating TLS directly,
+no edge SNI demux) — the plan doc's decision record explains why edge
+termination (variant 2) was chosen instead for dev/prod. They are unused by
+the current `config/livekit.dev-staging.yaml` / `docker-compose.dev-staging.yml`.
+Original description, for the passthrough variant: Caddy renews a Let's
+Encrypt cert by atomic rename inside its own ACME storage volume (700
+root:root); never bind-mount those files directly into the livekit container
+(pins the mount to a stale inode); the script sync-copies cert+key into
+`config/livekit-tls/` gated by a sha256 checksum state file, restarting
+`livekit` only when the bytes changed (no TLS hot reload in livekit-server).
 
 ### Verification one-liners
 
 ```bash
-# Both TURN listeners bound (box: dev-aquafire)
-ss -tlnp | grep 5349
-ss -ulnp | grep 3478
+# TURN listeners bound on the box itself (dev-aquafire)
+ss -tlnp | grep 5349      # livekit's plaintext external_tls listener
+ss -ulnp | grep 3478      # TURN-UDP
 
-# TLS listener serves the expected LE cert (confirms tls_port works even
-# though clients can't reach it via the advertised :443 URL — see gotcha)
-openssl s_client -connect dev.matrix.inblock.io:5349 </dev/null 2>/dev/null | openssl x509 -noout -subject
+# End-to-end: dial :443 with the TURN SNI and confirm the LE cert for that
+# name comes back THROUGH the edge (proves the layer4 SNI match + the l4
+# `tls` terminator + the dummy site's cert automation all work together)
+openssl s_client -connect dev.turn.matrix.inblock.io:443 -servername dev.turn.matrix.inblock.io </dev/null 2>/dev/null | openssl x509 -noout -subject -enddate
 
-# Force a client onto the relay path to prove the UDP leg actually carries
-# media (aqua-agents, AQUA_E2E_FORCE_RELAY=1 — see T2 in the plan doc)
+# Caddy debug logs confirming the SNI match and the upstream dial (needs
+# `debug` log level; look for these two logger names specifically)
+docker logs caddy_proxy 2>&1 | grep 'caddy.listeners.layer4'   # the SNI matcher fired
+docker logs caddy_proxy 2>&1 | grep 'layer4.handlers.proxy'    # "dial upstream" to livekit:5349
+
+# Force a client onto the relay path to prove the TLS leg actually carries
+# media end to end (aqua-agents, AQUA_E2E_FORCE_RELAY=1 — see T3 in the plan doc)
 AQUA_E2E_FORCE_RELAY=1 <aqua-e2e run command> # relay-forced round vs dev-staging
 ```
 
 ### Firewall
 
-`5349/tcp` (TURN-TLS listener; inert behind the 443 gotcha above, but still
-needs to be open for the eventual graduation) and `3478/udp` (TURN-UDP,
-functional immediately) must be allowed on **both** layers on dev-aquafire:
-`ufw allow 5349/tcp`, `ufw allow 3478/udp`, and the DigitalOcean cloud
-firewall for the droplet. Neither existed before this change — verify both,
-not just one; a cloud firewall miss looks identical to a dead process from
-inside the box.
+`3478/udp` (TURN-UDP) must be allowed on **both** layers on dev-aquafire:
+`ufw allow 3478/udp` and the DigitalOcean cloud firewall for the droplet.
+`5349/tcp` (TURN-TLS) is **edge-internal only** — it is deliberately NOT
+host-published (see `docker-compose.dev-staging.yml`'s `livekit` service
+comment) and therefore needs **no** ufw rule; only the box's existing 443/tcp
+rule (already open for the rest of the Caddy vhosts) matters for the TLS
+leg. Verify with `ss -tlnp | grep 5349` showing a listener bound only inside
+the container network namespace, not on a host-facing rule.
 
 ### Restricted-peer CIDR default — no action needed
 
@@ -529,10 +615,11 @@ the default never blocks a real client and no override is needed.
 
 ## Known limitations
 
-- **LiveKit built-in TURN**: enabled on **dev-staging only** as of 2026-08-02
-  (see "Embedded TURN" above); production remains disabled pending the 443
-  graduation decision. Until then, clients behind symmetric NAT or strict
-  corporate firewalls may fail to connect on prod.
+- **LiveKit built-in TURN**: enabled on **dev-staging only** as of 2026-08-03,
+  via TLS-edge termination (see "Embedded TURN" above); production remains
+  disabled pending the prod-graduation checklist (needs portal-caddy-1 to
+  adopt the CI-built caddy-l4 image first). Until then, clients behind
+  symmetric NAT or strict corporate firewalls may fail to connect on prod.
 - **No TURN for legacy calls**: the stack has no coturn. Legacy 1:1 VoIP calls
   (non-MatrixRTC) will fail behind NAT. This is acceptable because
   `use_exclusively: true` routes all calls through MatrixRTC/LiveKit.

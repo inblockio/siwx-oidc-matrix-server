@@ -36,6 +36,14 @@ jobs:
             dockerfile: dockerfiles/Dockerfile
           - image: element-web
             dockerfile: dockerfiles/Dockerfile.element
+          # caddy-l4: prod-graduation vehicle for TURN-TLS edge termination
+          # (docs/superpowers/plans/2026-08-03-turn-tls-edge-termination.md).
+          # dev-staging currently builds this image ON THE BOX (T1 predates
+          # CI adoption there); this job is what lets the portal Caddy on
+          # prod (and, eventually, dev-staging) pull a CI-built, digest-
+          # pinnable image instead of building locally.
+          - image: caddy-l4
+            dockerfile: dockerfiles/Dockerfile.caddy-l4
     steps:
       - uses: actions/checkout@v4
 
