@@ -106,3 +106,25 @@ Server-side actions (hygiene, none required for this defect):
 8. Harness caveat (standing): aqua-e2e uses the Rust SDK's own capture and can
    never detect EX capture failures; EX-on-iOS is only validatable with a real
    phone + rageshake.
+
+## Resolution (2026-08-04 ~10:30Z)
+
+**Reinstalling Element X fixed it.** Discriminator ladder as executed:
+
+- iOS Settings Camera/Microphone toggles: already ON → not permissions.
+- Phone reboot: did NOT fix — 10:28Z call (old device `Z4IxyS5K9m`) still
+  published audio only.
+- **Reinstall: fixed immediately** — 10:30:43Z, fresh device `b7vzOqVG3C`
+  published audio + video (`TR_VCJpbzxsksxpC6`) 3 s after joining; the first
+  iOS video publish ever recorded on this stack. Web peer simulcast flowed
+  alongside.
+
+Root cause class: corrupted Element X app state wedging the call webview's
+capture layer (consistent with element-x-ios#4209 — CallKit
+`requesttransaction Code=4` → `enumerateDevices` returns no inputs → gUM
+yields nothing). The reinstall destroyed the rageshake evidence, so the exact
+corrupt state is unconfirmed. **If it recurs: capture a rageshake BEFORE
+reinstalling**, then escalate upstream with it.
+
+Outstanding from this audit: rotate `LIVEKIT_KEY`/`LIVEKIT_SECRET`
+(livekit.yaml + lk-jwt env together) — leaked into an agent session 2026-08-04.
