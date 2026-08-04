@@ -128,3 +128,11 @@ reinstalling**, then escalate upstream with it.
 
 Outstanding from this audit: rotate `LIVEKIT_KEY`/`LIVEKIT_SECRET`
 (livekit.yaml + lk-jwt env together) — leaked into an agent session 2026-08-04.
+
+**Key rotation EXECUTED 2026-08-04 ~20:06Z (Tim-authorized):** new `LIVEKIT_KEY`
+(id prefix `APIda6a…`) + secret generated on-box, written to stack `.env` only
+(rollback: `.env.bak-20260804-keyrot`); livekit + lk-jwt recreated in a quiet
+window. Gates green: both containers healthy, external-IP invariant single
+entry, jwt healthz 200, aqua-e2e 13/13 vs prod (token mint -> join -> media
+with the new key). Old key invalid; stale copies in historical `.env.bak-*`
+are dead values.
