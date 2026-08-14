@@ -193,18 +193,30 @@ data.
 
 ## Live staging
 
-Filled after `element-web` is recreated on dev-aquafire.
+Executed 2026-08-14 after recreating **element-web only** on dev-aquafire.
+
+| Item | Value |
+|---|---|
+| Image | `ghcr.io/inblockio/siwx-oidc-matrix-server/element-web:dev` |
+| Digest | `sha256:f07affe02e36d197f098db53af488da334a6dbe77fd390ed42eee3134b75fd74` |
+| Previous digest (rollback) | `sha256:b14c927047e2ab3bf2cbce677b92c16dc31f9b9f26bf389cbf6d5bec797e3f60` |
+| Hook in served `init.js` | `inblock-ew-eventindex`, `inblock-ew-eventindex-v1`, `feature_inblock_encrypted_search`, `getEventIndexingManager` |
+| Prod `element.inblock.io` same strings | **0** (bundle `0c04db0c1d276ac6cb27`) |
+| UX runner | `~/siwx-oidc/e2e/element/ew-encrypted-search.spec.mjs` against `https://dev.element.inblock.io` |
+| UX result | **1 passed (45.1s)** — throwaway `did:pkh:eip155:1:0x…` wallets, not production consultants |
 
 | Check | Result | Evidence |
 |---|---|---|
-| UX1 Search offered (no desktop-only dead end) | pending | |
-| UX2 unique token → hit → click opens event | pending | |
-| UX3 edit: new body only | pending | |
-| UX4 logout: search unavailable | pending | |
-| UX5 no plaintext bodies in storage | pending | |
-| UX6 second account cannot search the first | pending | |
-| UX7 reload while logged in still searches | pending | |
-| UX8 SIWX login golden path unchanged | pending | |
-| Prod `element.inblock.io` `supportsEventIndexing` still false | pending | hostname gate + no prod deploy |
-| I1 IDB dump is ciphertext | pending | |
-| I7 no search request in Network | pending | |
+| UX1 Search offered (no desktop-only dead end) | **pass** | Room-info `input[name="room_message_search"]` present; panel text has no "desktop only" / "desktop apps" |
+| UX2 unique token → hit | **pass** | `EventIndex.search` found `ewsearch-<ts>-alpha` after live send; stock search field accepted the term |
+| UX3 edit: new body only | **pass** | `m.replace` applied to the live event id; old token count 0, new token count > 0, hit keeps original `event_id` (Seshat semantics) |
+| UX4 logout: search unavailable | **pass** | Settings → Sessions → Remove this session; no "messages indexed" leftover UI |
+| UX5 no plaintext bodies in storage | **pass** | Post-logout dump of localStorage / sessionStorage / IndexedDB database list contained neither token |
+| UX6 second account cannot search the first | **pass** | New wallet, same Playwright browser context (shared profile); `search(firstToken).count === 0` |
+| UX7 reload while logged in still searches | **pass** | `page.reload()` then `mxEventIndexPeg.get() != null` |
+| UX8 SIWX login golden path unchanged | **pass** | Two fresh OIDC logins (account 1 + account 2) completed Secure Backup and reached the app shell; no CORS/issuer page errors |
+| Prod `element.inblock.io` still false | **pass** | hostname gate + no prod deploy; prod bundle marker count 0 |
+| I1 IDB dump is ciphertext | **pass** (unit + design) | Invariants script; live logout dump had no plaintext bodies. Ciphertext blobs optional. |
+| I7 no search request in Network | **pass** (code + design) | `searchEventIndex` is in-process; no query `fetch`. Crawl still uses stock `/messages`. |
+
+Note: the staging `matrix-staging-deploy.timer` independently pulled the same CI run's rebuilt `synapse:dev` (~1 minute before the element-web recreate). LiveKit / siwx-oidc / redis stayed at 7 days uptime. This work's compose command was `up -d --no-deps element-web` only.
