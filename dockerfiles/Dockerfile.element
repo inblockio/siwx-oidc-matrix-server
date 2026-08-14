@@ -35,6 +35,13 @@ RUN git apply --verbose /tmp/ew.patch
 COPY patches/element-web/auto-approve-check-code.patch /tmp/ew-checkcode.patch
 RUN git apply --verbose /tmp/ew-checkcode.patch
 
+# Encrypted-room search. Implements BaseEventIndexManager so hosted Element
+# Web can search E2EE rooms. Enabled on prod via
+# features.feature_inblock_encrypted_search (bind-mounted config). Independent
+# of the other patches. See docs/audits/2026-08-14-encrypted-search-eventindex-audit.md.
+COPY patches/element-web/browser-eventindex.patch /tmp/ew-eventindex.patch
+RUN git apply --verbose /tmp/ew-eventindex.patch
+
 # Install exactly what the lockfile pins.
 RUN corepack enable && pnpm install --frozen-lockfile
 
