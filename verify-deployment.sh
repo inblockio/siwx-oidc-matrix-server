@@ -112,6 +112,11 @@ else
   else
     fail "config server_name != ${MATRIX_HOST} (template not rendered?)"
   fi
+  if echo "$ELEMENT_CFG" | grep -q "\"permalink_prefix\"[[:space:]]*:[[:space:]]*\"https://${CLIENT_HOST}\""; then
+    pass "permalink_prefix is https://${CLIENT_HOST} (Share skips matrix.to)"
+  else
+    fail "permalink_prefix != https://${CLIENT_HOST} (Share would emit matrix.to → app.element.io)"
+  fi
 fi
 
 # -- 5. Element Web theme integrity (served) ----------------------------------
