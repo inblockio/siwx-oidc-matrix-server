@@ -229,4 +229,39 @@ Executed 2026-08-14 after recreating **element-web only** on dev-aquafire.
 | I1 IDB dump is ciphertext | **pass** (unit + design) | Invariants script; live logout dump had no plaintext bodies. Ciphertext blobs optional. |
 | I7 no search request in Network | **pass** (code + design) | `searchEventIndex` is in-process; no query `fetch`. Crawl still uses stock `/messages`. |
 
+## Prod promotion (2026-08-15)
+
+Explicit go-ahead. **Not** `deploy.sh --restart` (that would `compose down` the
+whole stack and override digest pins with floating tags).
+
+| Item | Value |
+|---|---|
+| Action | Recreate **element-web only** on `agentic.inblock.io` |
+| New digest | `sha256:0013c05351ddcf0eb399d92e3f23e159cc7911e17034d05f55e2b1aeb964ecec` (staging-verified) |
+| Previous digest (rollback) | `sha256:aa878627328dfa5a2f085a25bf92c3791d386b03b6d3becc73fa6d932ee0ed20` |
+| Enablement | `features.feature_inblock_encrypted_search: true` in bind-mounted `config/element-config.json` |
+| Config backup | `config/element-config.json.bak-ewsearch-20260814T222047Z` |
+| Env backup | `.env.bak-ewsearch-20260814T222047Z` |
+| Synapse / siwx-oidc / LiveKit | unchanged (10d / 2w / 10d uptime) |
+
+Stage 3a (2026-08-15): issuer slash, metadata byte-match, endpoints, S256,
+auth_metadata, CORS, config pins homeserver — **all PASS**. Served
+`config.json` has the flag `true`, `sso_redirect_options.immediate`,
+`force_verification`, permalink `https://element.inblock.io`. Bundle
+`3741aa948e19a2b4f8f0/init.js` contains `inblock-ew-eventindex` and
+`feature_inblock_encrypted_search`.
+
+Rollback (element-web only):
+
+```bash
+# on agentic.inblock.io, /home/deploy/matrix/stack
+# restore ELEMENT_IMAGE_REF from .env.bak-ewsearch-20260814T222047Z
+# restore config/element-config.json from the matching bak (or set the flag false)
+docker compose pull element-web
+docker compose up -d --no-deps --force-recreate element-web
+```
+
+Hard-reload the browser after deploy so the new hashed bundle loads. Existing
+sessions pick up the EventIndex on the next full reload while still logged in.
+
 Note: the staging `matrix-staging-deploy.timer` independently pulled the same CI run's rebuilt `synapse:dev` (~1 minute before the element-web recreate). LiveKit / siwx-oidc / redis stayed at 7 days uptime. This work's compose command was `up -d --no-deps element-web` only.
