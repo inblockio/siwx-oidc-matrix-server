@@ -123,10 +123,14 @@ Rules of this registry:
   `BaseEventIndexManager` so `WebPlatform.getEventIndexingManager()` is
   non-null and `supportsEventIndexing()` is true. The stock Search UX and
   Security → Message search pane light up. Index is an in-page inverted
-  index; at rest it is AES-GCM in a dedicated IndexedDB
-  (`inblock-ew-eventindex`). The DEK is a non-extractable `CryptoKey`
-  derived via HKDF from the session pickle key (destroyed on logout).
-  Enabled on `dev.element.inblock.io` / `localhost` / `127.0.0.1`, or when
+  index (AND of tokens, prefix on every token ≥ 2 chars, accent fold,
+  mid-word substring fallback for queries ≥ 3 chars); at rest it is AES-GCM
+  in a dedicated IndexedDB (`inblock-ew-eventindex`). Indexed text is
+  message body + filename + caption, not media bytes. Empty results while
+  the crawler is still running show `room|search|still_indexing` in the
+  stock aux panel. The DEK is a non-extractable `CryptoKey` derived via
+  HKDF from the session pickle key (destroyed on logout). Enabled on
+  `dev.element.inblock.io` / `localhost` / `127.0.0.1`, or when
   `features.feature_inblock_encrypted_search` is `true`. Forced off when
   that flag is `false`. Production hostname stays on the stock "desktop
   only" path.

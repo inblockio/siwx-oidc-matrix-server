@@ -14,10 +14,16 @@ import assert from "node:assert/strict";
 
 const HKDF_INFO = "inblock-ew-eventindex-v1";
 
-function tokenize(text) {
-    if (!text) return [];
+function foldText(text) {
     return text
         .toLocaleLowerCase()
+        .normalize("NFKD")
+        .replace(/\p{M}+/gu, "");
+}
+
+function tokenize(text) {
+    if (!text) return [];
+    return foldText(text)
         .split(/[^\p{L}\p{N}_]+/u)
         .filter((t) => t.length > 0);
 }
@@ -30,12 +36,34 @@ function replacedEventId(ev) {
     return null;
 }
 
+function stripHtml(s) {
+    return s.replace(/<[^>]+>/g, " ");
+}
+
+function collectText(value, into) {
+    if (typeof value === "string") {
+        if (value.length > 0) into.push(value);
+        return;
+    }
+    if (!value || typeof value !== "object") return;
+    if (typeof value.body === "string") into.push(value.body);
+    if (typeof value.filename === "string") into.push(value.filename);
+    if (typeof value.formatted_body === "string") into.push(stripHtml(value.formatted_body));
+    if (value["m.caption"] !== undefined) collectText(value["m.caption"], into);
+    if (value["org.matrix.msc1767.caption"] !== undefined) collectText(value["org.matrix.msc1767.caption"], into);
+    const markup = value["m.markup"] ?? value["org.matrix.msc1767.markup"];
+    if (Array.isArray(markup)) {
+        for (const part of markup) collectText(part, into);
+    }
+}
+
 function extractSearchText(ev) {
     if (ev.type === "m.room.name") return ev.content?.name ?? "";
     if (ev.type === "m.room.topic") return ev.content?.topic ?? "";
-    const neu = ev.content?.["m.new_content"];
-    if (neu && typeof neu.body === "string") return neu.body;
-    return ev.content?.body ?? "";
+    const parts = [];
+    collectText(ev.content, parts);
+    if (ev.content?.["m.new_content"]) collectText(ev.content["m.new_content"], parts);
+    return parts.filter((p) => p.length > 0).join(" ");
 }
 
 function bytesToB64(bytes) {
@@ -83,6 +111,20 @@ async function decryptJson(dek, blob, aad) {
     return JSON.parse(new TextDecoder().decode(pt));
 }
 
+function lookupToken(inverted, token) {
+    const out = new Set();
+    const exact = inverted.get(token);
+    if (exact) for (const id of exact) out.add(id);
+    if (token.length >= 2) {
+        for (const [idx, ids] of inverted) {
+            if (idx !== token && idx.startsWith(token)) {
+                for (const id of ids) out.add(id);
+            }
+        }
+    }
+    return out;
+}
+
 function andSearch(events, term) {
     const tokens = tokenize(term);
     const inverted = new Map();
@@ -92,10 +134,20 @@ function andSearch(events, term) {
             inverted.get(tok).add(ev.event_id);
         }
     }
-    let ids = null;
+    let ids = tokens.length === 0 ? new Set() : null;
     for (const tok of tokens) {
-        const hit = inverted.get(tok) ?? new Set();
+        const hit = lookupToken(inverted, tok);
         ids = ids === null ? new Set(hit) : new Set([...ids].filter((id) => hit.has(id)));
+        if (ids.size === 0) break;
+    }
+    if (!ids || ids.size === 0) {
+        const folded = foldText(term).replace(/\s+/g, " ").trim();
+        ids = new Set();
+        if (folded.length >= 3) {
+            for (const ev of events) {
+                if (foldText(extractSearchText(ev)).includes(folded)) ids.add(ev.event_id);
+            }
+        }
     }
     return ids ?? new Set();
 }
@@ -177,4 +229,32 @@ test("AND query requires every token", () => {
 
 test("tokenize does not keep punctuation that would leak as a second index", () => {
     assert.deepEqual(tokenize("Hello, WORLD!"), ["hello", "world"]);
+});
+
+test("fold accents so cafe matches café", () => {
+    assert.deepEqual(tokenize("Café Zürich"), ["cafe", "zurich"]);
+    const events = [{ event_id: "$1", type: "m.room.message", content: { body: "Meet at Café Zürich" } }];
+    assert.equal(andSearch(events, "cafe zurich").has("$1"), true);
+});
+
+test("prefix every token of length >= 2", () => {
+    const events = [{ event_id: "$1", type: "m.room.message", content: { body: "invoice payment received" } }];
+    assert.equal(andSearch(events, "inv pay").has("$1"), true);
+});
+
+test("filename and caption are searchable; media bytes are not", () => {
+    const file = {
+        event_id: "$f",
+        type: "m.room.message",
+        content: { body: "image.jpg", filename: "quarterly-report.pdf", url: "mxc://s/a" },
+    };
+    assert.match(extractSearchText(file), /quarterly-report\.pdf/);
+    assert.equal(andSearch([file], "quarterly-report").has("$f"), true);
+    assert.equal(extractSearchText(file).includes("mxc://"), false);
+});
+
+test("substring fallback for mid-word queries of length >= 3", () => {
+    const events = [{ event_id: "$1", type: "m.room.message", content: { body: "please send the invoice" } }];
+    assert.equal(andSearch(events, "oice").has("$1"), true);
+    assert.equal(andSearch(events, "ce").has("$1"), false);
 });

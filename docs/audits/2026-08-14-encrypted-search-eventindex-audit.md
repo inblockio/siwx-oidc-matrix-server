@@ -43,6 +43,13 @@ Seshat semantics reused: event classes `m.room.message` / `m.room.name` /
 `m.new_content.body`; crawler checkpoints; `addHistoricEvents` returns
 `true` only when every event in the batch was already present.
 
+Matcher (2026-08-14 follow-up): AND of tokens after `NFKD` + combining-mark
+strip; **prefix on every token of length ≥ 2**; if that set is empty and the
+folded query is ≥ 3 characters, a linear `searchText.includes` scan. Indexed
+text is body + `filename` + `formatted_body` (tags stripped) + MSC1767
+caption fields — not media bytes. While `crawlingRooms` is non-empty, the
+stock search aux panel shows `room|search|still_indexing`.
+
 ## Threat model
 
 | Threat | Residual | Mitigation |

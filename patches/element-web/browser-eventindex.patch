@@ -1,9 +1,54 @@
+diff --git a/apps/web/src/components/views/rooms/RoomSearchAuxPanel.tsx b/apps/web/src/components/views/rooms/RoomSearchAuxPanel.tsx
+index 14c7ad5..8e89da7 100644
+--- a/apps/web/src/components/views/rooms/RoomSearchAuxPanel.tsx
++++ b/apps/web/src/components/views/rooms/RoomSearchAuxPanel.tsx
+@@ -16,6 +16,7 @@ import { PosthogScreenTracker } from "../../../PosthogTrackers";
+ import SearchWarning, { WarningKind } from "../elements/SearchWarning";
+ import { type SearchInfo, SearchScope } from "../../../Searching";
+ import InlineSpinner from "../elements/InlineSpinner";
++import EventIndexPeg from "../../../indexing/EventIndexPeg";
+ 
+ interface Props {
+     searchInfo?: SearchInfo;
+@@ -26,6 +27,8 @@ interface Props {
+ 
+ const RoomSearchAuxPanel: React.FC<Props> = ({ searchInfo, isRoomEncrypted, onSearchScopeChange, onCancelClick }) => {
+     const scope = searchInfo?.scope ?? SearchScope.Room;
++    const crawling = EventIndexPeg.get()?.crawlingRooms();
++    const stillIndexing = Boolean(crawling && crawling.crawlingRooms.size > 0);
+ 
+     return (
+         <>
+@@ -46,6 +49,9 @@ const RoomSearchAuxPanel: React.FC<Props> = ({ searchInfo, isRoomEncrypted, onSe
+                             <InlineSpinner />
+                         )}
+                         <SearchWarning kind={WarningKind.Search} isRoomEncrypted={isRoomEncrypted} showLogo={false} />
++                        {stillIndexing ? (
++                            <div className="mx_RoomSearchAuxPanel_indexing">{_t("room|search|still_indexing")}</div>
++                        ) : null}
+                     </div>
+                 </div>
+                 <div className="mx_RoomSearchAuxPanel_buttons">
+diff --git a/apps/web/src/i18n/strings/en_EN.json b/apps/web/src/i18n/strings/en_EN.json
+index c5740df..d6c2e2e 100644
+--- a/apps/web/src/i18n/strings/en_EN.json
++++ b/apps/web/src/i18n/strings/en_EN.json
+@@ -2104,7 +2104,8 @@
+                 "one": "1 result found for “<query/>”",
+                 "other": "%(count)s results found for “<query/>”"
+             },
+-            "this_room_button": "Search this room"
++            "this_room_button": "Search this room",
++            "still_indexing": "Some rooms are still being indexed. Older messages may not appear yet."
+         },
+         "unknown_status_code_for_timeline_jump": "unknown status code",
+         "unread_notifications_predecessor": {
 diff --git a/apps/web/src/vector/platform/BrowserEventIndexManager.test.ts b/apps/web/src/vector/platform/BrowserEventIndexManager.test.ts
 new file mode 100644
-index 0000000..116aa9a
+index 0000000..d4c270a
 --- /dev/null
 +++ b/apps/web/src/vector/platform/BrowserEventIndexManager.test.ts
-@@ -0,0 +1,311 @@
+@@ -0,0 +1,383 @@
 +/*
 +Copyright 2026 inblock.io
 +
@@ -46,13 +91,19 @@ index 0000000..116aa9a
 +}
 +
 +describe("BrowserEventIndex helpers", () => {
-+    it("tokenizes case-insensitively and drops punctuation", () => {
++    it("tokenizes case-insensitively, folds accents, and drops punctuation", () => {
 +        expect(tokenize("Hello, WORLD! 42")).toEqual(["hello", "world", "42"]);
++        expect(tokenize("Café Zürich")).toEqual(["cafe", "zurich"]);
 +        expect(tokenize("")).toEqual([]);
 +    });
 +
-+    it("extracts body / name / topic and prefers m.new_content", () => {
++    it("extracts body / name / topic, filename, and prefers m.new_content", () => {
 +        expect(extractSearchText(msg("$1", "plain"))).toEqual("plain");
++        expect(
++            extractSearchText(
++                msg("$f", "image.jpg", { content: { filename: "quarterly-report.pdf", msgtype: "m.file" } }),
++            ),
++        ).toContain("quarterly-report.pdf");
 +        expect(
 +            extractSearchText({
 +                type: "m.room.name",
@@ -71,7 +122,7 @@ index 0000000..116aa9a
 +                    content: { "m.new_content": { body: "new body", msgtype: "m.text" } },
 +                }),
 +            ),
-+        ).toEqual("new body");
++        ).toContain("new body");
 +    });
 +
 +    it("detects m.replace and rewrites the stored event id to the original", () => {
@@ -150,6 +201,72 @@ index 0000000..116aa9a
 +    afterEach(async () => {
 +        await manager.deleteEventIndex();
 +        vi.restoreAllMocks();
++    });
++
++    it("prefixes every token of length >= 2", async () => {
++        await manager.initEventIndex("@alice:example.org", "DEVICE1");
++        await manager.addEventToIndex(msg("$p", "invoice payment received"), {});
++        const hit = await manager.searchEventIndex({
++            search_term: "inv pay",
++            before_limit: 0,
++            after_limit: 0,
++            order_by_recency: true,
++            limit: 10,
++        });
++        expect(hit.count).toBe(1);
++        expect(hit.results![0].result.event_id).toEqual("$p");
++    });
++
++    it("folds accents so cafe matches café", async () => {
++        await manager.initEventIndex("@alice:example.org", "DEVICE1");
++        await manager.addEventToIndex(msg("$c", "Meet at Café Zürich"), {});
++        const hit = await manager.searchEventIndex({
++            search_term: "cafe zurich",
++            before_limit: 0,
++            after_limit: 0,
++            order_by_recency: true,
++            limit: 10,
++        });
++        expect(hit.count).toBe(1);
++    });
++
++    it("finds a file by filename even when body is just the short name", async () => {
++        await manager.initEventIndex("@alice:example.org", "DEVICE1");
++        await manager.addEventToIndex(
++            msg("$file", "image.jpg", {
++                content: { filename: "quarterly-report.pdf", url: "mxc://s/a", msgtype: "m.file" },
++            }),
++            {},
++        );
++        const hit = await manager.searchEventIndex({
++            search_term: "quarterly-report",
++            before_limit: 0,
++            after_limit: 0,
++            order_by_recency: true,
++            limit: 10,
++        });
++        expect(hit.count).toBe(1);
++    });
++
++    it("falls back to mid-word substring when token AND misses (query length >= 3)", async () => {
++        await manager.initEventIndex("@alice:example.org", "DEVICE1");
++        await manager.addEventToIndex(msg("$s", "please send the invoice"), {});
++        const hit = await manager.searchEventIndex({
++            search_term: "oice",
++            before_limit: 0,
++            after_limit: 0,
++            order_by_recency: true,
++            limit: 10,
++        });
++        expect(hit.count).toBe(1);
++        const tooShort = await manager.searchEventIndex({
++            search_term: "ce",
++            before_limit: 0,
++            after_limit: 0,
++            order_by_recency: true,
++            limit: 10,
++        });
++        expect(tooShort.count).toBe(0);
 +    });
 +
 +    it("indexes a live event and finds it via the stock search shape", async () => {
@@ -317,10 +434,10 @@ index 0000000..116aa9a
 +});
 diff --git a/apps/web/src/vector/platform/BrowserEventIndexManager.ts b/apps/web/src/vector/platform/BrowserEventIndexManager.ts
 new file mode 100644
-index 0000000..8835600
+index 0000000..f9ddb1a
 --- /dev/null
 +++ b/apps/web/src/vector/platform/BrowserEventIndexManager.ts
-@@ -0,0 +1,881 @@
+@@ -0,0 +1,938 @@
 +/*
 +Copyright 2026 inblock.io
 +
@@ -417,10 +534,17 @@ index 0000000..8835600
 +    return out;
 +}
 +
-+export function tokenize(text: string): string[] {
-+    if (!text) return [];
++/** Lowercase + strip combining marks so café matches cafe. */
++export function foldText(text: string): string {
 +    return text
 +        .toLocaleLowerCase()
++        .normalize("NFKD")
++        .replace(/\p{M}+/gu, "");
++}
++
++export function tokenize(text: string): string[] {
++    if (!text) return [];
++    return foldText(text)
 +        .split(/[^\p{L}\p{N}_]+/u)
 +        .filter((t) => t.length > 0);
 +}
@@ -433,13 +557,37 @@ index 0000000..8835600
 +    return null;
 +}
 +
++function stripHtml(s: string): string {
++    return s.replace(/<[^>]+>/g, " ");
++}
++
++function collectText(value: unknown, into: string[]): void {
++    if (typeof value === "string") {
++        if (value.length > 0) into.push(value);
++        return;
++    }
++    if (!value || typeof value !== "object") return;
++    const o = value as Record<string, unknown>;
++    if (typeof o.body === "string") into.push(o.body);
++    if (typeof o.filename === "string") into.push(o.filename);
++    if (typeof o.formatted_body === "string") into.push(stripHtml(o.formatted_body));
++    if (o["m.caption"] !== undefined) collectText(o["m.caption"], into);
++    if (o["org.matrix.msc1767.caption"] !== undefined) collectText(o["org.matrix.msc1767.caption"], into);
++    const markup = o["m.markup"] ?? o["org.matrix.msc1767.markup"];
++    if (Array.isArray(markup)) {
++        for (const part of markup) collectText(part, into);
++    }
++}
++
 +export function extractSearchText(ev: IMatrixEvent): string {
 +    const type = ev.type;
 +    if (type === "m.room.name") return typeof ev.content?.name === "string" ? ev.content.name : "";
 +    if (type === "m.room.topic") return typeof ev.content?.topic === "string" ? ev.content.topic : "";
-+    const newContent = ev.content?.["m.new_content"];
-+    if (newContent && typeof newContent.body === "string") return newContent.body;
-+    return typeof ev.content?.body === "string" ? ev.content.body : "";
++    const parts: string[] = [];
++    collectText(ev.content, parts);
++    const neu = ev.content?.["m.new_content"];
++    if (neu) collectText(neu, parts);
++    return parts.filter((p) => p.length > 0).join(" ");
 +}
 +
 +export function eventHasFile(ev: IMatrixEvent): boolean {
@@ -730,13 +878,11 @@ index 0000000..8835600
 +    public async searchEventIndex(searchArgs: ISearchArgs): Promise<IResultRoomEvents> {
 +        const tokens = tokenize(searchArgs.search_term);
 +        const empty: IResultRoomEvents = { count: 0, results: [], highlights: tokens, next_batch: undefined };
-+        if (this.closed || tokens.length === 0) return empty;
++        if (this.closed) return empty;
 +
-+        let ids: Set<string> | null = null;
-+        for (let i = 0; i < tokens.length; i++) {
-+            const token = tokens[i];
-+            const isPrefix = i === tokens.length - 1;
-+            const matches = this.lookupToken(token, isPrefix);
++        let ids: Set<string> | null = tokens.length === 0 ? new Set() : null;
++        for (const token of tokens) {
++            const matches = this.lookupToken(token, token.length >= 2);
 +            if (ids === null) {
 +                ids = matches;
 +            } else {
@@ -746,8 +892,13 @@ index 0000000..8835600
 +                }
 +                ids = next;
 +            }
-+            if (ids.size === 0) return empty;
++            if (ids.size === 0) break;
 +        }
++
++        if (!ids || ids.size === 0) {
++            ids = this.substringHits(searchArgs.search_term, searchArgs.room_id);
++        }
++        if (ids.size === 0) return empty;
 +
 +        let hits = Array.from(ids!, (eventId) => this.events.get(eventId)).filter((e): e is StoredEvent => Boolean(e));
 +        if (searchArgs.room_id) {
@@ -795,6 +946,18 @@ index 0000000..8835600
 +            const existing = this.events.get(id);
 +            const isReplace = replacedEventId(event) !== null;
 +            if (existing && !isReplace && existing.edited === false) {
++                const incoming = effectiveEventForIndex(event);
++                const nextText = extractSearchText(incoming);
++                const nextFile = eventHasFile(incoming);
++                if (nextText !== existing.searchText || nextFile !== existing.hasFile) {
++                    this.unindexTokens(existing.eventId, existing.searchText);
++                    existing.searchText = nextText;
++                    existing.hasFile = nextFile;
++                    existing.event = incoming;
++                    this.indexTokens(existing.eventId, nextText);
++                    this.schedulePersistEvent(id);
++                    allAlready = false;
++                }
 +                continue;
 +            }
 +            if (existing && !isReplace && existing.edited) {
@@ -1006,6 +1169,17 @@ index 0000000..8835600
 +            set.delete(eventId);
 +            if (set.size === 0) this.inverted.delete(token);
 +        }
++    }
++
++    private substringHits(rawQuery: string, roomId?: string): Set<string> {
++        const folded = foldText(rawQuery).replace(/\s+/g, " ").trim();
++        const out = new Set<string>();
++        if (folded.length < 3) return out;
++        for (const ev of this.events.values()) {
++            if (roomId && ev.roomId !== roomId) continue;
++            if (foldText(ev.searchText).includes(folded)) out.add(ev.eventId);
++        }
++        return out;
 +    }
 +
 +    private lookupToken(token: string, prefix: boolean): Set<string> {
