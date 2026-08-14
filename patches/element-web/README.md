@@ -33,6 +33,16 @@ Rules of this registry:
 
 ---
 
+## Which Dockerfile applies what
+
+`dev` / `:dev` applies every numbered patch below. `main` / prod image
+source applies **1, 5, and 6 only** (recovery, check-code, EventIndex).
+Entries 2–4 are still policy we maintain; they ship on staging until
+promoted. A tag bump must still try them in this file's order when
+refreshing the `dev` Dockerfile.
+
+---
+
 ## Source patches (applied to the upstream tree, in Dockerfile order)
 
 ### 1. `force-first-device-recovery.patch` — POLICY (permanent)
@@ -117,8 +127,9 @@ Rules of this registry:
 - **Retirement:** upstream streamlines the check-code step.
 - **Coverage:** exercised by the QR-link browser walks (check-code leg).
 
-### 6. `browser-eventindex.patch` — POLICY (staging only until explicit prod go-ahead)
+### 6. `browser-eventindex.patch` — POLICY (permanent until upstream)
 
+- **Applied by:** `dev` Dockerfile and `main` Dockerfile (prod).
 - **What:** a `BrowserEventIndexManager` implementing Element's
   `BaseEventIndexManager` so `WebPlatform.getEventIndexingManager()` is
   non-null and `supportsEventIndexing()` is true. The stock Search UX and
@@ -129,17 +140,17 @@ Rules of this registry:
   message body + filename + caption, not media bytes. Empty results while
   the crawler is still running show `room|search|still_indexing` in the
   stock aux panel. The DEK is a non-extractable `CryptoKey` derived via
-  HKDF from the session pickle key (destroyed on logout). Enabled on
-  `dev.element.inblock.io` / `localhost` / `127.0.0.1`, or when
-  `features.feature_inblock_encrypted_search` is `true`. Forced off when
-  that flag is `false`. Production hostname stays on the stock "desktop
-  only" path.
+  HKDF from the session pickle key (destroyed on logout). On by hostname
+  for `dev.element.inblock.io` / `localhost` / `127.0.0.1`. On prod via
+  bind-mounted `features.feature_inblock_encrypted_search: true` (set
+  `false` to force off without a rebuild).
 - **Why we maintain it:** every inblock room is E2EE; upstream Web has no
   EventIndex, so Search is N/A. Product client is hosted Element Web, not
   Desktop. A Seshat WASM port was evaluated and rejected (SQLCipher /
   Tantivy 0.12 / native threads / Neon).
 - **Evidence:** `docs/2026-08-14-HANDOVER-encrypted-search-browser-eventindex.md`;
-  audit `docs/audits/2026-08-14-encrypted-search-eventindex-audit.md`.
+  audit `docs/audits/2026-08-14-encrypted-search-eventindex-audit.md`
+  (staging UX1–UX8 + prod promotion 2026-08-15).
 - **Upstream status:** NOT a Seshat port. The interface is upstream's;
   the store is ours. Do not file as "Seshat for Web".
 - **Retirement:** only if upstream ships a browser EventIndex that meets
@@ -147,9 +158,9 @@ Rules of this registry:
   stops requiring hosted-Web search.
 - **Coverage:** Element-tree vitest in the patch
   (`BrowserEventIndexManager.test.ts`); repo
-  `scripts/browser-eventindex-invariants.mjs`; staging UX1–UX8 in the
-  audit. Default `enableEventIndexing` stays upstream's `true` (same as
-  Desktop) — recorded in the audit.
+  `scripts/browser-eventindex-invariants.mjs`;
+  `~/siwx-oidc/e2e/element/ew-encrypted-search.spec.mjs`. Default
+  `enableEventIndexing` stays upstream's `true` (same as Desktop).
 
 ---
 

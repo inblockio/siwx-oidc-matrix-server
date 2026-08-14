@@ -7,15 +7,20 @@ the inblock.io overlay (config, theme, favicons) on top via the existing
 
 ## Why from source
 
-We carry a patch that makes a **recoverable identity mandatory on first login**:
-`patches/element-web/force-first-device-recovery.patch`. It modifies
-`apps/web/src/components/structures/MatrixChat.tsx` so `shouldForceVerification`
-also requires secret storage (4S) to be ready, and drives Element's recovery-key
-creation flow when a lone first device has cross-signing but no recovery key.
-This cannot be applied to a prebuilt image, so we build the source ourselves.
+We carry vendored patches that cannot ship on the prebuilt `vectorim/element-web`
+image. The **canonical list** — what, why, upstream status, retirement, and
+which Dockerfile (`dev` vs `main`) applies each file — is
+`patches/element-web/README.md`. A patch without an entry there is a fork we
+will forget how to delete.
 
-The patch in `patches/element-web/` is the **single source of truth** and is
-identical to the corresponding upstream PR to `element-hq/element-web`.
+The two load-bearing POLICY patches on both `dev` and `main` today:
+
+- `force-first-device-recovery.patch` — recoverable identity (4S) mandatory on
+  first login (`MatrixChat.tsx`).
+- `browser-eventindex.patch` — hosted E2EE search via Element's EventIndex
+  hook (prod: `features.feature_inblock_encrypted_search`).
+
+This cannot be applied to a prebuilt image, so we build the source ourselves.
 
 ## Pinned tag
 
