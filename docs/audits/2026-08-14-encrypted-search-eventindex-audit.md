@@ -1,10 +1,13 @@
 # Audit — Encrypted-room search (browser EventIndex)
 
 Date: 2026-08-14
-Target: `dev.element.inblock.io` only
-Image: `ghcr.io/inblockio/siwx-oidc-matrix-server/element-web:dev` after
-`feat/ew-encrypted-search-eventindex` merges to `dev`
-Prod: not in scope. `element.inblock.io` is gated off in code.
+Target: `dev.element.inblock.io`, then prod `element.inblock.io` after
+explicit 2026-08-15 go-ahead.
+Image (staging-verified, promoted):
+`ghcr.io/inblockio/siwx-oidc-matrix-server/element-web@sha256:0013c05351ddcf0eb399d92e3f23e159cc7911e17034d05f55e2b1aeb964ecec`
+Prod enablement: `features.feature_inblock_encrypted_search: true` in the
+bind-mounted `config/element-config.json`. Hostname allowlist is unchanged
+(still staging/localhost); the flag is the prod switch.
 
 This file is the blocking Phase-6 deliverable of
 `docs/2026-08-14-HANDOVER-encrypted-search-browser-eventindex.md`.
