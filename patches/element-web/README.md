@@ -117,6 +117,36 @@ Rules of this registry:
 - **Retirement:** upstream streamlines the check-code step.
 - **Coverage:** exercised by the QR-link browser walks (check-code leg).
 
+### 6. `browser-eventindex.patch` — POLICY (staging only until explicit prod go-ahead)
+
+- **What:** a `BrowserEventIndexManager` implementing Element's
+  `BaseEventIndexManager` so `WebPlatform.getEventIndexingManager()` is
+  non-null and `supportsEventIndexing()` is true. The stock Search UX and
+  Security → Message search pane light up. Index is an in-page inverted
+  index; at rest it is AES-GCM in a dedicated IndexedDB
+  (`inblock-ew-eventindex`). The DEK is a non-extractable `CryptoKey`
+  derived via HKDF from the session pickle key (destroyed on logout).
+  Enabled on `dev.element.inblock.io` / `localhost` / `127.0.0.1`, or when
+  `features.feature_inblock_encrypted_search` is `true`. Forced off when
+  that flag is `false`. Production hostname stays on the stock "desktop
+  only" path.
+- **Why we maintain it:** every inblock room is E2EE; upstream Web has no
+  EventIndex, so Search is N/A. Product client is hosted Element Web, not
+  Desktop. A Seshat WASM port was evaluated and rejected (SQLCipher /
+  Tantivy 0.12 / native threads / Neon).
+- **Evidence:** `docs/2026-08-14-HANDOVER-encrypted-search-browser-eventindex.md`;
+  audit `docs/audits/2026-08-14-encrypted-search-eventindex-audit.md`.
+- **Upstream status:** NOT a Seshat port. The interface is upstream's;
+  the store is ours. Do not file as "Seshat for Web".
+- **Retirement:** only if upstream ships a browser EventIndex that meets
+  I1–I8 (ciphertext at rest, session-bound key, logout wipe) or product
+  stops requiring hosted-Web search.
+- **Coverage:** Element-tree vitest in the patch
+  (`BrowserEventIndexManager.test.ts`); repo
+  `scripts/browser-eventindex-invariants.mjs`; staging UX1–UX8 in the
+  audit. Default `enableEventIndexing` stays upstream's `true` (same as
+  Desktop) — recorded in the audit.
+
 ---
 
 ## Runtime-stage deltas (not `.patch` files, still upstream deviations)

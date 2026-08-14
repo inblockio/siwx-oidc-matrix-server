@@ -37,6 +37,9 @@ RUN git clone --depth 1 --branch "${ELEMENT_WEB_TAG}" \
 #  - offer-verify-current-session: UPSTREAM dead end. An unverified session was
 #    shown a card that offered no action and no reason, leaving the DESTRUCTIVE
 #    identity reset as the only visible exit.
+#  - browser-eventindex:           OUR policy (staging). Implements the stock
+#    EventIndex hook so E2EE search works in hosted Element Web. Gated off on
+#    the production hostname.
 #
 # Order matters only for en_EN.json, which three of them touch in different
 # places; applied in this order every hunk lands (verified against a pristine
@@ -57,6 +60,13 @@ RUN git apply --verbose /tmp/ew-verify-offer.patch
 # the second digit. Same fail-loudly contract as the patch above.
 COPY patches/element-web/auto-approve-check-code.patch /tmp/ew-checkcode.patch
 RUN git apply --verbose /tmp/ew-checkcode.patch
+
+# Encrypted-room search for hosted Element Web (dev-staging only). Implements
+# BaseEventIndexManager so supportsEventIndexing() is true on
+# dev.element.inblock.io. Independent of the other patches (new files +
+# WebPlatform.ts). See patches/element-web/README.md.
+COPY patches/element-web/browser-eventindex.patch /tmp/ew-eventindex.patch
+RUN git apply --verbose /tmp/ew-eventindex.patch
 
 # Install exactly what the lockfile pins.
 RUN corepack enable && pnpm install --frozen-lockfile
