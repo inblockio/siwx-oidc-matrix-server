@@ -120,6 +120,7 @@ services:
     environment:
       MATRIX_BASE_URL: ${MATRIX_BASE_URL:-http://localhost:${MATRIX_HOST_PORT:-8080}}
       MATRIX_HOST: ${MATRIX_HOST:-localhost}
+      CLIENT_HOST: ${CLIENT_HOST:-}
       SIWEOIDC_BASE_URL: ${SIWEOIDC_BASE_URL:-http://localhost:${SIWEOIDC_HOST_PORT:-8081}}
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:8080/ || exit 1"]

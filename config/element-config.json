@@ -11,6 +11,7 @@
   "disable_guests": true,
   "disable_login_language_selector": true,
   "brand": "inblock.io Chat",
+  "permalink_prefix": "https://%%CLIENT_HOST%%",
   "default_theme": "custom-inblock.io Dark",
   "element_call": {
     "url": "https://call.element.io",

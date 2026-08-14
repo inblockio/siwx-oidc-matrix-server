@@ -10,6 +10,16 @@ fi
 # Placeholders use %% delimiters to avoid clashing with JSON syntax.
 sed -i "s|%%MATRIX_BASE_URL%%|${MATRIX_BASE_URL}|g" /app/config.json
 sed -i "s|%%MATRIX_HOST%%|${MATRIX_HOST}|g" /app/config.json
+# permalink_prefix is Element's documented way to emit instance URLs from
+# Share instead of matrix.to (which always Continues to app.element.io).
+# CLIENT_HOST is already in each environment's .env. If it is unset (local
+# / e2e without a public client vhost), drop the key so we do not emit
+# "https://" as a prefix.
+if [ -n "${CLIENT_HOST}" ]; then
+  sed -i "s|%%CLIENT_HOST%%|${CLIENT_HOST}|g" /app/config.json
+else
+  sed -i '/"permalink_prefix"/d' /app/config.json
+fi
 
 # Replace Element's vector-icons favicons with inblock.io branding.
 for size in 24 120 144 152 180 512 1024; do
