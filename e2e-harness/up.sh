@@ -19,6 +19,15 @@ NET="siwx-e2eh-net"
 # Same env-overridable digest pin as docker-compose.yml / docker-compose.e2e.yml.
 LK_JWT_IMAGE_REF="${LK_JWT_IMAGE_REF:-ghcr.io/element-hq/lk-jwt-service:0.5.0@sha256:29918567e6b7cd920e2853b4cd6848ce01b79947c3d19a9f1ed5b74f0a2a88bf}"
 
+# Env-overridable image refs, same convention as LK_JWT_IMAGE_REF above. The
+# defaults are exactly what the harness has always run, so an unset environment
+# behaves identically. Overriding lets a version-bump branch validate a candidate
+# image WITHOUT clobbering the shared localhost/* tags the siwx-real-* stack uses:
+#   SYNAPSE_IMAGE_REF=localhost/siwx-real-synapse:mas e2e-harness/up.sh
+SYNAPSE_IMAGE_REF="${SYNAPSE_IMAGE_REF:-localhost/siwx-real-synapse:local}"
+SIWX_OIDC_IMAGE_REF="${SIWX_OIDC_IMAGE_REF:-localhost/siwx-oidc:local-grace}"
+LIVEKIT_IMAGE_REF="${LIVEKIT_IMAGE_REF:-livekit/livekit-server:v1.12.0}"
+
 FRESH=0
 [ "${1:-}" = "--fresh" ] && FRESH=1
 
@@ -64,7 +73,7 @@ podman run -d --name siwx-e2eh-redis --network "${NET}" --restart unless-stopped
   --health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5 \
   docker.io/library/redis:7-alpine redis-server --appendonly yes >/dev/null
 
-# 5. siwx-oidc (reuse localhost/siwx-oidc:local-grace; listens on 8081 internally)
+# 5. siwx-oidc (SIWX_OIDC_IMAGE_REF; listens on 8081 internally)
 echo "[up] starting siwx-e2eh-oidc"
 podman run -d --name siwx-e2eh-oidc --network "${NET}" --restart unless-stopped \
   -e SIWEOIDC_ADDRESS=0.0.0.0 \
@@ -80,9 +89,9 @@ podman run -d --name siwx-e2eh-oidc --network "${NET}" --restart unless-stopped 
   -e RUST_LOG="${RUST_LOG}" \
   --health-cmd "wget --no-verbose --tries=1 --spider http://127.0.0.1:8081/.well-known/openid-configuration" \
   --health-interval 10s --health-timeout 5s --health-retries 5 --health-start-period 10s \
-  localhost/siwx-oidc:local-grace >/dev/null
+  "${SIWX_OIDC_IMAGE_REF}" >/dev/null
 
-# 6. synapse (reuse localhost/siwx-real-synapse:local; internal 8008, published 18448)
+# 6. synapse (SYNAPSE_IMAGE_REF; internal 8008, published 18448)
 #    First boot generates homeserver.yaml from the env contract in synapse_entrypoint.sh.
 echo "[up] starting siwx-e2eh-synapse (host ${SYNAPSE_HOST_PORT} -> 8008)"
 podman run -d --name siwx-e2eh-synapse --network "${NET}" --restart unless-stopped \
@@ -98,7 +107,7 @@ podman run -d --name siwx-e2eh-synapse --network "${NET}" --restart unless-stopp
   -v siwx-e2eh-matrix-data:/data \
   --health-cmd "curl -fSs http://localhost:8008/health || exit 1" \
   --health-interval 15s --health-timeout 5s --health-retries 5 --health-start-period 30s \
-  localhost/siwx-real-synapse:local >/dev/null
+  "${SYNAPSE_IMAGE_REF}" >/dev/null
 
 # 7. livekit (publish 7880 for the AV check + 7881/tcp + 20100-20200 (below the ephemeral range)/udp)
 echo "[up] starting siwx-e2eh-livekit"
@@ -108,7 +117,7 @@ podman run -d --name siwx-e2eh-livekit --network "${NET}" --restart unless-stopp
   -p "${LIVEKIT_RTC_UDP_START}-${LIVEKIT_RTC_UDP_END}:${LIVEKIT_RTC_UDP_START}-${LIVEKIT_RTC_UDP_END}/udp" \
   -e LIVEKIT_KEYS="${LIVEKIT_KEY}: ${LIVEKIT_SECRET}" \
   -v "${REPO_ROOT}/config/livekit.e2e.yaml:/etc/livekit.yaml:ro" \
-  livekit/livekit-server:v1.12.0 --config /etc/livekit.yaml >/dev/null
+  "${LIVEKIT_IMAGE_REF}" --config /etc/livekit.yaml >/dev/null
 
 # 8. lk-jwt-service (internal :8080; reached via caddy /livekit/jwt)
 #    Digest-pinned to the SAME ref production runs (docker-compose.yml), so the
