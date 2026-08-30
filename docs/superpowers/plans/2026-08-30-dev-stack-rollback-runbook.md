@@ -61,15 +61,76 @@ cd /home/dev/matrix-staging && docker compose -f docker-compose.dev-staging.yml 
 ```
 ```bash
 # What this does: confirms Synapse is back on proxy_net (this is the check that matters — not just "container running")
-docker inspect matrix-staging-matrix_synapse-1 --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}'
+# NOTE: resolve the container by SERVICE, never by name -- see "Never address Synapse by container name" below.
+docker inspect "$(docker compose -p matrix-staging -f /home/dev/matrix-staging/docker-compose.dev-staging.yml ps -q matrix_synapse)" \
+  --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}'
 ```
 Expected output: a space-separated network list that **includes `proxy_net`**.
 
 ---
 
+## ⚠️ Never address Synapse by container name — resolve it by service
+
+**Every `docker exec` / `docker inspect` in this runbook resolves the container id
+from the compose SERVICE, never from a literal container name.** This is not style.
+
+Docker renames a container on name conflict by prefixing the colliding id: the live
+dev-staging Synapse is currently named
+`fa538faf65ed_matrix-staging-matrix_synapse-1`, **not**
+`matrix-staging-matrix_synapse-1`. Every command in this runbook that hardcoded the
+latter returned `Error response from daemon: No such container` — verified against the
+live box on 2026-08-30.
+
+**Why that specific failure is dangerous here:** Section 2 Step 6 *is* the
+post-rollback verification. With hardcoded names all four of its checks fail
+**identically whether the rollback worked or not**, so an operator mid-incident
+cannot distinguish "the rollback failed" from "the instrument is stale" — the
+worst possible failure mode for a disaster-recovery instrument.
+
+Resolve it once per shell and reuse:
+
+```bash
+# What this does: resolves the Synapse container id from the compose service, surviving any container rename
+SYN="$(docker compose -p matrix-staging -f /home/dev/matrix-staging/docker-compose.dev-staging.yml ps -q matrix_synapse)"
+[ -n "$SYN" ] || { echo "FATAL: could not resolve matrix_synapse container"; }
+echo "$SYN"
+```
+Expected output: a 64-hex container id. **An empty result means Synapse is not
+running** — that is itself a finding, not a reason to fall back to a literal name.
+
+`compose ps -q` matches on compose LABELS, not on the container name, so it resolves
+a renamed container correctly. Explicit `-p matrix-staging` is required by the
+`COMPOSE_PROJECT_NAME` rule in the section above.
+
+**Durable follow-up (not yet applied):** giving `matrix_synapse` an explicit
+`container_name:` in `docker-compose.dev-staging.yml` — the pattern
+`docker-compose.caddy-proxy.yml` already uses for `caddy_proxy` ("Explicit, stable
+name so ops/rollback commands ... do not depend on the compose-generated suffix") —
+would also fix this. It is deliberately NOT applied yet because it forces a
+recreation of the live Synapse container, and dev-staging is mid-validation. The
+`ps -q` form above is strictly more robust anyway: it survives future renames too.
+
+---
+
 ## Captured artifacts (all on the dev box, nowhere else)
 
-Base dir: `/home/dev/rollback-drill/artifacts/20260830T145700Z/`
+Base dir (canonical, since 2026-08-30):
+`/home/dev/matrix-staging/backups/2026-08-30-pre-synapse-1.159-mas-migration/`
+
+**Why it moved.** These artifacts are the SOLE copy of dev-staging's
+pre-migration state — they exist on no other host, in no repo, in no object
+store. They used to live only at `/home/dev/rollback-drill/artifacts/20260830T145700Z/`,
+reachable from `backups/` by a symlink pointing *into* that scratch directory.
+Anyone tidying up a directory called "rollback-drill" would have destroyed the
+only restore source this runbook has, and the symlink would have been left
+dangling. The real data now lives under `matrix-staging/backups/` alongside the
+1.154 snapshot, and **the old path is now a symlink pointing here**, so every
+path below and every command in Sections 2 and 4 keeps working unchanged.
+Verified after the move: `sha256sum -c MANIFEST.sha256` → 24 OK via both paths,
+and `homeserver.yaml` / `env.snapshot` are still mode 600.
+
+A `DO-NOT-DELETE.txt` in that directory states the same, for whoever finds it
+without this runbook.
 
 | File | Contents |
 |---|---|
@@ -121,7 +182,8 @@ Expected output: none (silent success). The lock is held for the life of this sh
 # What this does: stops only the Synapse container so its data volume is quiescent for the restore
 docker compose -f docker-compose.dev-staging.yml --env-file .env stop matrix_synapse
 ```
-Expected output: `Container matrix-staging-matrix_synapse-1  Stopped`
+Expected output: a line ending `Stopped` for the Synapse container. **Do not assert the
+exact name** — a renamed container prints e.g. `fa538faf65ed_matrix-staging-matrix_synapse-1`.
 
 **Step 2 — back up the CURRENT (broken/migrated) volume first**, so the failed
 state is forensically preserved before you overwrite it:
@@ -166,31 +228,43 @@ ghcr.io/inblockio/siwx-oidc-matrix-server/synapse@sha256:a0b480cc3f4f9cdc4d141c7
 # What this does: recreates the Synapse container on the pinned 1.154.0 digest against the restored volume
 docker compose -f docker-compose.dev-staging.yml --env-file .env up -d matrix_synapse
 ```
-Expected output: `Container matrix-staging-matrix_synapse-1  Started`
+Expected output: a line ending `Started` for the Synapse container (the printed name may
+carry a rename prefix; that is fine).
 
-**Step 6 — verify, in order:**
+**Step 6 — verify, in order.**
+
+**Step 6.0 — resolve the container id FIRST.** Every check below uses `$SYN`. Do not
+substitute a literal container name (see "Never address Synapse by container name"
+above); if this step yields nothing, stop and find out why.
+
+```bash
+# What this does: resolves the Synapse container from its compose service, surviving container renames
+SYN="$(docker compose -p matrix-staging -f docker-compose.dev-staging.yml ps -q matrix_synapse)"
+[ -n "$SYN" ] || echo "FATAL: matrix_synapse did not resolve -- it is not running; the rollback has NOT succeeded"
+```
+Expected: a 64-hex id, no FATAL line.
 
 ```bash
 # What this does: confirms the running container is actually 1.154.0
-docker exec matrix-staging-matrix_synapse-1 pip show matrix-synapse | head -2
+docker exec "$SYN" pip show matrix-synapse | head -2
 ```
 Expected: `Version: 1.154.0`
 
 ```bash
 # What this does: confirms the load-bearing msc3861 block is present in the live config
-docker exec matrix-staging-matrix_synapse-1 grep -c msc3861 /data/homeserver.yaml
+docker exec "$SYN" grep -c msc3861 /data/homeserver.yaml
 ```
-Expected: `1`
+Expected: `1`. (Note `grep -c` exits 1 on a count of 0, so do not chain this with `&&`.)
 
 ```bash
 # What this does: confirms Synapse's internal health endpoint responds
-docker exec matrix-staging-matrix_synapse-1 curl -fsS -o /dev/null -w '%{http_code}\n' http://localhost:8080/health
+docker exec "$SYN" curl -fsS -o /dev/null -w '%{http_code}\n' http://localhost:8080/health
 ```
 Expected: `200`
 
 ```bash
 # What this does: confirms Synapse is reachable on the proxy network (the thing that broke during the drill incident)
-docker inspect matrix-staging-matrix_synapse-1 --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}'
+docker inspect "$SYN" --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}'
 ```
 Expected: output includes `proxy_net`
 

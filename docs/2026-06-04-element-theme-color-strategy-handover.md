@@ -172,12 +172,12 @@ ssh -i ~/.ssh/id_ed25519 deploy@agentic.inblock.io
 # what is live:
 cd /home/deploy/matrix/stack && git log -1 --oneline && docker compose ps
 # Element version + served theme assets:
-docker exec matrix-element-web-1 sh -c 'cat /app/version'
+docker compose exec -T element-web sh -c 'cat /app/version'
 curl -sS -D- https://element.inblock.io/element-theme-overrides.css -o /dev/null
 # how the dot is colored + what the tokens resolve to statically:
-docker exec matrix-element-web-1 sh -c \
+docker compose exec -T element-web sh -c \
   'grep -rhoE "\.mx_PresenceIconView_online[^{]*\{[^}]*\}" /app/bundles/*/*.css | sort -u'
-docker exec matrix-element-web-1 sh -c \
+docker compose exec -T element-web sh -c \
   'grep -rhoE "\-\-cpd-color-(icon-(accent|success)-primary|green-900):[^;}]*" /app/bundles/*/*.css | sort -u'
 ```
 The definitive runtime check (does the green scale go orange) needs a browser/DevTools on a

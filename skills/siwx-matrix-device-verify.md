@@ -160,7 +160,12 @@ every login. No device_id is ever reused, so no stale signatures can accumulate.
 ```bash
 # SSH to server, check cross-signing key generations
 ssh root@agentic.inblock.io
-cat << 'SCRIPT' | docker exec -i matrix-matrix_synapse-1 python3 -
+# `docker compose exec` resolves the running container by service name, so it
+# survives Docker renaming the container on a name-conflict restart (the
+# compose-generated name matrix-matrix_synapse-1 is not stable) — stay in
+# this directory for the rest of this session's docker compose commands.
+cd /home/deploy/matrix/stack
+cat << 'SCRIPT' | docker compose exec -T matrix_synapse python3 -
 import sqlite3
 from collections import Counter
 db = sqlite3.connect("/data/homeserver.db")
@@ -186,7 +191,7 @@ SCRIPT
 **Fix (nuclear reset):**
 
 ```bash
-cat << 'SCRIPT' | docker exec -i matrix-matrix_synapse-1 python3 -
+cat << 'SCRIPT' | docker compose exec -T matrix_synapse python3 -
 import sqlite3
 db = sqlite3.connect("/data/homeserver.db")
 USER = "@LOCALPART:matrix.inblock.io"  # <-- replace
@@ -196,7 +201,7 @@ r2 = db.execute("DELETE FROM e2e_cross_signing_keys WHERE user_id = ?", (USER,))
 print(f"Deleted {r1.rowcount} sigs, {r2.rowcount} cross-signing keys")
 db.commit()
 SCRIPT
-docker restart matrix-matrix_synapse-1
+docker compose restart matrix_synapse
 ```
 
 After reset: user must log out, clear browser data, log back in, and choose "Set up encryption" (NOT "Enter recovery key"). This creates a fresh generation 1 with a new recovery key.
@@ -219,7 +224,7 @@ If it occurs, check whether:
 **Diagnosis and cleanup:**
 
 ```bash
-cat << 'SCRIPT' | docker exec -i matrix-matrix_synapse-1 python3 -
+cat << 'SCRIPT' | docker compose exec -T matrix_synapse python3 -
 import sqlite3
 db = sqlite3.connect("/data/homeserver.db")
 USER = "@LOCALPART:matrix.inblock.io"  # <-- replace
@@ -252,7 +257,7 @@ SCRIPT
 
 **Verify:**
 ```bash
-cat << 'SCRIPT' | docker exec -i matrix-matrix_synapse-1 python3 -
+cat << 'SCRIPT' | docker compose exec -T matrix_synapse python3 -
 import sqlite3, time
 db = sqlite3.connect("/data/homeserver.db")
 USER = "@LOCALPART:matrix.inblock.io"  # <-- replace
@@ -291,7 +296,7 @@ If verification works on first login but fails after logout/re-login, check:
 Run this to audit all users at once:
 
 ```bash
-cat << 'SCRIPT' | docker exec -i matrix-matrix_synapse-1 python3 -
+cat << 'SCRIPT' | docker compose exec -T matrix_synapse python3 -
 import sqlite3
 from collections import Counter
 

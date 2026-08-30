@@ -23,7 +23,18 @@ Explain why Element X (iOS) and browser video calls were failing to establish me
 ## Vendor-checklist deltas worth recording
 
 - **Synapse 1.154 does not advertise `org.matrix.msc4143` in `unstable_features`.** The upstream fix lands in Synapse 1.156.0.
-- **Synapse 1.157.0 removes `experimental_features.msc3861` entirely** (the MSC3861 delegated-auth config surface this stack depends on migrates to a different mechanism upstream). Effective upgrade ceiling for this stack is **1.156.x** until the auth migration is planned and executed. The dev `.env` image pin is already frozen for this reason — do not bump past 1.156.x casually.
+- **Synapse 1.157.0 removes `experimental_features.msc3861` entirely** (the MSC3861 delegated-auth config surface this stack depends on migrates to a different mechanism upstream). ~~Effective upgrade ceiling for this stack is **1.156.x** until the auth migration is planned and executed. The dev `.env` image pin is already frozen for this reason — do not bump past 1.156.x casually.~~
+
+  > **SUPERSEDED 2026-08-30 — the 1.156.x ceiling no longer exists.** The auth
+  > migration was planned and executed: dev-staging runs **Synapse 1.159.0** on the
+  > stable `matrix_authentication_service` config, with zero `msc3861` references.
+  > The `.env` pin is no longer frozen — `SYNAPSE_IMAGE_REF` floats on `:dev`.
+  > Do not cite this bullet as a reason not to upgrade. See
+  > `docs/superpowers/plans/2026-08-30-dev-stack-upgrade.md` (H6, H13, AC1, AC2) and
+  > `docs/superpowers/plans/2026-08-30-dev-stack-rollback-runbook.md`.
+  > Note the migration was not optional: 1.157.2 is a security release
+  > (6 high / 3 moderate / 2 low) with **no backport to 1.156.x**, so the old
+  > "ceiling" was really an unpatched-security floor.
 - **No TURN server is deployed anywhere in this stack** (`turn.enabled: false` in every `livekit.yaml` variant). LiveKit's own operational guidance is that roughly 10-20% of real-world sessions need TURN/TLS-443 to traverse symmetric NAT or restrictive firewalls; without it, ICE-TCP on 7881 is the only fallback path and **must stay firewall-open** on every box running LiveKit. This is a known gap, not something this audit fixes.
 - **`lk-jwt-service:0.5.0` is current upstream latest**; `/sfu/get` is the legacy-but-still-used route (the pinned digest and the access-allowlist behavior are covered by the 2026-08-01 av-hardening plan, not repeated here).
 

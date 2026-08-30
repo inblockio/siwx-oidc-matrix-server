@@ -291,8 +291,32 @@ from it and **ignores the metadata document's own `introspection_endpoint`**.
   trailing slash.)
 - The shared secret keeps its double duty: introspection is authenticated with
   `Authorization: Bearer <secret>`, and `is_request_using_the_shared_secret()`
-  survives, so siwx-oidc's `admin_token` calls keep working. **No siwx-oidc code
-  change was required for this migration.**
+  survives — so *introspection* needed no change.
+
+  > **CORRECTED 2026-08-30. This bullet previously ended "No siwx-oidc code change
+  > was required for this migration." That was exactly false**, and it was the most
+  > load-bearing sentence in this section — it would have sent a reader into the
+  > 1.159 upgrade expecting a config-only change.
+  >
+  > Synapse 1.157 **deleted** the `msc3861.admin_token` shim, which is what had let
+  > siwx-oidc reach `/_synapse/admin/*` by presenting the raw shared secret. The
+  > shared secret is still accepted for *introspection*; it is **no longer accepted
+  > as admin authority**. That forced real code:
+  >
+  > * **`src/admin_token.rs` is new** — a `POST /oauth2/admin_token` endpoint that
+  >   mints a short-TTL access token carrying `urn:synapse:admin:*`. Its existence
+  >   refutes the old claim.
+  > * **`src/synapse_client.rs` was ported**: `delete_device` / `deactivate_user` /
+  >   `reactivate_user` moved to `/_synapse/mas/*`; `list_devices` / `get_device`
+  >   moved onto the minted admin token.
+  > * **`has_cross_signing_keys` was silently broken** (plan D1): `keys/query` with
+  >   the raw secret returned `401`, which degraded into a `ResetUnconfirmed`
+  >   readback — telling users "we could not confirm your reset took effect" while
+  >   the reset HAD been granted. A user-facing silent failure that would have
+  >   shipped had the migration been treated as config-only.
+  > * `scripts/matrix-storage-controller.sh` was re-authed onto the same mint.
+  >
+  > See `docs/superpowers/plans/2026-08-30-dev-stack-upgrade.md` (H2, H3, H4, D1, D4).
 
 **Written by an ALWAYS-RUN entrypoint block, because it is also the migration.**
 `entrypoints/matrix_server.sh::apply_mas_config()` (and its twin in

@@ -156,7 +156,7 @@ docker inspect $(docker compose ps -q lk-jwt-service) --format '{{.Image}}'
 docker compose images                     # record every digest, this is the rollback target
 sudo ufw status numbered
 grep -c '^MATRIX_HOST=matrix.inblock.io$' .env      # want 1
-docker exec matrix_synapse grep -E '^(server_name|rc_message)' /data/homeserver.yaml
+docker compose exec -T matrix_synapse grep -E '^(server_name|rc_message)' /data/homeserver.yaml
 cp -p docker-compose.yml docker-compose.yml.bak-$TS
 cp -p .env .env.bak-$TS
 cp -p config/livekit.yaml config/livekit.yaml.bak-$TS
@@ -209,8 +209,11 @@ sudo cp -p /home/portal/portal/Caddyfile /tmp/Caddyfile.work
 # handle_path /livekit/sfu, handle_path /livekit/sfu/*), in that order.
 grep -n 'livekit' /tmp/Caddyfile.work            # sanity: twirp block precedes the wildcard
 sudo cp /tmp/Caddyfile.work /home/portal/portal/Caddyfile    # cp, NOT mv — keeps the inode
-docker exec portal-caddy-1 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
-docker exec portal-caddy-1 caddy reload  --config /etc/caddy/Caddyfile
+# portal-caddy-1 is not part of this stack's compose project, so resolve by
+# name filter (Docker renames on a name conflict) rather than trust the literal.
+CADDY_CID="$(docker ps -q --filter name=portal-caddy | head -1)"
+docker exec "${CADDY_CID:-portal-caddy-1}" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+docker exec "${CADDY_CID:-portal-caddy-1}" caddy reload  --config /etc/caddy/Caddyfile
 ```
 Duplication check before editing: `grep -c 'matrix.inblock.io {' /home/portal/portal/Caddyfile`
 must be 1. If deploy.sh ever appended a second block, fix that first — Caddy
@@ -245,7 +248,7 @@ sudo ss -ulnp | grep -cE ':201[0-9][0-9]\b'      # 101
 sudo ss -ulnp | grep -cE ':50[12][0-9][0-9]\b'   # 0
 
 # entrypoint re-assert (only meaningful on the rebuilt image)
-docker exec matrix_synapse grep -c apply_matrixrtc_config /matrix_server.sh   # >0
+docker compose exec -T matrix_synapse grep -c apply_matrixrtc_config /matrix_server.sh   # >0
 ```
 From OFF the box:
 ```bash
@@ -268,8 +271,10 @@ inside the `matrix.inblock.io` block), then:
    client, authenticate a throwaway `did:key` with `siwx-oidc-auth`, mint a
    Matrix OpenID token via `POST /_matrix/client/v3/user/{mxid}/openid/request_token`,
    `POST /livekit/jwt/sfu/get`). Deactivate the throwaway account afterwards.
-2. `docker logs --since 5m portal-caddy-1 | grep CreateRoom` — the request must
-   show a PRIVATE `remote_ip` and `status: 200`.
+2. Resolve the Caddy container and tail its log (`CID=$(docker ps -q --filter
+   name=portal-caddy | head -1); docker logs --since 5m "${CID:-portal-caddy-1}"
+   | grep CreateRoom`) — the request must show a PRIVATE `remote_ip` and
+   `status: 200`.
 3. If it is PUBLIC: **roll back the Caddy change immediately** (step 7) and
    re-scope the block (method/path-scoped, or `extra_hosts` + an internal
    listener) before retrying. Calling is broken while it is public.
@@ -281,7 +286,7 @@ sudo ufw delete allow 50100:50200/udp
 
 ### 6. Post-checks
 `docker compose ps` all healthy · a real Element Web call connects with audio and
-video · `docker logs matrix_synapse | grep -i cross-signing` clean ·
+video · `docker compose logs matrix_synapse | grep -i cross-signing` clean ·
 `scripts/element-deploy-audit.sh` still 21/0.
 
 ### 7. Rollback (any step, in reverse)
@@ -294,8 +299,9 @@ cp config/element-config.json.bak-$TS config/element-config.json
 cp .env.bak-$TS .env && chmod 600 .env
 docker compose up -d                              # back to the recorded digests
 sudo cp /home/portal/portal/Caddyfile.bak-$TS /home/portal/portal/Caddyfile   # cp, not mv
-docker exec portal-caddy-1 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
-docker exec portal-caddy-1 caddy reload  --config /etc/caddy/Caddyfile
+CADDY_CID="$(docker ps -q --filter name=portal-caddy | head -1)"
+docker exec "${CADDY_CID:-portal-caddy-1}" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+docker exec "${CADDY_CID:-portal-caddy-1}" caddy reload  --config /etc/caddy/Caddyfile
 sudo ufw allow 50100:50200/udp comment 'livekit media (rollback)'
 sudo ufw delete allow 20100:20200/udp
 ```

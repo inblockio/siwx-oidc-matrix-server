@@ -61,6 +61,14 @@ by docker-compose.yml.
 | matrix-lk-jwt-service-1 | ghcr.io/element-hq/lk-jwt-service:latest | 8080 | matrix.inblock.io/livekit/jwt |
 | matrix-watchtower-1 | (watchtower) | - | - |
 
+**These container names are compose-generated (`<project>-<service>-<N>`)
+and are reference/identification data, not stable identifiers.** Docker
+renames a container on a name conflict (prefixing the colliding id), so a
+literal like `matrix-matrix_synapse-1` can silently stop matching any running
+container. Commands must resolve by service instead, e.g.
+`docker compose -p matrix ps -q <service>` or `docker compose exec -T
+<service> ...` from `/home/deploy/matrix/stack`.
+
 **The `:main`/`:latest` tags above are for identification only — they say
 what a healthy stack currently runs, not what is safe to pull.** Never pull
 or deploy by these bare tags without resolving and verifying a digest first;
@@ -155,10 +163,16 @@ docker buildx imagetools inspect ghcr.io/inblockio/siwx-oidc:main
 
 # After a pull + restart, confirm what is actually RUNNING (not just what
 # was requested) — this is the step that would have caught the tag-drift
-# incident, since the pull itself reported success either way:
-docker inspect --format='{{.Image}}' matrix-matrix_synapse-1 \
+# incident, since the pull itself reported success either way. Resolve
+# containers by compose service, not by the compose-generated names in the
+# Services table above — Docker renames a container on a name conflict, so
+# a literal like matrix-matrix_synapse-1 can stop matching silently:
+cd /home/deploy/matrix/stack
+SYNAPSE_CID="$(docker compose ps -q matrix_synapse)"
+SIWX_CID="$(docker compose ps -q siwx-oidc)"
+docker inspect --format='{{.Image}}' "$SYNAPSE_CID" \
   | xargs docker image inspect --format='{{join .RepoDigests ", "}}'
-docker inspect --format='{{.Image}}' matrix-siwx-oidc-1 \
+docker inspect --format='{{.Image}}' "$SIWX_CID" \
   | xargs docker image inspect --format='{{join .RepoDigests ", "}}'
 ```
 
@@ -187,10 +201,14 @@ docker buildx imagetools inspect ghcr.io/inblockio/siwx-oidc:${REF}
 ./deploy.sh ${REF} --build --restart
 
 # 3. Verify the RUNNING containers match the digests recorded in step 1 (per
-#    the Image pinning policy above — do not skip this).
-docker inspect --format='{{.Image}}' matrix-matrix_synapse-1 \
+#    the Image pinning policy above — do not skip this). Resolve by compose
+#    service (run on the server, from /home/deploy/matrix/stack), not by the
+#    compose-generated container names — Docker renames on a name conflict.
+SYNAPSE_CID="$(docker compose ps -q matrix_synapse)"
+SIWX_CID="$(docker compose ps -q siwx-oidc)"
+docker inspect --format='{{.Image}}' "$SYNAPSE_CID" \
   | xargs docker image inspect --format='{{join .RepoDigests ", "}}'
-docker inspect --format='{{.Image}}' matrix-siwx-oidc-1 \
+docker inspect --format='{{.Image}}' "$SIWX_CID" \
   | xargs docker image inspect --format='{{join .RepoDigests ", "}}'
 
 # 4. Functional verify:
@@ -233,8 +251,11 @@ docker buildx imagetools inspect ghcr.io/inblockio/siwx-oidc:sha-${NEWSHA}
 ./deploy.sh sha-${NEWSHA} --build --restart
 
 # 5. Verify the running container's digest matches step 3's (per the Image
-#    pinning policy above).
-docker inspect --format='{{.Image}}' matrix-siwx-oidc-1 \
+#    pinning policy above). Resolve by compose service, not by the
+#    compose-generated container name (run on the server, from
+#    /home/deploy/matrix/stack) — Docker renames on a name conflict.
+SIWX_CID="$(docker compose ps -q siwx-oidc)"
+docker inspect --format='{{.Image}}' "$SIWX_CID" \
   | xargs docker image inspect --format='{{join .RepoDigests ", "}}'
 ```
 

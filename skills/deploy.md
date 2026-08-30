@@ -200,9 +200,12 @@ ssh -i ~/.ssh/id_ed25519 deploy@agentic.inblock.io bash -s <<'EOF'
 CF=/home/portal/portal/Caddyfile
 cp "$CF" "$CF.bak.$(date +%Y%m%d%H%M%S)"
 tmp=$(mktemp); sed 's|OLD|NEW|g' "$CF" > "$tmp"; cat "$tmp" > "$CF"   # host file, same inode
-docker exec -i portal-caddy-1 sh -c 'cat > /etc/caddy/Caddyfile' < "$CF"  # container, same inode
+# Docker renames a container on a name conflict (e.g. after a recreate), so
+# resolve by name filter instead of trusting the compose-generated literal.
+CADDY_CID="$(docker ps -q --filter name=portal-caddy | head -1)"
+docker exec -i "${CADDY_CID:-portal-caddy-1}" sh -c 'cat > /etc/caddy/Caddyfile' < "$CF"  # container, same inode
 rm -f "$tmp"
-docker exec portal-caddy-1 caddy reload --config /etc/caddy/Caddyfile
+docker exec "${CADDY_CID:-portal-caddy-1}" caddy reload --config /etc/caddy/Caddyfile
 EOF
 ```
 

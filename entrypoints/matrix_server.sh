@@ -36,9 +36,58 @@ yq -i "del(.listeners[1])" /data/homeserver.yaml
 #federation via well-known delegation (Caddy serves .well-known on port 443)
 yq -i ".serve_server_wellknown = false" /data/homeserver.yaml
 
-#retention
-yq -i ".retention.enabled=true" /data/homeserver.yaml
-yq -i ".retention.default_policy.allowed_lifetime_max= \"${MATRIX_MESSAGE_LIFETIME}\"" /data/homeserver.yaml
+# ---------------------------------------------------------------------------
+# RETENTION — the knob is now REAL, and it is DELIBERATELY OFF.
+#
+# What was wrong (memory: synapse-retention-silent-noop):
+#   yq -i ".retention.default_policy.allowed_lifetime_max = ${MATRIX_MESSAGE_LIFETIME}"
+# `allowed_lifetime_max` is a TOP-LEVEL retention key: it CLAMPS what a room's
+# own m.room.retention event may request. It is not a key Synapse reads inside
+# `default_policy`, which accepts only `min_lifetime` / `max_lifetime`. Written
+# there it was silently ignored, so there was NO default policy at all and no
+# room lacking its own m.room.retention event was ever purged.
+#
+# MATRIX_MESSAGE_LIFETIME therefore did nothing whatsoever. Confirmed live on
+# dev-staging 2026-08-30: retention = {enabled: true, default_policy:
+# {allowed_lifetime_max: 4w}} — a setting that reads like a 4-week retention
+# policy and purges nothing.
+#
+# THE KEY THAT ACTUALLY DELETES MESSAGES is `retention.default_policy.max_lifetime`.
+# It is left UNSET here on purpose: turning it on has real, irreversible purge
+# blast radius and is Tim's call, not the entrypoint's default. Enabling it
+# needs a measured blast-radius number first — see
+# docs/superpowers/plans/2026-08-30-dev-stack-upgrade.md (R10).
+#
+# TWO THINGS HAD TO CHANGE, not one. Fixing this template alone does NOT reach
+# dev-staging or prod: this whole block sits inside the first-boot guard, so it
+# only ever runs on a fresh volume (plan D20 — the retention keys are "frozen").
+# An existing deployment keeps its wrong config until someone either hand-edits
+# it or the guard is replaced by the one-shot versioned migration proposed in
+# the plan's escalation #2. This change makes NEW deployments correct and
+# honest; it changes NOTHING on any existing box, which is exactly the intent.
+#
+#   MATRIX_RETENTION_ENABLED         default "false" -> nothing is ever purged
+#   MATRIX_RETENTION_MAX_LIFETIME    the purging knob; only read when enabled
+#   MATRIX_MESSAGE_LIFETIME          legacy name, now used as the CLAMP, which
+#                                    is what the key it fed always meant
+# ---------------------------------------------------------------------------
+if [ "${MATRIX_RETENTION_ENABLED:-false}" = "true" ]; then
+  yq -i ".retention.enabled = true" /data/homeserver.yaml
+  # The clamp, at its correct TOP-LEVEL position (not under default_policy).
+  yq -i ".retention.allowed_lifetime_max = \"${MATRIX_MESSAGE_LIFETIME}\"" /data/homeserver.yaml
+  # The key that actually purges. Only written when explicitly configured.
+  if [ -n "${MATRIX_RETENTION_MAX_LIFETIME:-}" ]; then
+    yq -i ".retention.default_policy.max_lifetime = \"${MATRIX_RETENTION_MAX_LIFETIME}\"" /data/homeserver.yaml
+    echo "First boot: retention ENABLED, default_policy.max_lifetime=${MATRIX_RETENTION_MAX_LIFETIME} (messages WILL be purged)"
+  else
+    echo "First boot: retention enabled as a CLAMP only (allowed_lifetime_max=${MATRIX_MESSAGE_LIFETIME}); no default_policy.max_lifetime, so nothing is purged"
+  fi
+else
+  # Explicitly off, and explicitly written, so the config states the intent
+  # rather than leaving a reader to infer it from a key that does nothing.
+  yq -i ".retention.enabled = false" /data/homeserver.yaml
+  echo "First boot: message retention DISABLED (no purging). Set MATRIX_RETENTION_ENABLED=true to change."
+fi
 
 # Server notices: the channel the storage controller (scripts/matrix-storage-controller.sh)
 # pushes WARN/CRIT storage alerts through. Synapse force-creates @notices and a

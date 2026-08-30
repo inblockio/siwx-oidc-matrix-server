@@ -34,6 +34,28 @@ logging:
   level: info
 
 # --- Embedded TURN (dev-staging first) ----------------------------------
+#
+# !! VERSION-PROVENANCE WARNING (added 2026-08-30) !!
+# The "verified facts" below were read out of the livekit-server **v1.12.0**
+# source tree. dev-staging has since been upgraded and now runs **v1.13.6**
+# (plan 2026-08-30-dev-stack-upgrade.md, H8/AC6). The facts have NOT been
+# re-read against v1.13.6 source, so treat every "v1.12.0 hardcodes / ships no
+# default" statement below as ASSERTED-AT-1.12.0, not verified-at-current.
+#
+# What IS known about the running version, first-hand:
+#   * v1.13.6 starts successfully with exactly this config, so nothing here is
+#     rejected by the newer parser, and the mandatory-ports claim (a) cannot be
+#     failing — the server would refuse to start.
+#   * TURN/STUN/cert and an SFU media loadtest were verified green on v1.13.6
+#     (H8): audio 747 packets, video 1907 packets, 0% loss.
+#   * NOT re-verified on v1.13.6: the port-443 hardcode in claim (b). If a
+#     client-side TURN URL ever looks wrong, re-read pkg/service/turn.go at the
+#     v1.13.6 tag FIRST — do not trust (b) below as current.
+#   * Related and already settled from the v1.13.x diff (plan D8): LiveKit PR
+#     #4723 dropped only H.264 **baseline `42001f`** from the default offer;
+#     constrained baseline `42e01f` and high `640032` remain, alongside
+#     VP8/VP9/AV1.
+#
 # All facts below verified against livekit-server v1.12.0 (config-sample.yaml
 # + pkg/config/config.go + pkg/service/turn.go + pkg/service/roommanager.go
 # at the v1.12.0 tag). Full detail and the hypothesis register:
