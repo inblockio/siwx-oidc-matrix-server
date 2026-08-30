@@ -78,6 +78,18 @@
             # other 443 traffic (and all h3/QUIC on udp/443 — wrappers are
             # TCP-only) flows on unchanged.
             layer4 {
+                # matching_timeout raised from the 3s caddy-l4 default,
+                # mirroring the prod fix (2026-08-18, RCA 2026-08-16): the
+                # default silently killed any conn whose ClientHello had not
+                # fully arrived within 3s (zero-byte close, logged as
+                # "aborted matching according to timeout"). Lossy/reduced-MTU
+                # mobile links routinely straggle past 3s (post-quantum
+                # ClientHello spans a full-MSS segment; Windows TCP blackhole
+                # probing needs ~3-5s), which broke every fresh wss:// LiveKit
+                # SFU join ("ServerUnreachable") while warm-connection /sync
+                # kept working. 10s restores pre-layer4 tolerance; junk
+                # connections still get dropped, just later.
+                matching_timeout 10s
                 @turn_sni tls sni dev.turn.matrix.inblock.io
                 route @turn_sni {
                     # Terminate TLS here using Caddy's shared cert cache
@@ -362,6 +374,33 @@ dev.siwx.inblock.io {
     encode zstd gzip
     import hsts
     import public_cors
+
+    # ---------------------------------------------------------------------
+    # ADMIN-TOKEN MINT: INTERNAL ONLY -- deliberately NOT routed publicly.
+    #
+    # POST /oauth2/admin_token mints a short-TTL access token carrying
+    # `urn:synapse:admin:*`. It is authenticated by the MAS shared secret, so
+    # public exposure was not an open door -- it answered 401 -- but it put the
+    # one endpoint that vends Synapse admin authority on the public internet as
+    # an online guessing oracle against a single static secret, with no rate
+    # limiting in front of it.
+    #
+    # Matches the posture already chosen for `/_synapse/*`, which the edge also
+    # refuses (plan D22).
+    #
+    # SAFE because BOTH callers are in-network and never traverse Caddy:
+    #   * siwx-oidc hosts the endpoint itself;
+    #   * scripts/matrix-storage-controller.sh mints via OIDC_INTERNAL_URL,
+    #     default `http://siwx-oidc:8081`, with the curl executed INSIDE the
+    #     Synapse container, which shares the compose network.
+    # Verified 2026-08-30: that exact internal call returns 200 with scope
+    # `urn:matrix:client:api:* urn:synapse:admin:*` BOTH before and after this.
+    #
+    # 404, not 403: same as `/_synapse/*`, and it does not confirm to an
+    # unauthenticated caller that the endpoint exists.
+    handle /oauth2/admin_token* {
+        respond 404
+    }
 
     # Load-bearing: siwx-oidc emits its own CORS headers. Without stripping
     # them here, the browser sees TWO Access-Control-Allow-Origin headers
