@@ -14,7 +14,7 @@
 # ---------------------------------------------------------------------------
 FROM node:24-bullseye AS builder
 
-ARG ELEMENT_WEB_TAG=v1.12.24
+ARG ELEMENT_WEB_TAG=v1.12.26
 
 WORKDIR /src
 
@@ -41,9 +41,9 @@ RUN git clone --depth 1 --branch "${ELEMENT_WEB_TAG}" \
 #    EventIndex hook so E2EE search works in hosted Element Web. Gated off on
 #    the production hostname.
 #
-# Order matters only for en_EN.json, which three of them touch in different
+# Order matters only for en_EN.json, which five of them touch in different
 # places; applied in this order every hunk lands (verified against a pristine
-# v1.12.24 tree, 2026-08-03). Registry with why/evidence/retirement per patch:
+# v1.12.26 tree, 2026-08-30). Registry with why/evidence/retirement per patch:
 # patches/element-web/README.md — no patch ships without an entry there.
 COPY patches/element-web/force-first-device-recovery.patch /tmp/ew.patch
 RUN git apply --verbose /tmp/ew.patch

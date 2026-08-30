@@ -188,7 +188,7 @@ rejects it. Keep the slash in `Caddyfile.production`, `Caddyfile.local`, and
 **Element Web is built from source (not the prebuilt image).**
 `dockerfiles/Dockerfile.element` is a multi-stage build that clones
 `element-hq/element-web` at a pinned tag (`ARG ELEMENT_WEB_TAG`, currently
-`v1.12.24`), applies the vendored patches in `patches/element-web/`
+`v1.12.26`), applies the vendored patches in `patches/element-web/`
 (`git apply --verbose`, fail-loud), runs `pnpm --filter element-web build`,
 then serves the bundle via `nginxinc/nginx-unprivileged` with the inblock.io
 overlay + existing entrypoint (no entrypoint change; a
@@ -196,7 +196,7 @@ overlay + existing entrypoint (no entrypoint change; a
 **Canonical patch/feature list:** `patches/element-web/README.md` (what / why /
 retirement / which branch's Dockerfile applies it). POLICY patches on both
 `dev` and `main` today include forced first-device 4S recovery and the browser
-EventIndex (hosted E2EE search). v1.12.24 is a pnpm + nx monorepo needing
+EventIndex (hosted E2EE search). v1.12.26 is a pnpm + nx monorepo needing
 Node >=22.18; the builder uses `node:24-bullseye`. To bump Element, update
 `ELEMENT_WEB_TAG` and refresh every listed patch per
 `docs/element-web-source-build.md`. No separate fork is vendored (the source is

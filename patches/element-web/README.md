@@ -75,7 +75,9 @@ refreshing the `dev` Dockerfile.
 - **Why:** the wedge is indistinguishable from "verification failed" for the user; it
   was amplifier-class in the verify-session-loop forensics.
 - **Evidence:** `ew-verify-sas.spec.mjs` header (leg 8 fails on `Phase.Busy` unpatched,
-  observed at 1.12.20); still applies at 1.12.24 (i.e., upstream code unchanged there).
+  observed at 1.12.20); still applies cleanly at 1.12.24 **and at 1.12.26** (2026-08-30
+  bump) — i.e. upstream has NOT restructured or fixed the Busy handling, so the
+  retirement condition below is NOT met and the patch is carried forward unchanged.
 - **Upstream status:** not yet filed — file against element-hq/element-web.
 - **Retirement:** a tag bump where the patch no longer applies because upstream
   restructured/fixed the Busy handling, or an upstream fix lands. Drop, don't port.
@@ -151,6 +153,17 @@ refreshing the `dev` Dockerfile.
 - **Evidence:** `docs/2026-08-14-HANDOVER-encrypted-search-browser-eventindex.md`;
   audit `docs/audits/2026-08-14-encrypted-search-eventindex-audit.md`
   (staging UX1–UX8 + prod promotion 2026-08-15).
+- **1.12.26 forward-port (2026-08-30):** the only patch of the six that did not
+  apply at v1.12.26, and purely from context drift — NOT because upstream shipped
+  an EventIndex (rule 4 checked: upstream still has no browser EventIndex, so the
+  retirement condition is unmet). Upstream reformatted `<SearchWarning>` in
+  `RoomSearchAuxPanel.tsx` onto multiple lines with new `scope`/`roomId` props, and
+  added an `oxlint-disable-next-line` comment above `WebPlatform.VERSION`.
+  Regenerated against a v1.12.26 tree with patches 1–5 already applied (so the
+  `en_EN.json` context stays correct for last-in-order application). The
+  regenerated patch has byte-identical added/removed lines and an identical
+  numstat (6 / 2-1 / 383 / 938 / 9) to the previous version — a pure context
+  refresh with zero behavior change.
 - **Upstream status:** NOT a Seshat port. The interface is upstream's;
   the store is ours. Do not file as "Seshat for Web".
 - **Retirement:** only if upstream ships a browser EventIndex that meets
@@ -181,3 +194,18 @@ pristine `v1.12.24` tree on 2026-08-03 (full stack applies in Dockerfile order; 
 i18n keys' dependencies — `verify_session`, `unverified_session` — exist upstream at that
 tag, refuting the earlier "undefined i18n key" concern recorded in the 2026-08-01
 handover).
+
+**v1.12.24 -> v1.12.26 bump (2026-08-30), per-patch outcome** (rule 4 procedure run
+against a pristine tree, in Dockerfile order):
+
+| # | Patch | Outcome at v1.12.26 |
+|---|---|---|
+| 1 | `force-first-device-recovery` | applies clean, carried |
+| 2 | `setup-encryption-busy-wedge` | applies clean → upstream still unfixed, **carried** (not retired) |
+| 3 | `honest-qr-disabled-reason` | applies clean, carried |
+| 4 | `offer-verify-current-session` | applies clean, carried |
+| 5 | `auto-approve-check-code` | applies clean, carried |
+| 6 | `browser-eventindex` | **forward-ported** (context-only; see entry 6) |
+
+Verified afterwards in BOTH apply orders against a pristine v1.12.26 tree: the `dev`
+order (all six) and the `main`/prod subset (1, 5, 6).
