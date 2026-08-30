@@ -376,3 +376,31 @@ source** (no released version has this gate) — not live-tested, prod stays rea
 **F4 — minor:** rooms created with the `private_chat` preset (`state_default: 50`)
 block PL-0 users from publishing `m.call.member`; `logout/all` 404s on dev (not routed
 to siwx-oidc).
+
+### F3 fixed and live-verified on dev (2026-08-31, siwx-oidc `6eb1c0e`)
+
+The deactivation bypass is closed on dev. `SynapseClient::query_user()` +
+`webauthn::reject_if_deactivated()`, wired into **all five** paths that turn a proven
+DID into access (`sign_in`, both device/QR approval paths, both account re-auth paths)
+so the bypass cannot simply move. Fails closed on a probe error; no-op without a
+Synapse client; a `query_user` 404 maps to `Ok(None)` so first-time sign-in is
+unaffected. `Action::Reactivate` is deliberately exempt.
+
+**Live before/after — same key, same client, same DID throughout:**
+
+| Deployed rev | Synapse says | Sign-in result |
+|---|---|---|
+| `a28cbb01` (pre-fix) | `is_deactivated: true` | **access + id + `mcr_` refresh token issued** |
+| `6eb1c0e` (post-fix) | `is_deactivated: true` | **401** "This account has been deactivated and cannot sign in." |
+
+Regressions checked on the fixed build: a brand-new identity still signs in, and
+reactivating the account restores sign-in — so the gate reads live Synapse state with
+nothing sticky. CD converge took 540 s, matching the documented ~9 min cadence.
+Cleanup: both throwaway accounts deactivated with readback (`is_deactivated: true`),
+OIDC client deleted (204), private keys shredded.
+
+Unit coverage: no-op-without-synapse, fail-closed-on-probe-error, and a wire-shape
+test pinning `MasQueryUserResource.Response`. Full suite 143 passed / 0 failed.
+
+**Prod still carries this gap** (inferred from source — no released version has the
+gate). It should ship with the prod promotion.
