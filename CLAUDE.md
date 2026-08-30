@@ -242,19 +242,64 @@ docker compose exec matrix_synapse sh -c '
 docker compose restart matrix_synapse
 ```
 
-## MSC3861 Delegated Auth (feat/msc3861 branch)
+## Delegated auth (stable Matrix Authentication Service integration)
 
-The stack now uses MSC3861 delegated authentication instead of legacy OIDC provider mode:
+Synapse delegates ALL auth to siwx-oidc via token introspection:
 
-- Synapse delegates ALL auth to siwx-oidc via token introspection
 - Opaque tokens: `mat_` (access, 300s TTL), `mcr_` (refresh, 86400s TTL)
 - User provisioning: siwx-oidc calls `/_synapse/mas/` endpoints to create users/devices
 - Token revocation: `POST /oauth2/revoke` + `POST /_matrix/client/v3/logout`
+
+**Config schema (since Synapse 1.157.0 / this repo 2026-08-30).** The experimental
+`experimental_features.msc3861` block was REMOVED upstream in 1.157.0 and is now a
+hard `ConfigError` that refuses to boot. The stable replacement is a top-level block:
+
+```yaml
+matrix_authentication_service:
+  enabled: true
+  endpoint: <siwx-oidc base URL>   # see below
+  secret:   <MAS_SHARED_SECRET>
+```
+
+`endpoint` is the ONLY location knob. Synapse derives BOTH
+`{endpoint}/.well-known/openid-configuration` and `{endpoint}/oauth2/introspect`
+from it and **ignores the metadata document's own `introspection_endpoint`**.
+
+- There is no `issuer_metadata` override any more, and none is needed. siwx-oidc
+  builds its whole discovery document from `SIWEOIDC_BASE_URL` (host-independent —
+  it does not echo the request `Host`), so pointing `endpoint` at the docker-internal
+  address still yields the PUBLIC issuer/endpoint URLs, which Synapse forwards to
+  browsers verbatim via `GET /_matrix/client/v1/auth_metadata`. That is exactly the
+  decoupling the old hand-built `issuer_metadata` provided, now for free.
+- The advertised `issuer` and `account_management_uri` now come from siwx-oidc's own
+  metadata, so the RFC 8414 §3.3 trailing-slash byte-match with
+  `.well-known/matrix/client` is owned by siwx-oidc alone and can no longer drift from
+  Synapse's config. (It HAD drifted: dev-staging carried `msc3861.issuer` with no
+  trailing slash.)
+- The shared secret keeps its double duty: introspection is authenticated with
+  `Authorization: Bearer <secret>`, and `is_request_using_the_shared_secret()`
+  survives, so siwx-oidc's `admin_token` calls keep working. **No siwx-oidc code
+  change was required for this migration.**
+
+**Written by an ALWAYS-RUN entrypoint block, because it is also the migration.**
+`entrypoints/matrix_server.sh::apply_mas_config()` (and its twin in
+`real-stack/synapse_entrypoint.sh`) deletes any leftover `msc3861` and writes the
+block on EVERY boot, not just first boot. This is load-bearing: the setup section is
+first-boot-only, so an already-provisioned `/data/homeserver.yaml` would otherwise
+keep its `msc3861` block forever and crash-loop on upgrade.
+
+**Rollback is NOT just an image revert.** Rolling back to a pre-1.157 image on a
+migrated volume leaves a `homeserver.yaml` with no `msc3861` block, and the old
+entrypoint will not re-create it (first-boot guard). Restore a pre-migration
+`homeserver.yaml` backup as well.
 
 Key env vars:
 - `MAS_SHARED_SECRET`: Shared between Synapse and siwx-oidc for introspection auth
 - `SIWEOIDC_MAS_SHARED_SECRET`: Same value, consumed by siwx-oidc (figment prefix)
 - `SIWEOIDC_SYNAPSE_ENDPOINT`: How siwx-oidc reaches Synapse (e.g., `http://matrix_synapse:8080`)
+- `SIWEOIDC_INTERNAL_URL` (optional): in-network siwx-oidc base. When set (local/e2e)
+  it becomes `matrix_authentication_service.endpoint`; otherwise `SIWEOIDC_BASE_URL`
+  is used, which is what prod/dev-staging already did under msc3861.
 
 ### Device lifecycle
 

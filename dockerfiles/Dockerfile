@@ -1,10 +1,15 @@
-# Minimum version: v1.121.0 (MSC3861 experimental support required)
-# Pinned 2026-07-31 after upstream 1.157 removed experimental_features.msc3861
-# (replaced by a stable matrix_authentication_service config block this repo's
-# entrypoint does not yet generate — see docs/2026-07-30-dev-staging-dev-aquafire.md
-# and .env.dev-staging.example). Do not float :latest; bump deliberately once
-# the entrypoint is migrated to the new config schema.
-FROM matrixdotorg/synapse:v1.154.0
+# Minimum version: v1.157.0 (stable matrix_authentication_service integration).
+# Pinned to v1.159.0 (2026-08-30). This bump was FORCED: 1.157.2 is a security
+# release (6 high / 3 moderate / 2 low) with no backport to 1.156.x, and 1.157.0
+# removed experimental_features.msc3861 outright — so taking the security fix
+# required migrating the entrypoint to the stable matrix_authentication_service
+# config block. entrypoints/matrix_server.sh::apply_mas_config() now writes that
+# block AND deletes any leftover msc3861 on every boot (the migration path for
+# already-provisioned deployments, whose homeserver.yaml is otherwise
+# first-boot-only). Do NOT roll this image back without also restoring a
+# pre-migration homeserver.yaml: the old entrypoint will not re-create the
+# msc3861 block on an existing volume. Do not float :latest; bump deliberately.
+FROM matrixdotorg/synapse:v1.159.0
 # apt-get (not the apt CLI, which is documented as script-unstable) with
 # --no-install-recommends so this layer stays deterministic in shape. Debian
 # security-repo package versions are not pinned here — pinning wget to an
