@@ -25,7 +25,21 @@ LK_JWT_IMAGE_REF="${LK_JWT_IMAGE_REF:-ghcr.io/element-hq/lk-jwt-service:0.6.0@sh
 # image WITHOUT clobbering the shared localhost/* tags the siwx-real-* stack uses:
 #   SYNAPSE_IMAGE_REF=localhost/siwx-real-synapse:mas e2e-harness/up.sh
 SYNAPSE_IMAGE_REF="${SYNAPSE_IMAGE_REF:-localhost/siwx-real-synapse:local}"
-SIWX_OIDC_IMAGE_REF="${SIWX_OIDC_IMAGE_REF:-localhost/siwx-oidc:local-grace}"
+# ---------------------------------------------------------------------------
+# 2026-08-30: this default WAS `localhost/siwx-oidc:local-grace`, a hand-built
+# tag named after the long-finished refresh-token-grace work. By the time it was
+# found it was FIVE WEEKS OLD (built 2026-07-25), so every "green" harness run
+# in between had validated a five-week-old siwx-oidc binary while claiming to
+# exercise current code — including runs used to judge the Task 2 admin-token
+# mint and the Task 3 synapse_client port, neither of which was in that image.
+#
+# This is the SAME defect class as the stale OIDC_E2EH_DIR default and the
+# missing zero-tests guard: the harness testing something other than what it
+# says it tests. Fixing the default alone would just rot again, so run.sh now
+# ASSERTS that the image is not older than the siwx-oidc commit under test.
+# Rebuild with:  podman build -t localhost/siwx-oidc:e2eh-$(git rev-parse --short HEAD) .
+# ---------------------------------------------------------------------------
+SIWX_OIDC_IMAGE_REF="${SIWX_OIDC_IMAGE_REF:-localhost/siwx-oidc:e2eh-5f47a9b}"
 LIVEKIT_IMAGE_REF="${LIVEKIT_IMAGE_REF:-livekit/livekit-server:v1.13.6}"
 
 FRESH=0

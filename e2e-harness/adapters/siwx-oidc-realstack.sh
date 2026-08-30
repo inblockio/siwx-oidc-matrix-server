@@ -44,6 +44,12 @@ OIDC_DIR="$SIWX_OIDC_DIR_RESOLVED"
 command -v cargo >/dev/null 2>&1 || adapter_die "$ARTIFACT" 2 \
   "ADAPTER PRECONDITION FAILED: cargo not on PATH."
 
+# Refuse to run against an unexpected / unreproducible checkout. Recording the
+# revision was never enough — the harness would otherwise test whatever branch
+# this sibling checkout happened to be sitting on.
+assert_checkout_revision "$ARTIFACT" "$OIDC_DIR" "siwx-oidc checkout" \
+  "${E2E_EXPECT_SHA:-}" "${E2E_EXPECT_REF:-}"
+
 {
   echo "===== siwx-oidc real-stack adapter ====="
   echo "checkout     : $OIDC_DIR"

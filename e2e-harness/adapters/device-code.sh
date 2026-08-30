@@ -46,6 +46,12 @@ OIDC_DIR="$SIWX_OIDC_DIR_RESOLVED"
 command -v cargo >/dev/null 2>&1 || adapter_die "$ARTIFACT" 2 \
   "ADAPTER PRECONDITION FAILED: cargo not on PATH."
 
+# Refuse to run against an unexpected / unreproducible checkout. Recording the
+# revision was never enough — the harness would otherwise test whatever branch
+# this sibling checkout happened to be sitting on.
+assert_checkout_revision "$ARTIFACT" "$OIDC_DIR" "siwx-oidc checkout" \
+  "${E2E_EXPECT_SHA:-}" "${E2E_EXPECT_REF:-}"
+
 # Source MAS_SHARED_SECRET from .env.e2e if not already provided.
 if [ -z "${MAS_SHARED_SECRET:-}" ]; then
   [ -f "$ENV_FILE" ] || adapter_die "$ARTIFACT" 2 \
