@@ -111,6 +111,11 @@ DRY_RUN="${DRY_RUN:-0}"          # 1 = compute + log, but make no Admin API muta
 # thing that actually protects the volume.
 ALERTS_OPTIONAL="${ALERTS_OPTIONAL:-0}"
 
+# Set to 1 only when media deliberately lives on the root disk (the documented
+# rollback config). Otherwise VOL_PATH resolving to the root filesystem means
+# the dedicated volume failed to mount, which must never look healthy.
+ALLOW_VOL_ON_ROOT="${ALLOW_VOL_ON_ROOT:-0}"
+
 # Compose service names + the in-network siwx-oidc address used for minting.
 SYNAPSE_SERVICE="${SYNAPSE_SERVICE:-matrix_synapse}"
 OIDC_SERVICE="${OIDC_SERVICE:-siwx-oidc}"
@@ -118,6 +123,18 @@ OIDC_SERVICE="${OIDC_SERVICE:-siwx-oidc}"
 # clamps TTL to 30-900s, so a long purge is covered by RE-MINTING, never by
 # asking for a wider TTL.
 TOKEN_RENEW_MARGIN="${TOKEN_RENEW_MARGIN:-60}"
+
+# Without these, a backend that accepts the TCP connection and then never
+# answers (half-open socket, DROP rule) blocks curl — and therefore the whole
+# tick — forever: no fatal line, no failure marker, no exit code at all, and the
+# next hourly tick may never start. That is strictly worse than any failure this
+# script can report, so every curl is bounded.
+# MINT_MAX_TIME is short (the mint is a local, trivial call). ADMIN_MAX_TIME is
+# generous because purge_media_cache is synchronous and can legitimately run for
+# minutes on a large media store.
+HTTP_CONNECT_TIMEOUT="${HTTP_CONNECT_TIMEOUT:-10}"
+MINT_MAX_TIME="${MINT_MAX_TIME:-30}"
+ADMIN_MAX_TIME="${ADMIN_MAX_TIME:-900}"
 
 # ---- small helpers ------------------------------------------------------------
 log() { printf '%s controller: %s\n' "$(date -Is)" "$*"; }
@@ -145,6 +162,7 @@ ts_before_days() { awk -v now="$(now_ms)" -v d="$1" 'BEGIN{ printf "%d", now - (
 util_pct() { df -B1 --output=used,size "$1" | awk 'NR==2 {printf "%.2f", ($2>0 ? $1*100.0/$2 : 0)}'; }
 
 path_readable() { df -B1 --output=used,size "$1" >/dev/null 2>&1; }
+fs_device() { df --output=source "$1" 2>/dev/null | awk 'NR==2 {print $1}'; }
 
 # An unmounted bounded volume is the same defect family as a silent 401: without
 # this guard `set -e` aborted on df's failure with a bare `exit 1`, no controller
@@ -161,6 +179,24 @@ require_measurable_paths() {
       exit 1
     fi
   done
+
+  # The nastier variant, and the one df will NOT report as an error: the volume
+  # failed to mount but its mountpoint directory still exists, so df happily
+  # measures the ROOT filesystem instead. Utilisation then looks like the root
+  # disk, the curve reads "roomy", nothing is pruned, and the tick exits 0 —
+  # while the 100 GB volume this controller exists to guard is unmeasured.
+  # Detect it by device identity rather than by df's exit status.
+  if [ "$VOL_PATH" != "$ROOT_PATH" ] && [ "$ALLOW_VOL_ON_ROOT" != "1" ]; then
+    local vdev rdev; vdev="$(fs_device "$VOL_PATH")"; rdev="$(fs_device "$ROOT_PATH")"
+    if [ -n "$vdev" ] && [ "$vdev" = "$rdev" ]; then
+      log_fatal "'$VOL_PATH' is NOT a separate mount — it resolves to the root filesystem ($vdev)"
+      log_fatal "the bounded Matrix volume is not mounted; utilisation would be measured against the wrong disk"
+      log_fatal "set ALLOW_VOL_ON_ROOT=1 if this deployment deliberately keeps media on the root disk"
+      log_unprotected
+      record_failure "bounded volume $VOL_PATH not mounted (same device as $ROOT_PATH)"
+      exit 1
+    fi
+  fi
 }
 
 level_for() { awk -v u="$1" -v w="$WARN_PCT" -v c="$CRIT_PCT" 'BEGIN{ print (u>=c)?"CRIT":((u>=w)?"WARN":"OK") }'; }
@@ -220,6 +256,7 @@ announce_recovery() {
     rm -f "$(FAIL_MARKER)"
   else
     log_err "recovery notice could not be delivered; keeping failure marker for the next tick"
+    return 1
   fi
 }
 
@@ -254,9 +291,10 @@ mint_admin_token() {
   out="$(printf '%s\n' "$MAS_SECRET" | in_synapse '
       read -r SEC
       curl -s -w "\n__HTTP__%{http_code}" -X POST \
+        --connect-timeout "$CT" --max-time "$MT" \
         -H "Authorization: Bearer $SEC" \
         "$OIDC_URL/oauth2/admin_token"
-    ' -e OIDC_URL="$OIDC_INTERNAL_URL")"
+    ' -e OIDC_URL="$OIDC_INTERNAL_URL" -e CT="$HTTP_CONNECT_TIMEOUT" -e MT="$MINT_MAX_TIME")"
   rc=$?
   set -e
   if [ "$rc" -ne 0 ] && ! printf '%s' "$out" | grep -q '__HTTP__'; then
@@ -318,13 +356,16 @@ synapse_call() {
       read -r TOK
       if [ -n "$D" ]; then
         curl -s -w "\n__HTTP__%{http_code}" -X "$M" \
+          --connect-timeout "$CT" --max-time "$MT" \
           -H "Authorization: Bearer $TOK" -H "Content-Type: application/json" \
           -d "$D" "http://localhost:$PORT$P"
       else
         curl -s -w "\n__HTTP__%{http_code}" -X "$M" \
+          --connect-timeout "$CT" --max-time "$MT" \
           -H "Authorization: Bearer $TOK" "http://localhost:$PORT$P"
       fi
-    ' -e PORT="$MATRIX_PORT" -e M="$method" -e P="$path" -e D="$data")"
+    ' -e PORT="$MATRIX_PORT" -e M="$method" -e P="$path" -e D="$data" \
+      -e CT="$HTTP_CONNECT_TIMEOUT" -e MT="$ADMIN_MAX_TIME")"
   rc=$?
   set -e
   if ! printf '%s' "$out" | grep -q '__HTTP__'; then
@@ -388,7 +429,10 @@ prune_local() {
 }
 
 admin_user_id() { printf '@%s:%s' "$(printf '%s' "$1" | tr ':' '-' | tr 'A-Z' 'a-z')" "$2"; }
-json_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/ /g'; }
+# Backslashes first, then quotes, so the round-trip is correct. Raw newlines /
+# CR / tabs are illegal inside a JSON string (RFC 8259) and would be rejected by
+# Synapse, so they are folded to spaces BEFORE escaping.
+json_escape() { printf '%s' "$1" | tr '\n\r\t' '   ' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
 
 # Returns non-zero when the notice was NOT accepted, so callers can retry rather
 # than silently dropping an alert.
@@ -403,7 +447,7 @@ send_notice() {
     log_err "set MATRIX_ADMIN_DID, or set ALERTS_OPTIONAL=1 to run retention without alerting on purpose"
     return 1
   fi
-  uid="$(admin_user_id "$ADMIN_DID" "$MATRIX_HOST")"
+  uid="$(json_escape "$(admin_user_id "$ADMIN_DID" "$MATRIX_HOST")")"
   esc="$(json_escape "$body")"
   payload="{\"user_id\":\"$uid\",\"content\":{\"msgtype\":\"m.text\",\"body\":\"$esc\"}}"
   if [ "$DRY_RUN" = "1" ]; then log "DRY_RUN notice -> $uid: $body"; return 0; fi
@@ -449,6 +493,10 @@ load_env() {
   local oidc_port; oidc_port="$(env_get SIWEOIDC_PORT)"
   OIDC_INTERNAL_URL="${OIDC_INTERNAL_URL:-http://${OIDC_SERVICE}:${oidc_port:-8081}}"
   [ -n "$MAS_SECRET" ] || { log_fatal "MAS_SHARED_SECRET empty in $STACK_DIR/.env"; log_unprotected; exit 1; }
+  # MATRIX_HOST builds both the local-media admin path and the notice mxid. Empty
+  # yields ".../media//delete" and "@did-...:", which Synapse rejects with a
+  # confusing 400/404 instead of naming the real problem. Fail on the config.
+  [ -n "$MATRIX_HOST" ] || { log_fatal "MATRIX_HOST empty in $STACK_DIR/.env"; log_unprotected; exit 1; }
 }
 
 # ---- subcommands --------------------------------------------------------------
@@ -461,6 +509,12 @@ cmd_tick() {
   rW="$(window_days "$volU" "$REMOTE_ON" "$REMOTE_FULL" "$REMOTE_EMERG" "$REMOTE_LMAX_D" "$REMOTE_LMIN_D" 1)"
   lW="$(window_days "$volU" "$LOCAL_ON"  "$LOCAL_FULL"  "$LOCAL_EMERG"  "$LOCAL_LMAX_D"  "$LOCAL_LMIN_D"  0)"
   log "tick vol=${volU}%($volLevel) root=${rootU}%($rootLevel) remote_window=$rW local_window=$lW dry=$DRY_RUN"
+  # DRY_RUN is a legitimate mode, but a DRY_RUN accidentally left set in the unit
+  # environment is indistinguishable from a healthy tick if it only whispers.
+  # State plainly, at error priority, that no retention happened.
+  if [ "$DRY_RUN" = "1" ]; then
+    log_err "DRY_RUN=1 — NO media is being deleted and NO alerts are being sent this tick"
+  fi
 
   # Mint up front even on a tick that will not prune (both windows INF, or
   # DRY_RUN). Auth is then verified EVERY hour rather than only once the volume
@@ -490,7 +544,16 @@ cmd_tick() {
   fi
 
   mkdir -p "$STATE_DIR"; printf '%s' "$(now_s)" > "$STATE_DIR/last_success"
-  announce_recovery
+  # A failed recovery ANNOUNCEMENT is itself a reportable failure. Without this
+  # the tick logged the error and still said "tick ok" / exited 0 — which is the
+  # very shape of bug this rewrite exists to remove. Reachable in practice when
+  # `server_notices` is not configured in homeserver.yaml: send_server_notice
+  # then returns 400, which is require_http_ok's generic branch, not its 401.
+  if ! announce_recovery; then
+    log_fatal "retention ran, but the RECOVERY ANNOUNCEMENT could not be delivered"
+    log_fatal "the failure marker is kept, so the announcement retries next tick"
+    exit 5
+  fi
   log "tick ok"
 }
 

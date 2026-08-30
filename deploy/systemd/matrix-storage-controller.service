@@ -23,5 +23,12 @@ WorkingDirectory=/home/deploy/matrix/stack
 StateDirectory=matrix-storage-controller
 ExecStart=/home/deploy/matrix/stack/scripts/matrix-storage-controller.sh tick
 Nice=10
+# Backstop for a hung tick. The script bounds each curl itself
+# (HTTP_CONNECT_TIMEOUT / MINT_MAX_TIME / ADMIN_MAX_TIME), but a wedge anywhere
+# else (docker daemon, compose exec) must still end as a FAILED unit rather than
+# a tick that never returns and silently blocks every later one. Must stay
+# comfortably above ADMIN_MAX_TIME (900s), since purge_media_cache is
+# synchronous and legitimately slow on a large media store.
+TimeoutStartSec=1800
 # Tunables can be overridden here or via a drop-in, e.g.:
 # Environment=WARN_PCT=80 CRIT_PCT=90 CURVE_K=2

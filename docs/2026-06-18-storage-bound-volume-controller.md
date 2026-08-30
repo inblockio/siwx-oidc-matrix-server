@@ -143,6 +143,23 @@ If `MATRIX_ADMIN_DID` is unset, alerting can never work: that is a loud, tick-fa
 by default. Set `ALERTS_OPTIONAL=1` to run retention deliberately without alerting (a
 once-per-tick WARN instead). Pruning is unaffected either way.
 
+### The volume must actually be mounted
+
+If the bounded volume fails to mount but its mountpoint directory still exists, `df` does **not**
+error — it reports the underlying *root* filesystem. The controller would then measure the wrong
+disk, read "roomy", prune nothing and exit 0, while the volume it exists to guard went
+unmonitored. So a `VOL_PATH` that resolves to the same device as `ROOT_PATH` is a fatal error.
+Set `ALLOW_VOL_ON_ROOT=1` for the documented rollback config where media deliberately lives on
+the root disk.
+
+### Timeouts
+
+Every `curl` is bounded (`HTTP_CONNECT_TIMEOUT`=10s, `MINT_MAX_TIME`=30s,
+`ADMIN_MAX_TIME`=900s — the last is generous because `purge_media_cache` is synchronous and
+slow on a large store). Without them a backend that accepts a connection and never answers
+hangs the tick forever: no fatal line, no marker, no exit code at all. `TimeoutStartSec=1800`
+in the unit is the backstop for a wedge outside curl.
+
 ## Notes / caveats
 
 - **Local-media deletion is irreversible** under pressure (accepted: stream service, not
