@@ -5,6 +5,11 @@ Documentation=https://github.com/inblockio/siwx-oidc-matrix-server
 After=docker.service
 Requires=docker.service
 RequiresMountsFor=/mnt/volume_matrix_service
+# The controller now exits NON-ZERO whenever media retention did not run (auth
+# failure, unreachable mint, admin API refusal). Without this line that non-zero
+# exit only lands in the journal, where nobody looks until the volume is full —
+# which is exactly the silent failure this unit exists to prevent.
+OnFailure=matrix-storage-controller-alert.service
 
 [Service]
 Type=oneshot

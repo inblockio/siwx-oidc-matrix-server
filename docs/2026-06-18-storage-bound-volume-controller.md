@@ -100,6 +100,49 @@ docker compose up -d matrix_synapse
 
 To revert the controller: `sudo systemctl disable --now matrix-storage-controller.timer`.
 
+## Authentication (rewritten 2026-08-30 for Synapse 1.159)
+
+Synapse **1.157.0 removed the msc3861 `admin_token` mechanism**. Until then the controller
+bearer'd `MAS_SHARED_SECRET` directly at `/_synapse/admin/v1/*`. On 1.157+ every one of those
+calls returns `401 M_UNKNOWN_TOKEN`, and the old script logged the 401 and **exited 0** — media
+retention would have stopped dead while the unit kept reporting success.
+
+The three admin routes the controller needs have **no `/_synapse/mas/*` equivalent**
+(`purge_media_cache`, `media/{host}/delete`, `send_server_notice`), so they can only be reached
+with a real admin-scoped access token. siwx-oidc mints one at `POST /oauth2/admin_token`,
+authenticated by the MAS shared secret, carrying `urn:synapse:admin:*`.
+
+- The token is minted **per run**, never cached to disk, and re-minted mid-run as it nears
+  expiry. The TTL is never widened to cover a long run.
+- The mint is reached from **inside the Synapse container** (`http://siwx-oidc:8081`), which is
+  already on the compose network — no host-side network path and no new exposed port.
+- Secrets are passed on **stdin**, not `-e VAR=value`, because docker argv is world-readable
+  via `ps`.
+
+## Fail-loud contract
+
+This is the one script in the stack that could fail *silently*, and a silent failure fills the
+bounded volume with nobody noticing. It is now structurally loud:
+
+| Guarantee | Mechanism |
+|---|---|
+| Every admin call's HTTP status is inspected | `require_http_ok` — no call may bypass it |
+| Auth/transport failure aborts the tick | distinct non-zero exit codes (below) |
+| The failure is unmistakable in the journal | `!!! FATAL !!!` on stderr with a `<2>`/`<3>` syslog priority prefix, so `journalctl -p err` catches it |
+| Someone finds out | `OnFailure=matrix-storage-controller-alert.service` escalates at `emerg` |
+| The outage is reported over Matrix | the next recovering tick sends a "RECOVERED: had been FAILING for ~Nm" notice — alerting cannot report an auth outage *while* it is happening, since it needs the same token |
+| A failed alert is not lost | a WARN/CRIT level is committed to `STATE_DIR` **only** once its notice was accepted, so an undelivered alert retries next tick |
+| Alerting problems never stop pruning | both prunes run before any alerting is attempted |
+
+Exit codes: `0` ok · `1` config fatal · `2` usage · `3` mint failure · `4` admin-API auth
+failure · `5` admin-API/transport failure.
+
+`status` now also reports the last successful tick and any current failure marker.
+
+If `MATRIX_ADMIN_DID` is unset, alerting can never work: that is a loud, tick-failing condition
+by default. Set `ALERTS_OPTIONAL=1` to run retention deliberately without alerting (a
+once-per-tick WARN instead). Pruning is unaffected either way.
+
 ## Notes / caveats
 
 - **Local-media deletion is irreversible** under pressure (accepted: stream service, not

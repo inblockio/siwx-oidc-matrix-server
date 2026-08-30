@@ -1,0 +1,23 @@
+[Unit]
+Description=Escalate a failed Matrix storage-controller tick
+Documentation=https://github.com/inblockio/siwx-oidc-matrix-server
+
+# Triggered via OnFailure= from matrix-storage-controller.service.
+#
+# Why this exists: the controller protects a bounded 100 GB volume. When its
+# admin auth breaks it can no longer send its own Matrix server-notice — the
+# notice needs the very token that just failed. So the escalation has to happen
+# OUTSIDE the controller, on a channel that does not share that dependency.
+#
+# This unit deliberately does the smallest reliable thing: it writes an
+# emerg-priority record naming the failed unit, which `journalctl -p emerg`,
+# `systemctl --failed`, and any journal shipper will surface. It has no network
+# dependency, so it cannot itself fail for the same reason the controller did.
+#
+# The controller separately re-announces the outage over Matrix on the next tick
+# that recovers (see announce_recovery), so the gap is reported end-to-end.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemd-cat -t matrix-storage-controller -p emerg /bin/sh -c \
+  'echo "matrix-storage-controller FAILED: media retention did not run. The bounded Matrix volume is UNPROTECTED. Inspect: journalctl -u matrix-storage-controller -n 50"'
