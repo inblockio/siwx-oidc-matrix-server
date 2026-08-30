@@ -54,7 +54,21 @@ fi
 # see now comes from siwx-oidc's own metadata, which is where it should always
 # have come from.
 # -----------------------------------------------------------------------------
-MAS_ENDPOINT="${SIWEOIDC_INTERNAL_URL%/}"
+MAS_ENDPOINT="${SIWEOIDC_INTERNAL_URL:-}"
+MAS_ENDPOINT="${MAS_ENDPOINT%/}"
+
+# Same "do not clobber a good config from an incomplete environment" guard as
+# apply_mas_config() in ../entrypoints/matrix_server.sh — see the long comment
+# there. Because this block runs on every boot, an empty SIWEOIDC_INTERNAL_URL or
+# MAS_SHARED_SECRET would otherwise overwrite working values with `endpoint: ""` /
+# `secret: ""`, which Synapse 1.159 rejects with a MasConfigModel validation
+# error, destroying the last-known-good value on disk.
+if [ -z "${MAS_ENDPOINT}" ] || [ -z "${MAS_SHARED_SECRET:-}" ]; then
+  echo "ERROR: refusing to write matrix_authentication_service — SIWEOIDC_INTERNAL_URL or MAS_SHARED_SECRET is empty." >&2
+  echo "ERROR: leaving /data/homeserver.yaml untouched; restore the environment and restart." >&2
+  exec /start.py
+fi
+
 yq -i "del(.experimental_features.msc3861)" /data/homeserver.yaml
 yq -i ".matrix_authentication_service.enabled = true" /data/homeserver.yaml
 yq -i ".matrix_authentication_service.endpoint = \"${MAS_ENDPOINT}\"" /data/homeserver.yaml

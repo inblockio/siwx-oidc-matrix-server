@@ -119,8 +119,35 @@ apply_mas_config() {
   # supplies one (local/e2e); otherwise the public base URL — which is what
   # prod/dev-staging already used under msc3861 (no issuer_metadata there), so
   # this preserves the existing network path exactly.
-  local mas_endpoint="${SIWEOIDC_INTERNAL_URL:-${SIWEOIDC_BASE_URL}}"
+  local mas_endpoint="${SIWEOIDC_INTERNAL_URL:-${SIWEOIDC_BASE_URL:-}}"
   mas_endpoint="${mas_endpoint%/}"
+
+  # DO NOT CLOBBER A GOOD CONFIG FROM AN INCOMPLETE ENVIRONMENT.
+  #
+  # Unlike the first-boot setup block, this function runs on EVERY boot and
+  # re-derives both values from the environment each time. That is what makes it
+  # a migration — and also what makes an env regression destructive in a way the
+  # first-boot guard never was: with SIWEOIDC_BASE_URL (or MAS_SHARED_SECRET)
+  # missing or empty, the yq writes below replace a WORKING on-disk config with
+  # `endpoint: ""` / `secret: ""`. Synapse 1.159 then refuses to boot
+  # ("Could not validate Matrix Authentication Service configuration: 1
+  # validation error for MasConfigModel") and the last-known-good value is gone
+  # from disk. Verified empirically, H13 phase 7, 2026-08-30.
+  #
+  # Both vars reach the Synapse container via compose `env_file: .env`, so a
+  # single .env edit or an env_file drop is enough to trigger this.
+  #
+  # Skip rather than exit: if the on-disk config is already correct the server
+  # stays up (nothing else in this container consumes these vars), and if it
+  # still carries an msc3861 block Synapse fails loudly on its own with the
+  # explicit "was removed. Use the matrix_authentication_service configuration
+  # instead." ConfigError. Either way no good state is destroyed and no failure
+  # is hidden.
+  if [ -z "${mas_endpoint}" ] || [ -z "${MAS_SHARED_SECRET:-}" ]; then
+    echo "ERROR: refusing to write matrix_authentication_service — endpoint (SIWEOIDC_INTERNAL_URL/SIWEOIDC_BASE_URL) or MAS_SHARED_SECRET is empty." >&2
+    echo "ERROR: leaving /data/homeserver.yaml untouched; restore the environment and restart." >&2
+    return 0
+  fi
 
   # THE MIGRATION: drop the removed experimental block. No-op once already gone.
   yq -i "del(.experimental_features.msc3861)" /data/homeserver.yaml
