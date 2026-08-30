@@ -14,9 +14,16 @@ Rules of this registry:
    observable fact that lets us delete it. A patch nobody can retire is a fork forever.
 2. **No behavioral patch without test coverage.** User-visible behavior gets a Playwright
    leg in the siwx-oidc repo's Element suite (`e2e/element/`); the entry names it.
-3. **Upstream-first.** Patches classified UPSTREAM DEFECT are interim carriers; file the
-   issue/PR against element-hq/element-web and link it here. Only POLICY patches are
-   permanent residents.
+3. **Upstream-first.** Three classifications, and only one is permanent:
+   - **UPSTREAM DEFECT** — interim carrier for an upstream bug. File the issue/PR and
+     link it here.
+   - **UPSTREAM-TRACKED** — a feature we are actively trying to get merged upstream.
+     Also an interim carrier. The vendored patch and the upstream PR must be kept in
+     sync; drifting them splits our deployment from what reviewers are reading.
+   - **POLICY** — deployment policy that is not upstreamable. The only permanent
+     residents.
+   Today exactly one entry is UPSTREAM-TRACKED: #6 `browser-eventindex`
+   ([element-web#34718](https://github.com/element-hq/element-web/pull/34718)).
 4. **Tag-bump procedure** (do this for every `ELEMENT_WEB_TAG` change):
    ```bash
    git clone --depth 1 --branch <newtag> https://github.com/element-hq/element-web.git /tmp/ewcheck
@@ -129,7 +136,7 @@ refreshing the `dev` Dockerfile.
 - **Retirement:** upstream streamlines the check-code step.
 - **Coverage:** exercised by the QR-link browser walks (check-code leg).
 
-### 6. `browser-eventindex.patch` — POLICY (permanent until upstream)
+### 6. `browser-eventindex.patch` — UPSTREAM-TRACKED (PR #34718 open; carry until merged)
 
 - **Applied by:** `dev` Dockerfile and `main` Dockerfile (prod).
 - **What:** a `BrowserEventIndexManager` implementing Element's
@@ -164,11 +171,43 @@ refreshing the `dev` Dockerfile.
   regenerated patch has byte-identical added/removed lines and an identical
   numstat (6 / 2-1 / 383 / 938 / 9) to the previous version — a pure context
   refresh with zero behavior change.
-- **Upstream status:** NOT a Seshat port. The interface is upstream's;
-  the store is ours. Do not file as "Seshat for Web".
-- **Retirement:** only if upstream ships a browser EventIndex that meets
-  I1–I8 (ciphertext at rest, session-bound key, logout wipe) or product
-  stops requiring hosted-Web search.
+- **Upstream status: FILED AND ACTIVELY TRACKED — we are trying to get this
+  merged.** [element-hq/element-web#34718](https://github.com/element-hq/element-web/pull/34718)
+  "Add a browser EventIndex so encrypted-room search works on the web"
+  (`inblockio:feat/web-event-index` → `element-hq:develop`, author
+  FantasticoFox, opened 2026-08-15, 10 files, +1734/-1). Fixes
+  [element-meta#3294](https://github.com/element-hq/element-meta/issues/3294).
+  Labelled `T-Enhancement` + `Z-Community-PR`.
+
+  This is the **one patch in this registry with a live upstream merge path**, so
+  unlike the other POLICY entries it is an interim carrier, not a permanent
+  resident. Keep the vendored patch and the PR in sync: a change to one that is
+  not mirrored in the other splits our deployment from what upstream is
+  reviewing.
+
+  Still NOT a Seshat port — the interface is upstream's, the store is ours. Do
+  not describe it as "Seshat for Web" (the PR body says so explicitly, because
+  the native-Seshat comparison is what makes reviewers assume WASM/SQLCipher).
+
+  **Status as of 2026-08-31:** mergeable, CI green (6/6 check-runs + CLA), but
+  **zero reviews submitted**. GitHub reports `mergeable_state: unstable`, which
+  for a community PR usually means workflows awaiting maintainer approval to
+  run. Last activity: Tim rebased and force-pushed CI fixes 2026-08-30 21:18Z.
+
+  **Open reviewer-side question worth chasing:** on 2026-08-28 the maintainer
+  (t3chguy) reported "I don't see any messages whatsoever" with a screenshot
+  while testing, and Tim replied suspecting a federation delivery problem on his
+  side. That is the SAME symptom class as the MSC4284 policy-server refusal
+  tracked in memory `policyserv-blocks-did-mxids` (our sends to policy-server
+  rooms are refused with a bare 400). If a reviewer cannot see test messages,
+  they cannot evaluate a *search* feature — so unblocking the federation issue
+  may be on the critical path to this merge. Unproven link; check it before
+  assuming.
+- **Retirement:** when #34718 (or an upstream equivalent) merges and ships in a
+  tag we deploy, PROVIDED it still meets I1–I8 (ciphertext at rest,
+  session-bound key, logout wipe) — verify those against the merged form, since
+  review may change the store. Also retires if product stops requiring
+  hosted-Web search.
 - **Coverage:** Element-tree vitest in the patch
   (`BrowserEventIndexManager.test.ts`); repo
   `scripts/browser-eventindex-invariants.mjs`;
@@ -209,3 +248,22 @@ against a pristine tree, in Dockerfile order):
 
 Verified afterwards in BOTH apply orders against a pristine v1.12.26 tree: the `dev`
 order (all six) and the `main`/prod subset (1, 5, 6).
+
+**Verified in the DEPLOYED artifact, not just against a tree (2026-08-31).** "Applies
+clean" only proves a patch can be applied; it does not prove the code reached the
+served app. After the `5089872` converge, every patch was confirmed by grepping its own
+distinctive string in the running `matrix-staging-element-web-1` webroot:
+
+| # | Patch | Marker grepped in `/app` | Files |
+|---|---|---|---|
+| 1 | `force-first-device-recovery` | `Set up recovery to continue` | 1 |
+| 2 | `setup-encryption-busy-wedge` | `cross-signing not ready` | 2 |
+| 3 | `honest-qr-disabled-reason` | `Not supported by your account provider` | 2 |
+| 4 | `offer-verify-current-session` | `verify_blocked_current_session_unverified` | 3 |
+| 5 | `auto-approve-check-code` | `open_approval_page` | 5 |
+| 6 | `browser-eventindex` | `inblock-ew-eventindex` | 2 |
+
+**Trap for whoever repeats this:** the EventIndex code is emitted into
+`bundles/<hash>/init.js`, **not** `bundle.js`. Grepping only `bundle.js` returns zero
+hits for every EventIndex marker and looks exactly like "the patch is missing". Search
+the whole webroot.
