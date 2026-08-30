@@ -310,3 +310,69 @@ them will never reach dev-staging or prod, including the known `allowed_lifetime
    blast radius. Right shape = a **one-shot versioned migration step** with a
    `/data/.migrations-applied` marker listing applied ids: reaches existing deployments exactly
    once, auditable, never re-asserts over hand edits. Changes prod behaviour beyond this plan.
+
+---
+
+## H8 — two-agent A/V call on dev-staging (2026-08-30, agent-executed)
+
+**Status: CONFIRMED** for the server/SFU/JWT plane. Executed with
+`~/aqua-agents/crates/aqua-call-agent` because a live human call was not available.
+
+| Evidence | Result |
+|---|---|
+| Homeserver targeting | Agent patched `main.rs` to print the SDK-*resolved* homeserver and hard-abort unless it matched `AGENT_REQUIRE_HOMESERVER`; negative-tested the fuse first. Both agents: `https://dev.matrix.inblock.io/`. Post-run audit: 69 refs to dev, **0** to any prod host. |
+| Media both directions | Each agent subscribed to the other's video **and** audio (`saw_remote_av=true` both sides); SFU shows 2 `ACTIVE` participants each publishing `VIDEO 640x480 CAMERA` + `AUDIO MICROPHONE`. |
+| Byte counters | SFU eth0 **rx +15,169,153 B / 21,341 pkts**, **tx +15,180,543 B / 21,160 pkts** over ~110 s. Control run (A only): rx 7.6 MB but tx just **112 KB** — tx only rises with a subscriber to forward to, which is what makes the numbers meaningful. |
+| `m.call.member` | Both published (MSC3757 owned state keys), simultaneous across 12 polls, `foci_preferred` → dev lk-jwt, both cleared to `{}` on leave. |
+| lk-jwt / rotated key | Token `iss` = `APIvOWrGBYa6vk` (the key rotated 2026-08-30); SFU accepted both tokens, so lk-jwt and LiveKit share the rotated key. |
+| TURN | Edge proven live (TLS 1.3, valid cert, genuine STUN Binding success) but **relay NOT exercised** — ICE chose direct UDP and the Rust SDK gathered no relay candidate. Note: STUN reflexive address came back as `172.18.0.2`, the L4 proxy's own IP, so the TURN server sees Caddy, not the client. |
+
+**Scope limit (stated, not hedged):** the harness uses the Rust SDK's own capture, so it
+**cannot** detect the Element-X-on-iOS capture failure class — the 2026-08-04 incident.
+This validates the server/SFU/JWT/TURN-edge plane only. EX-on-iOS capture and E2EE
+interop with real Element clients remain unverified.
+
+**Cleanup readback:** both throwaway identities `deactivated=1, admin=0`, 0
+access_tokens/devices/profiles/user_directory/e2e rows, membership `leave`; server-wide
+deactivated 19 → 21; OIDC client deleted (204); private keys shredded; repo restored
+clean. One empty room `!SeNjLzVSDMgWhNyVmv:dev.matrix.inblock.io` remains.
+
+### Findings from the H8 run — verified independently
+
+**F1 — dev siwx-oidc ES256 signing key exposed. ROTATED 2026-08-30.**
+The agent ran `printenv | cut -d= -f1` inside the siwx-oidc container; the multi-line
+`SIWEOIDC_SIGNING_KEY_PEM` body printed as if each line were a variable name. Rotated
+the same day: new P-256 PKCS#8 key generated on the box (never transited an agent
+context), `.env` rewritten in place preserving inode (600), service recreated.
+JWKS `x` moved `J1GgMPd25Y8wPWrfX7_UxoUdD-wcYCMYqv0_o07fmuA` →
+`UIiLHO69tUFWc7cSPAfYeWGfICLgOVviVtOBWuhJ6Ws`; old value absent from `/jwk`. Stack
+healthy afterwards (all six containers up, Synapse `auth_metadata` intact — the
+MSC3861 path is introspection-based, so it never depended on this key).
+Residual: the old key persists in ~10 `.env`/compose backups on the dev box.
+
+**F2 — the agent's "admin API is broken on dev" claim is WRONG.** It concluded that
+because Synapse's `matrix_authentication_service:` block has no `admin_token`, the
+admin API is unreachable. There *is* no such setting on 1.157+ — it was deleted
+upstream, which is exactly why `src/admin_token.rs` exists. Verified live: deployed
+image revision is `a28cbb01` == `origin/dev` tip, it contains `src/admin_token.rs`,
+and an internal `POST /oauth2/admin_token` mints a real token with scope
+`urn:matrix:client:api:* urn:synapse:admin:*` for `@siwx-admin:dev.matrix.inblock.io`.
+The external 404 the agent hit is the **deliberate** R12 edge restriction in
+`Caddyfile.dev-aquafire:401`. The agent's own cleanup section contradicts its claim —
+it successfully deactivated both identities.
+
+**F3 — deactivation is not enforced at sign-in. REAL, ours, unfixed.**
+Confirmed from source on both sides: `synapse/api/auth/mas.py` (1.159.0) has **zero**
+occurrences of `deactivated`; and our tombstone (`is_user_deactivated`) is consulted
+**only** on the refresh/mint path (`oidc.rs:537` + the four `probe_revocation` sites),
+never at fresh sign-in. Sign-in's only gate is `is_new_identity` =
+`is_localpart_available`, which for a deactivated user reads *not available* → treated
+as a normal returning account → tokens issued. So `account_deactivate` /
+`account_erase` are undone by logging in again. `/_synapse/mas/query_user` already
+returns `is_deactivated` (`rest/synapse/mas/users.py:59,80`), so the fix is a sign-in
+gate that fails closed, not a config change. **Prod is affected by inference from
+source** (no released version has this gate) — not live-tested, prod stays read-only.
+
+**F4 — minor:** rooms created with the `private_chat` preset (`state_default: 50`)
+block PL-0 users from publishing `m.call.member`; `logout/all` 404s on dev (not routed
+to siwx-oidc).
