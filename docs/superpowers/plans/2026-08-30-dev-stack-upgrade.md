@@ -219,6 +219,31 @@ scope. Carry this limitation into the audit and the promotion runbook.
 Same mechanism as H13, different key: an existing deployment that never had `server_notices`
 hand-applied gets 400 forever. Left to H13, which owns `entrypoints/matrix_server.sh`.
 
+### D21 — the branch consolidation itself introduced a silent defect (Task 5)
+Merging the three matrix-server branches left **two copies** of the "env-overridable image
+refs" block in `e2e-harness/up.sh`. Each branch had added it independently at a slightly
+different offset, so `ort` saw two clean additions rather than one and kept both. The copies
+DISAGREED — the first pinned `LIVEKIT_IMAGE_REF` to v1.13.6 (what Task 7 shipped and what
+dev-staging runs), the second to v1.12.0 — and the later assignment wins. The harness would
+have exercised the OLD LiveKit while the branch claimed to have bumped it: a green run
+asserting the wrong thing, which is precisely the defect class Task 1b existed to remove.
+Found by reading the merged file, not by any test. Fixed in `155c2b2`. A follow-up sweep of
+every file touched by all three merges (combined-diff analysis, duplicate shell vars,
+duplicate YAML keys, duplicate functions, repeated line-windows) found **no other instance** —
+`up.sh` was the only file where git had to interleave hunks from both parents.
+**Lesson:** a clean `git merge` with zero conflicts is not evidence of a correct merge.
+
+### D22 — `/_synapse/*` is not reachable at the dev-staging public edge (Task 5)
+`tests/e2e_account_lifecycle_live.rs` reads Synapse state back through `MATRIX_HOST`, but
+Caddy on dev-staging does not route `/_synapse/admin/*` or `/_synapse/mas/*` publicly — both
+return **404** from outside while `/_matrix/client/*` returns 200. Proven not to be a
+migration regression: the identical request issued from inside the box answers **200** with a
+minted admin token and **401** without one. This is a sibling of D16 (an environmental test
+failure, not a code fault), but a distinct one: the fix is to point `MATRIX_HOST` at an
+internally-reachable Synapse (an SSH tunnel to the container works) rather than at the public
+hostname. Not a defect in the edge config — refusing to expose the admin surface publicly is
+the correct posture and should stay.
+
 ## Pre-promotion checks for PROD (not this plan, but do not lose)
 - `MATRIX_ADMIN_DID` is unset on dev-staging and commented out in both `.env.example`s.
   **Check prod's `.env` before promoting the storage controller**, or set `ALERTS_OPTIONAL=1`.
