@@ -229,6 +229,7 @@ RESULT_FLAGGED=()   # 1 if the check is known-flagged, else 0
 ANY_FAILURE=0       # any check exited non-zero (green OR flagged) -> collect logs
 GREEN_FAIL=0        # an EXPECTED-GREEN check failed -> run fails
 FLAGGED_FAILS=()    # ids of flagged checks that failed (for the summary line)
+HARNESS_ERRORS=()   # ids of checks the harness could not run / that judged nothing
 
 run_one() {
   local spec="$1"
@@ -280,6 +281,21 @@ run_one() {
   if [ "$rc" -eq 0 ]; then
     status="pass"
     log "         -> PASS (rc=0)"
+  elif [ "$rc" -eq 2 ] || [ "$rc" -eq 3 ]; then
+    # rc=2 the adapter could NOT run the check (precondition/environment).
+    # rc=3 it ran but judged nothing (name filter matched no test).
+    # Neither is a product verdict, so neither may be tolerated -- NOT EVEN for a
+    # known-flagged check. A broken instrument filed as "expected failure" is how
+    # a run comes out green while proving nothing.
+    status="harness-error"
+    HARNESS_ERRORS+=("$id (rc=$rc)")
+    GREEN_FAIL=1
+    ANY_FAILURE=1
+    if [ "$rc" -eq 2 ]; then
+      log "         -> HARNESS ERROR (rc=2) -- check could NOT RUN; this is not a product failure"
+    else
+      log "         -> HARNESS ERROR (rc=3) -- check ran but JUDGED NOTHING (0 tests matched)"
+    fi
   elif [ "$flagged" = "1" ]; then
     status="known-flagged"
     FLAGGED_FAILS+=("$id")
@@ -317,13 +333,14 @@ fi
 # -----------------------------------------------------------------------------
 # summary.json manifest.
 # -----------------------------------------------------------------------------
-PASS_N=0; FAIL_N=0; FLAG_N=0
+PASS_N=0; FAIL_N=0; FLAG_N=0; HERR_N=0
 CHECK_JSON=""
 for i in "${!RESULT_IDS[@]}"; do
   case "${RESULT_STATUS[$i]}" in
     pass) PASS_N=$((PASS_N+1)) ;;
     fail) FAIL_N=$((FAIL_N+1)) ;;
     known-flagged) FLAG_N=$((FLAG_N+1)) ;;
+    harness-error) HERR_N=$((HERR_N+1)) ;;
   esac
   obj="$(jq -nc \
     --arg id "${RESULT_IDS[$i]}" \
@@ -345,9 +362,11 @@ jq -n \
   --argjson passed "$PASS_N" \
   --argjson failed "$FAIL_N" \
   --argjson known_flagged "$FLAG_N" \
+  --argjson harness_error "$HERR_N" \
   --argjson checks "[$CHECK_JSON]" \
   '{run_id:$run_id, tier:$tier, overall:$overall,
-    counts:{total:$total, pass:$passed, fail:$failed, known_flagged:$known_flagged},
+    counts:{total:$total, pass:$passed, fail:$failed, known_flagged:$known_flagged,
+            harness_error:$harness_error},
     checks:$checks}' >"$ART_DIR/summary.json"
 
 # -----------------------------------------------------------------------------
@@ -356,7 +375,12 @@ jq -n \
 log ""
 log "=============================================================="
 log "  tier=$TIER  run-id=$RUN_ID  ->  OVERALL: $(echo "$OVERALL" | tr a-z A-Z)"
-log "  pass=$PASS_N  fail=$FAIL_N  known-flagged=$FLAG_N  (total ${#RESULT_IDS[@]})"
+log "  pass=$PASS_N  fail=$FAIL_N  known-flagged=$FLAG_N  harness-error=$HERR_N  (total ${#RESULT_IDS[@]})"
+if [ "$HERR_N" -gt 0 ]; then
+  log "  $HERR_N HARNESS ERROR(S) -- these checks did not judge anything:"
+  for id in "${HARNESS_ERRORS[@]}"; do log "      - $id"; done
+  log "  A run with a harness error proves nothing about the checks it could not run."
+fi
 if [ "$FLAG_N" -gt 0 ]; then
   log "  $FLAG_N known-flagged pending remediation:"
   for id in "${FLAGGED_FAILS[@]}"; do log "      - $id"; done
