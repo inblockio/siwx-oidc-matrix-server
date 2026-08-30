@@ -28,6 +28,15 @@ SYNAPSE_IMAGE_REF="${SYNAPSE_IMAGE_REF:-localhost/siwx-real-synapse:local}"
 SIWX_OIDC_IMAGE_REF="${SIWX_OIDC_IMAGE_REF:-localhost/siwx-oidc:local-grace}"
 LIVEKIT_IMAGE_REF="${LIVEKIT_IMAGE_REF:-livekit/livekit-server:v1.13.6}"
 
+# Env-overridable image refs, same convention as LK_JWT_IMAGE_REF above. The
+# defaults are exactly what the harness has always run, so an unset environment
+# behaves identically. Overriding lets a version-bump branch validate a candidate
+# image WITHOUT clobbering the shared localhost/* tags the siwx-real-* stack uses:
+#   SYNAPSE_IMAGE_REF=localhost/siwx-real-synapse:mas e2e-harness/up.sh
+SYNAPSE_IMAGE_REF="${SYNAPSE_IMAGE_REF:-localhost/siwx-real-synapse:local}"
+SIWX_OIDC_IMAGE_REF="${SIWX_OIDC_IMAGE_REF:-localhost/siwx-oidc:local-grace}"
+LIVEKIT_IMAGE_REF="${LIVEKIT_IMAGE_REF:-livekit/livekit-server:v1.12.0}"
+
 FRESH=0
 [ "${1:-}" = "--fresh" ] && FRESH=1
 

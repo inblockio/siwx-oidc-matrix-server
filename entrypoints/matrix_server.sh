@@ -18,61 +18,11 @@ yq -i ".listeners[0].type = \"http\"" /data/homeserver.yaml
 yq -i ".listeners[0].x_forwarded = true" /data/homeserver.yaml
 yq -i "del(.listeners[1])" /data/homeserver.yaml
 
-#msc3861 delegated auth
-yq -i ".experimental_features.msc3861.enabled = true" /data/homeserver.yaml
-# Public issuer clients see (must byte-match siwx-oidc metadata / .well-known).
-# Prefer SIWEOIDC_PUBLIC_ISSUER when set (local/e2e), else SIWEOIDC_BASE_URL.
-PUBLIC_ISSUER="${SIWEOIDC_PUBLIC_ISSUER:-${SIWEOIDC_BASE_URL}}"
-# Ensure trailing slash for RFC 8414 issuer byte-match with siwx metadata.
-case "${PUBLIC_ISSUER}" in
-  */) ;;
-  *) PUBLIC_ISSUER="${PUBLIC_ISSUER}/" ;;
-esac
-yq -i ".experimental_features.msc3861.issuer = \"${PUBLIC_ISSUER}\"" /data/homeserver.yaml
-# Account-management deep link must point at the /account page, NOT the bare issuer
-# root. Synapse echoes this verbatim into the cross-signing-reset UIA 401 it hands
-# clients (rest/client/keys.py, msc3861 branch); a bare root dead-ends Element Web at
-# the sign-in SPA (/client/null) so the reset approval is never reached. `${VAR%/}/account`
-# is correct whether or not the issuer carries a trailing slash.
-yq -i ".experimental_features.msc3861.account_management_url = \"${PUBLIC_ISSUER%/}/account\"" /data/homeserver.yaml
-yq -i ".experimental_features.msc3861.client_id = \"0000000000000000000SYNAPSE\"" /data/homeserver.yaml
-yq -i ".experimental_features.msc3861.client_auth_method = \"client_secret_post\"" /data/homeserver.yaml
-yq -i ".experimental_features.msc3861.client_secret = \"${MAS_SHARED_SECRET}\"" /data/homeserver.yaml
-yq -i ".experimental_features.msc3861.admin_token = \"${MAS_SHARED_SECRET}\"" /data/homeserver.yaml
-
-# When SIWEOIDC_INTERNAL_URL is set (local/e2e compose), pin issuer_metadata so
-# Synapse reaches siwx-oidc on the docker network for introspection while still
-# advertising the public issuer to clients. Without this, issuer=http://localhost:N
-# is unreachable from inside the Synapse container and every whoami returns 503.
-#
-# CRITICAL: Synapse forwards issuer_metadata VERBATIM to browsers via
-# GET /_matrix/client/v1/auth_metadata — it does NOT merge in the OP's real
-# metadata. A hand-written endpoints-only dict therefore breaks Element Web
-# twice over: (a) internal http://siwx-oidc:PORT endpoint URLs are
-# unreachable from a browser, and (b) missing capability fields
-# (response_types_supported, grant_types_supported,
-# code_challenge_methods_supported) fail matrix-js-sdk's issuer validation.
-# Either way Element falls back to the legacy /login/sso/redirect, which
-# 404s under MSC3861 (siwx has no MAS compat shim) — a login dead-end.
-#
-# Correct pattern (as MAS documents): take the OP's FULL metadata (siwx
-# advertises public URLs because SIWEOIDC_BASE_URL is host-facing) and
-# override ONLY introspection_endpoint to the docker-internal URL — the one
-# endpoint Synapse itself calls.
-if [ -n "${SIWEOIDC_INTERNAL_URL:-}" ]; then
-  INTERNAL="${SIWEOIDC_INTERNAL_URL%/}"
-  for i in $(seq 1 30); do
-    curl -fsS "${INTERNAL}/.well-known/openid-configuration" -o /tmp/op-metadata.json && break
-    echo "waiting for siwx-oidc metadata at ${INTERNAL} (${i}/30)..."
-    sleep 2
-  done
-  if [ ! -s /tmp/op-metadata.json ]; then
-    echo "FATAL: could not fetch ${INTERNAL}/.well-known/openid-configuration" >&2
-    exit 1
-  fi
-  yq -i ".experimental_features.msc3861.issuer_metadata = load(\"/tmp/op-metadata.json\")" /data/homeserver.yaml
-  yq -i ".experimental_features.msc3861.issuer_metadata.introspection_endpoint = \"${INTERNAL}/oauth2/introspect\"" /data/homeserver.yaml
-fi
+# Delegated auth (Matrix Authentication Service) used to be configured here as
+# `experimental_features.msc3861`, first-boot-only. Synapse 1.157.0 REMOVED that
+# block outright, so it is now written by apply_mas_config() in the always-run
+# section below the first-boot guard — which is also what MIGRATES an
+# already-provisioned /data/homeserver.yaml off msc3861. See the block comment there.
 
 # MatrixRTC / call-hardening config (MSC4108/4143/3266/4222, delayed events,
 # rc_delayed_event_mgmt, rc_message, matrix_rtc.transports) used to live here,
@@ -118,6 +68,95 @@ fi
 # hand-applied live with yq plus a manual restart. T7,
 # docs/superpowers/plans/2026-08-01-av-hardening-config.md.
 # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Delegated auth via the STABLE Matrix Authentication Service integration —
+# ALWAYS RE-ASSERTED, EVERY BOOT, because it is also the MIGRATION off MSC3861.
+#
+# Synapse 1.157.0 removed `experimental_features.msc3861`; a leftover non-empty
+# block is now a hard ConfigError that refuses to boot
+# (synapse/config/experimental.py). This entrypoint's setup block is
+# first-boot-only, so an already-provisioned /data/homeserver.yaml would keep its
+# msc3861 block forever and the container would crash-loop on upgrade. The
+# migration therefore runs unconditionally, here, before /start.py.
+#
+# Stable config shape (synapse/config/mas.py, MasConfigModel):
+#   matrix_authentication_service:
+#     enabled: true
+#     endpoint: <base URL of the OP>   # AnyHttpUrl
+#     secret:   <shared secret>        # == the old client_secret AND admin_token
+#
+# `endpoint` is the ONLY location knob. Synapse derives BOTH
+#   {endpoint}/.well-known/openid-configuration  (MasDelegatedAuth._metadata_url)
+#   {endpoint}/oauth2/introspect                 (_introspection_endpoint)
+# from it, and IGNORES the metadata document's own `introspection_endpoint`.
+#
+# There is no `issuer_metadata` override any more, and none is needed: siwx-oidc
+# builds its whole discovery document from SIWEOIDC_BASE_URL (host-independent —
+# it does not echo the request Host), so fetching it over the docker-internal
+# address still returns the PUBLIC issuer and endpoint URLs, which Synapse then
+# forwards to browsers verbatim via GET /_matrix/client/v1/auth_metadata
+# (MasDelegatedAuth.auth_metadata returns the full metadata dict, and
+# ServerMetadata is pydantic with extra="allow", so our extra keys — including
+# account_management_actions_supported — survive). That is exactly the
+# decoupling the old hand-built issuer_metadata block provided, now for free.
+#
+# Two knobs disappear as a consequence, both correctly:
+#   * issuer — clients now see siwx-oidc's own `issuer` claim, so the RFC 8414
+#     3.3 trailing-slash byte-match against .well-known/matrix/client is owned by
+#     siwx-oidc alone and can no longer drift from Synapse's config. It HAD
+#     drifted: dev-staging carried msc3861.issuer with no trailing slash.
+#   * account_management_url — Synapse reads `account_management_uri` from the OP
+#     metadata (a REQUIRED field of ServerMetadata), which siwx-oidc always emits
+#     as {base_url}/account.
+#
+# The shared secret keeps its double duty: introspection is authenticated with
+# `Authorization: Bearer <secret>` (siwx-oidc's src/introspect.rs already accepts
+# a Bearer shared secret), and is_request_using_the_shared_secret() survives, so
+# siwx-oidc's admin_token calls in synapse_client.rs keep working unchanged.
+# -----------------------------------------------------------------------------
+apply_mas_config() {
+  # Where Synapse reaches siwx-oidc. Internal docker address when the compose
+  # supplies one (local/e2e); otherwise the public base URL — which is what
+  # prod/dev-staging already used under msc3861 (no issuer_metadata there), so
+  # this preserves the existing network path exactly.
+  local mas_endpoint="${SIWEOIDC_INTERNAL_URL:-${SIWEOIDC_BASE_URL:-}}"
+  mas_endpoint="${mas_endpoint%/}"
+
+  # DO NOT CLOBBER A GOOD CONFIG FROM AN INCOMPLETE ENVIRONMENT.
+  #
+  # Unlike the first-boot setup block, this function runs on EVERY boot and
+  # re-derives both values from the environment each time. That is what makes it
+  # a migration — and also what makes an env regression destructive in a way the
+  # first-boot guard never was: with SIWEOIDC_BASE_URL (or MAS_SHARED_SECRET)
+  # missing or empty, the yq writes below replace a WORKING on-disk config with
+  # `endpoint: ""` / `secret: ""`. Synapse 1.159 then refuses to boot
+  # ("Could not validate Matrix Authentication Service configuration: 1
+  # validation error for MasConfigModel") and the last-known-good value is gone
+  # from disk. Verified empirically, H13 phase 7, 2026-08-30.
+  #
+  # Both vars reach the Synapse container via compose `env_file: .env`, so a
+  # single .env edit or an env_file drop is enough to trigger this.
+  #
+  # Skip rather than exit: if the on-disk config is already correct the server
+  # stays up (nothing else in this container consumes these vars), and if it
+  # still carries an msc3861 block Synapse fails loudly on its own with the
+  # explicit "was removed. Use the matrix_authentication_service configuration
+  # instead." ConfigError. Either way no good state is destroyed and no failure
+  # is hidden.
+  if [ -z "${mas_endpoint}" ] || [ -z "${MAS_SHARED_SECRET:-}" ]; then
+    echo "ERROR: refusing to write matrix_authentication_service — endpoint (SIWEOIDC_INTERNAL_URL/SIWEOIDC_BASE_URL) or MAS_SHARED_SECRET is empty." >&2
+    echo "ERROR: leaving /data/homeserver.yaml untouched; restore the environment and restart." >&2
+    return 0
+  fi
+
+  # THE MIGRATION: drop the removed experimental block. No-op once already gone.
+  yq -i "del(.experimental_features.msc3861)" /data/homeserver.yaml
+
+  yq -i ".matrix_authentication_service.enabled = true" /data/homeserver.yaml
+  yq -i ".matrix_authentication_service.endpoint = \"${mas_endpoint}\"" /data/homeserver.yaml
+  yq -i ".matrix_authentication_service.secret = \"${MAS_SHARED_SECRET}\"" /data/homeserver.yaml
+}
+
 apply_matrixrtc_config() {
   # Enable QR code login rendezvous server (MSC4108 2024 version)
   yq -i ".experimental_features.msc4108_enabled = true" /data/homeserver.yaml
@@ -145,6 +184,7 @@ apply_matrixrtc_config() {
 }
 
 if [ -f /data/homeserver.yaml ]; then
+  apply_mas_config
   apply_matrixrtc_config
 else
   # /start.py generate above should have created this; if it somehow didn't,
