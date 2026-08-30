@@ -52,7 +52,7 @@ siwx-oidc-matrix-server/
 | `proxy`          | `nginxproxy/nginx-proxy:alpine`            | 80, 443       | Reverse proxy; aliases both hostnames on the Docker network |
 | `letsencrypt`    | `nginxproxy/acme-companion`                | —             | Auto-provisions TLS for proxy |
 | `element-web`    | `./dockerfiles/Dockerfile.element` (Element Web) | 80 (internal) | SIWX auto-login client, served via proxy at `${CLIENT_HOST}` |
-| `livekit`        | `livekit/livekit-server:v1.12.0` (pinned, no `:latest`) | 7881/tcp, 20100-20200/udp | LiveKit SFU for MatrixRTC (Element Call). UDP range must stay below the ephemeral range and match `config/livekit.yaml` |
+| `livekit`        | `livekit/livekit-server:v1.13.6` (pinned, no `:latest`) | 7881/tcp, 20100-20200/udp | LiveKit SFU for MatrixRTC (Element Call). UDP range must stay below the ephemeral range and match `config/livekit.yaml` |
 | `lk-jwt-service` | `ghcr.io/element-hq/lk-jwt-service:0.5.0@sha256:2991856…` (pinned) | 8080 (internal) | Validates Matrix OpenID tokens, issues LiveKit JWTs. Requires `LIVEKIT_FULL_ACCESS_HOMESERVERS` (explicit hostname, never `*`) |
 
 Volumes: `matrix_data` (Synapse data), `proxy_data_*` (nginx/acme state).

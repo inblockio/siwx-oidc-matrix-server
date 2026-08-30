@@ -162,7 +162,7 @@ services:
   livekit:
     # Pinned: an unpinned :latest jumps SFU versions on any `docker compose pull`,
     # which can change call behavior unannounced. Bump deliberately.
-    image: livekit/livekit-server:v1.12.0
+    image: livekit/livekit-server:v1.13.6
     restart: unless-stopped
     command: --config /etc/livekit.yaml
     environment:

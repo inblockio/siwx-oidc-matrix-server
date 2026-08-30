@@ -126,7 +126,7 @@ services:
   livekit:
     # Pinned: an unpinned :latest jumps SFU versions on any `docker compose pull`
     # (deploy.sh), which can change call behavior unannounced. Bump deliberately.
-    image: livekit/livekit-server:v1.12.0
+    image: livekit/livekit-server:v1.13.6
     restart: unless-stopped
     command: --config /etc/livekit.yaml
     environment:
@@ -150,9 +150,11 @@ services:
     healthcheck:
       # busybox wget (the image has no curl); GET / is LiveKit's unauthenticated
       # liveness endpoint. It answers 406 until the node publishes its first
-      # stats tick — measured 8s from container start on v1.12.0, most of it the
-      # use_external_ip STUN lookup — hence start_period. Verified against
-      # livekit/livekit-server:v1.12.0 + this config on 2026-08-01.
+      # stats tick, most of it the use_external_ip STUN lookup — hence
+      # start_period. Re-measured against livekit/livekit-server:v1.13.6 + this
+      # config on 2026-08-30: first response (406) at ~6s, 200 by ~17s, so the
+      # 30s start_period still covers it. (Was 8s on v1.12.0 — slower, same
+      # 406-then-200 semantics, still inside the window.)
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:7880/"]
       interval: 15s
       timeout: 5s

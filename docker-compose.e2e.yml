@@ -90,7 +90,7 @@ services:
       - siwx-e2eh-net
 
   siwx-e2eh-livekit:
-    image: livekit/livekit-server:v1.12.0
+    image: livekit/livekit-server:v1.13.6
     container_name: siwx-e2eh-livekit
     restart: unless-stopped
     command: --config /etc/livekit.yaml
