@@ -53,7 +53,20 @@ siwx-oidc-matrix-server/
 | `letsencrypt`    | `nginxproxy/acme-companion`                | —             | Auto-provisions TLS for proxy |
 | `element-web`    | `./dockerfiles/Dockerfile.element` (Element Web) | 80 (internal) | SIWX auto-login client, served via proxy at `${CLIENT_HOST}` |
 | `livekit`        | `livekit/livekit-server:v1.13.6` (pinned, no `:latest`) | 7881/tcp, 20100-20200/udp | LiveKit SFU for MatrixRTC (Element Call). UDP range must stay below the ephemeral range and match `config/livekit.yaml` |
-| `lk-jwt-service` | `ghcr.io/element-hq/lk-jwt-service:0.6.0@sha256:822f0c03…` (pinned) | 8080 (internal) | Validates Matrix OpenID tokens, issues LiveKit JWTs. Requires `LIVEKIT_FULL_ACCESS_HOMESERVERS` (explicit hostname, never `*`). No healthcheck by design (distroless, no shell) — probe `/healthz` externally. Since 0.6.0 it resolves the C-S API via `.well-known` discovery, ignoring the deprecated `delay_cs_api_url` request parameter |
+| `lk-jwt-service` | `ghcr.io/element-hq/lk-jwt-service:0.6.0@sha256:822f0c03…` (pinned) | 8080 (internal) | Validates Matrix OpenID tokens, issues LiveKit JWTs. Requires `LIVEKIT_FULL_ACCESS_HOMESERVERS` (explicit hostname, never `*`). Healthcheck DISABLED in every compose file (`healthcheck: disable: true`) — 0.6.0 ships an image-level HEALTHCHECK that is unconditionally broken (see below); probe `/healthz` externally instead. Since 0.6.0 it resolves the C-S API via `.well-known` discovery, ignoring the deprecated `delay_cs_api_url` request parameter |
+
+**lk-jwt 0.6.0's built-in healthcheck is broken — keep it disabled.** The image's
+`/lk-jwt-service-healthcheck` helper builds its probe URL as
+`"http://localhost:" + LIVEKIT_JWT_BIND`. Our value — and upstream's own
+documented one — is `:8080`, which yields `http://localhost::8080/healthz` and
+fails permanently with `invalid port "::8080" after host`. Setting a bare `8080`
+satisfies the helper but the **server** then refuses to start
+(`listen tcp: address 8080: missing port in address`, container exits 1), so no
+single value satisfies both. Verified against the pinned digest on 2026-08-30.
+Left enabled it marks the container unhealthy, and `ci-deploy.sh`'s health gate
+then fails EVERY dev-staging converge — including unrelated element-web and
+synapse deploys. `/healthz` itself works and already existed in 0.5.0 (a 200
+with an empty body), so external probing loses nothing.
 
 Volumes: `matrix_data` (Synapse data), `proxy_data_*` (nginx/acme state).
 

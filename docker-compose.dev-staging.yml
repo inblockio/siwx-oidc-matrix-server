@@ -241,6 +241,20 @@ services:
       # to production's docker-compose.yml 2026-07-31 (matching prod's
       # server-local edit content-for-content) — no longer a gap there.
       LIVEKIT_FULL_ACCESS_HOMESERVERS: "${MATRIX_HOST}"
+    # lk-jwt 0.6.0 ships an image-level HEALTHCHECK that is unconditionally
+    # broken: /lk-jwt-service-healthcheck builds its URL as
+    # "http://localhost:" + LIVEKIT_JWT_BIND, so our (and upstream's own)
+    # canonical ":8080" produces "http://localhost::8080/healthz" ->
+    # `invalid port "::8080" after host`, failing forever. Setting a bare
+    # "8080" fixes the helper but makes the SERVER exit 1 with
+    # `listen tcp: address 8080: missing port in address` — mutually
+    # exclusive, verified against the pinned digest on 2026-08-30. Left
+    # enabled it marks the container unhealthy and ci-deploy.sh's health
+    # gate fails EVERY converge, wedging dev-staging CD. Disabling restores
+    # the 0.5.0 behaviour this service was always documented to have
+    # ("no healthcheck by design"); probe /healthz externally instead.
+    healthcheck:
+      disable: true
     depends_on:
       matrix_synapse:
         condition: service_healthy

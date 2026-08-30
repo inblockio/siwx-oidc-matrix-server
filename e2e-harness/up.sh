@@ -128,8 +128,15 @@ podman run -d --name siwx-e2eh-livekit --network "${NET}" --restart unless-stopp
 #    INSECURE_SKIP_VERIFY must be the EXACT magic string YES_I_KNOW_WHAT_I_AM_DOING
 #    ("true" is silently ignored), so lk-jwt accepts the self-signed cert the
 #    federation TLS shim (step 8b) presents on localhost:8448.
+#    --no-healthcheck: 0.6.0 ships an image-level HEALTHCHECK whose helper
+#    builds "http://localhost:" + LIVEKIT_JWT_BIND, so ":8080" yields
+#    "http://localhost::8080/healthz" and fails forever; a bare "8080" fixes
+#    the helper but makes the server exit 1 ("missing port in address").
+#    Mutually exclusive -> disable it (matches this service's long-standing
+#    "no healthcheck by design"); probe /healthz externally instead.
 echo "[up] starting siwx-e2eh-lk-jwt"
 podman run -d --name siwx-e2eh-lk-jwt --network "${NET}" --restart unless-stopped \
+  --no-healthcheck \
   -e LIVEKIT_URL="ws://siwx-e2eh-livekit:7880" \
   -e LIVEKIT_KEY="${LIVEKIT_KEY}" \
   -e LIVEKIT_SECRET="${LIVEKIT_SECRET}" \
