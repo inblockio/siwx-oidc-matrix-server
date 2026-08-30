@@ -17,7 +17,7 @@ ENV_FILE="${REPO_ROOT}/.env.e2e"
 NET="siwx-e2eh-net"
 
 # Same env-overridable digest pin as docker-compose.yml / docker-compose.e2e.yml.
-LK_JWT_IMAGE_REF="${LK_JWT_IMAGE_REF:-ghcr.io/element-hq/lk-jwt-service:0.5.0@sha256:29918567e6b7cd920e2853b4cd6848ce01b79947c3d19a9f1ed5b74f0a2a88bf}"
+LK_JWT_IMAGE_REF="${LK_JWT_IMAGE_REF:-ghcr.io/element-hq/lk-jwt-service:0.6.0@sha256:822f0c03a3bdd924da92afc2e8ec59de5dda17af42d32e71e11f269c3517abf7}"
 
 # Env-overridable image refs, same convention as LK_JWT_IMAGE_REF above. The
 # defaults are exactly what the harness has always run, so an unset environment

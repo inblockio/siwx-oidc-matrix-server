@@ -176,14 +176,14 @@ services:
     # only replaces the moving `latest` label, so a `compose pull` can no longer
     # change call behavior unannounced (which is how the hard
     # LIVEKIT_FULL_ACCESS_HOMESERVERS requirement below arrived unnoticed).
-    image: ${LK_JWT_IMAGE_REF:-ghcr.io/element-hq/lk-jwt-service:0.5.0@sha256:29918567e6b7cd920e2853b4cd6848ce01b79947c3d19a9f1ed5b74f0a2a88bf}
+    image: ${LK_JWT_IMAGE_REF:-ghcr.io/element-hq/lk-jwt-service:0.6.0@sha256:822f0c03a3bdd924da92afc2e8ec59de5dda17af42d32e71e11f269c3517abf7}
     restart: unless-stopped
     environment:
       # MUST stay the PUBLIC wss:// URL — do not "fix" it to http://livekit:7880.
-      # v0.5.0 uses LIVEKIT_URL for BOTH the client-facing SFU URL it hands out
-      # AND its own server-side RoomService (CreateRoom) client; there is no
-      # separate override for the latter (LIVEKIT_CS_API_URL_OVERRIDES on `main`
-      # is the Matrix CS-API, not LiveKit). So the CreateRoom call hairpins back
+      # Through v0.6.0 LIVEKIT_URL is used for BOTH the client-facing SFU URL it
+      # hands out AND its own server-side RoomService (CreateRoom) client; there
+      # is still no separate override for the latter (LIVEKIT_CS_API_URL_OVERRIDES
+      # is the Matrix C-S API, not LiveKit). So the CreateRoom call hairpins back
       # in through Caddy, which is why the /livekit/sfu/twirp/* block there is
       # scoped to non-private source IPs. Rationale + the live check this still
       # needs: T6/H5, docs/superpowers/plans/2026-08-01-av-hardening-config.md.

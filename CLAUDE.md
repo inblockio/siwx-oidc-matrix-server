@@ -53,7 +53,7 @@ siwx-oidc-matrix-server/
 | `letsencrypt`    | `nginxproxy/acme-companion`                | —             | Auto-provisions TLS for proxy |
 | `element-web`    | `./dockerfiles/Dockerfile.element` (Element Web) | 80 (internal) | SIWX auto-login client, served via proxy at `${CLIENT_HOST}` |
 | `livekit`        | `livekit/livekit-server:v1.13.6` (pinned, no `:latest`) | 7881/tcp, 20100-20200/udp | LiveKit SFU for MatrixRTC (Element Call). UDP range must stay below the ephemeral range and match `config/livekit.yaml` |
-| `lk-jwt-service` | `ghcr.io/element-hq/lk-jwt-service:0.5.0@sha256:2991856…` (pinned) | 8080 (internal) | Validates Matrix OpenID tokens, issues LiveKit JWTs. Requires `LIVEKIT_FULL_ACCESS_HOMESERVERS` (explicit hostname, never `*`) |
+| `lk-jwt-service` | `ghcr.io/element-hq/lk-jwt-service:0.6.0@sha256:822f0c03…` (pinned) | 8080 (internal) | Validates Matrix OpenID tokens, issues LiveKit JWTs. Requires `LIVEKIT_FULL_ACCESS_HOMESERVERS` (explicit hostname, never `*`). No healthcheck by design (distroless, no shell) — probe `/healthz` externally. Since 0.6.0 it resolves the C-S API via `.well-known` discovery, ignoring the deprecated `delay_cs_api_url` request parameter |
 
 Volumes: `matrix_data` (Synapse data), `proxy_data_*` (nginx/acme state).
 
