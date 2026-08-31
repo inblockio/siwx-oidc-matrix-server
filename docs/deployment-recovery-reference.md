@@ -247,9 +247,43 @@ docker inspect --format='{{.Image}}' matrix-siwx-oidc-1 \
 | Synapse signing keys | matrix_data volume | No | Federation identity changes; other servers reject |
 | OIDC signing key | .env file | No | All tokens invalidated; users must re-login |
 | MAS shared secret | .env file | No | Synapse cannot introspect tokens; regenerate in both |
-| Redis data | redis_data volume | No | Active sessions lost; users must re-login |
+| **Redis data** | redis_data volume | No | **Permanent account loss for passkey-only users, and silent identity forks for linked accounts.** See below; this is the worst entry in this table. |
 | LiveKit keys | .env file | No | Active calls drop; regenerate |
 | Caddy TLS certs | portal volumes | Auto-renewed | ACME re-issues within minutes |
+
+### Why Redis loss is worse than "users must re-login"
+
+This row used to read *"Active sessions lost; users must re-login."* That is
+true of only part of the keyspace and badly understates the rest. Of ~983 keys
+on prod, ~823 carry a TTL and are genuinely ephemeral (`token/*`, sessions,
+device mappings). Losing those does mean "log in again."
+
+The remaining ~160 keys have **no TTL and no other copy anywhere**:
+
+| Keyspace | Holds | Consequence of loss |
+|---|---|---|
+| `webauthn:credential/*` | passkey public key, credential ID, sign counter | A passkey-only user **cannot authenticate at all**. There is no reset flow, no email recovery, no password. The account is gone. |
+| `webauthn:link/*` | credential -> primary DID + label | See the identity-fork note below. |
+| `webauthn:by_did/*` | reverse index | Credential enumeration for a DID breaks. |
+
+The link table is the subtle one. `resolve_credential_identity()` looks up
+`webauthn:link/{cred}`; on a hit the user is the linked **primary DID** (their
+wallet), on a miss it falls back to the DID *derived from the passkey itself*.
+Those are two different Matrix users. So losing `webauthn:link/*` does not
+produce an error the user can see. It produces a **successful login as somebody
+else**: an empty account with the same passkey, no rooms, no history, and no
+signal that anything is wrong. Failing loudly would be far safer than this.
+
+**Consequence for backup design:** a whole-droplet snapshot is a poor fit for
+this data even though it technically contains it. Recovering one corrupted or
+deleted credential keyspace by rolling the entire droplet back also discards
+every message, room and account change since the snapshot. The remedy has to be
+restorable in isolation, or it will not be used.
+
+**Consequence for handling:** a Redis backup is a credential-bearing artifact.
+The `token/*` keyspace uses the raw bearer token AS THE KEY NAME, so a dump
+contains live credentials in plaintext. Keep such artifacts at `0600` under a
+`0700` directory, never in a git working tree, and never off-host unencrypted.
 
 ## Current prod reality (dated snapshot — 2026-07-31, post-S6)
 
