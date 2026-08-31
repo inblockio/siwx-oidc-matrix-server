@@ -4,6 +4,17 @@ Docker Compose deployment stack that runs a Synapse Matrix homeserver fronted by
 siwx-oidc (CAIP-122 OIDC provider) so agents and wallets can authenticate with
 EIP-191, Ed25519, or P-256 keys.
 
+> **Production state as of 2026-08-31** (this file predates it in places, see the
+> `v1.12.24` and MSC3861 sections below): prod runs **Synapse 1.159.0**, **Element
+> Web 1.12.26**, and **siwx-oidc `548b543`**. Synapse 1.157 removed
+> `experimental_features.msc3861`; prod has been migrated to the stable
+> `matrix_authentication_service` block, written on every boot by
+> `entrypoints/matrix_server.sh:apply_mas_config()`. **Prod deploys by editing an
+> image digest in `/home/deploy/matrix/stack/.env`, never by a git operation in
+> that directory** (four tracked files there are modified and uncommitted and carry
+> the live A/V hardening). Runbook, evidence and rollback:
+> `docs/superpowers/plans/2026-08-31-prod-cutover-siwx-oidc-0.7.0.md`.
+
 ## Build and deployment model
 
 **Images are built by GitHub Actions and published to GHCR. Do NOT build images
