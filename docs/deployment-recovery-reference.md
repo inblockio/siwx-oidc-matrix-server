@@ -259,6 +259,62 @@ docker inspect --format='{{.Image}}' "$SIWX_CID" \
   | xargs docker image inspect --format='{{join .RepoDigests ", "}}'
 ```
 
+## The prod edge (portal-caddy-1)
+
+`portal-caddy-1` terminates TLS for **eleven** hostnames on `agentic.inblock.io`,
+not just the Matrix ones: agentic, aqua-registry, audit, element, matrix,
+openwitness.org, projects, siwx-oidc, timestamps, turn.matrix and viewer. Any
+restart of it is an outage for all of them, so treat it as a scheduled change.
+
+It is a **hand-run container, not compose-managed** (it carries no
+`com.docker.compose.*` labels), created 2026-08-03. Its config, captured
+2026-09-01, is:
+
+```
+docker run -d --name portal-caddy-1 --restart unless-stopped \
+  --network portal-net -p 80:80 -p 443:443 \
+  -v /home/portal/portal/Caddyfile:/etc/caddy/Caddyfile \
+  -v /home/deploy/caddy/config:/config \
+  -v /home/deploy/caddy/data:/data \
+  --entrypoint "" <IMAGE> \
+  caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+```
+
+It carries no custom environment (all four vars are image defaults) and
+publishes only 80/tcp and 443/tcp. 443/udp is exposed but NOT published, so
+HTTP/3 is not served. 5349 is deliberately not published: TURN-TLS terminates
+here via the layer4 SNI split and reaches LiveKit over the proxy network.
+
+**2026-09-01: pinned to a digest.** It ran the moving tag `caddy-l4:dev`, which
+went stale the moment the `dev` branch was consolidated into `main`. It now runs
+`caddy-l4@sha256:3976e411...` (the `:main` build). Note that deleting the `dev`
+branch does NOT delete the `caddy-l4:dev` GHCR tag; the tag survives and simply
+stops being rebuilt. So this pin was hygiene, not an outage-forced fix.
+
+Gates used before the swap, and the ones to reuse next time:
+
+1. `caddy list-modules | grep ^layer4` against the NEW image must be non-empty.
+   caddy-l4 is a custom build; a stock caddy image silently lacks layer4 and the
+   TURN SNI split would fail with the Caddyfile still "valid".
+2. `caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile` run inside
+   the NEW image against the LIVE bind-mounted Caddyfile.
+3. Probe all eleven hostnames before and after and compare status codes. Do not
+   assert 200: audit/projects/viewer legitimately return 401, agentic 303,
+   matrix 302, timestamps 301. Compare before/after, do not assume a value.
+4. Confirm the layer4 path specifically:
+   `openssl s_client -connect turn.matrix.inblock.io:443 -servername turn.matrix.inblock.io`
+   must present `CN = turn.matrix.inblock.io` with verify code 0. A plain HTTP
+   probe cannot detect a broken SNI split.
+
+Rollback: the previous container is kept, stopped, as `portal-caddy-rollback`
+(image `caddy-l4@sha256:fcb829ec...`). To revert: `docker rm -f portal-caddy-1
+&& docker rename portal-caddy-rollback portal-caddy-1 && docker start
+portal-caddy-1`. Remove it once the new edge has soaked.
+
+Still open: converting this to a small compose file so the edge stops being an
+undeclared container. Deliberately not done during the 2026-09-01 window, to
+keep that change to a single variable.
+
 ## Data Loss Impact Assessment
 
 | Data | Location | Backed Up? | Impact if Lost |
