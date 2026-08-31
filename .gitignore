@@ -13,6 +13,21 @@
 /signing_key.pem
 /.env.real
 
+# Timestamped backups made before a config change. Operators routinely leave
+# these beside the file they copied, and an .env backup is a FULL PLAINTEXT COPY
+# of SIWEOIDC_SIGNING_KEY_PEM, MAS_SHARED_SECRET and the LiveKit key/secret.
+# Found on prod 2026-09-01: 21 such .env.bak* files sitting untracked and
+# unignored in the deployment checkout, one `git add -A` away from a push to
+# this public repo. The patterns are unanchored on purpose so they match in
+# every subdirectory, e.g. config/livekit.yaml.bak-20260803.
+.env.bak*
+.env*.bak
+.env*.bak.*
+*.bak-*
+*.bak.[0-9]*
+# Ad-hoc staging variants kept next to the real compose files during a rollout.
+/.staging-*
+
 # Generated e2e harness env (secrets: MAS secret, LiveKit key/secret, OIDC PEM)
 /.env.e2e
 
