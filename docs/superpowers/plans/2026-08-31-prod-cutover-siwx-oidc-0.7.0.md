@@ -55,6 +55,28 @@ operation, no Synapse change, no Redis change.
 > and breaks calls. Commit them to a branch separately, before or after, but not
 > as part of this window.
 
+> **Correction, 2026-09-01: the content is NOT at risk, only the deployment
+> is.** The warning above stands as an operational rule (a stray `git checkout`
+> still reverts prod's live config and breaks calls), but its stated reason was
+> wrong. Nothing in that working tree exists only there. Verified by blob
+> comparison against `origin/dev`:
+>
+> | file | prod content |
+> |---|---|
+> | `config/livekit.yaml` | byte-identical to `origin/dev` @ `60b037b` |
+> | `entrypoints/element_entrypoint.sh` | byte-identical to `origin/dev` @ `60b037b` |
+> | `docker-compose.yml` | byte-identical to `origin/dev` @ `448cfb4` |
+> | `config/element-config.json` | `origin/dev` tip minus the `branding` block |
+>
+> The original claim was measured against `main`, which is the wrong baseline:
+> **`dev` is the integration branch and is 86 commits ahead of `main`.** Prod is
+> checked out on `main` @ `f2114ce` and has been hand-patched forward toward
+> `dev`, so its tree reads as "modified" while actually being *behind* `dev`
+> (prod runs LiveKit v1.12.0 and lk-jwt 0.5.0; `dev` has moved to v1.13.6 and
+> 0.6.0). There is therefore nothing to rescue and no capture commit to write.
+> The real debt is the `main`/`dev` divergence plus prod tracking the wrong
+> branch, which is a separate piece of work.
+
 ---
 
 ## 2. Evidence the upgrade is safe (all verified 2026-08-31)
@@ -301,8 +323,17 @@ are byte-identical to `b6c8d63`, so the risk is low but untested.
    loss as "Active sessions lost; users must re-login". Redis also holds
    `webauthn:credential/*` and `webauthn:link/*`, so the true impact for a
    passkey-only user is **account loss** — they cannot re-login at all.
-5. **Commit the four uncommitted A/V-hardening files** so the prod working tree
-   stops being load-bearing.
+5. ~~**Commit the four uncommitted A/V-hardening files** so the prod working
+   tree stops being load-bearing.~~ **Closed 2026-09-01, no action needed: the
+   premise was false.** All four files are reproducible from `origin/dev` (see
+   the correction box in section 1). What replaced this item:
+   - `.gitignore` now ignores `.env.bak*` and friends. Prod's checkout held 21
+     plaintext copies of `SIWEOIDC_SIGNING_KEY_PEM` / `MAS_SHARED_SECRET`,
+     untracked *and* unignored, one `git add -A` from a push to a public repo.
+   - Those backups were moved out of the git tree to `/home/deploy/secrets/`.
+   - The **actual** debt this uncovered: `main` is 86 commits behind `dev`, and
+     prod's checkout tracks `main`. Until that is resolved, prod's tree will
+     keep looking dirty and any measurement taken against `main` will be wrong.
 6. **Synapse 1.159.** Now a free-standing decision rather than a prerequisite.
    1.157.2 is a security release (6 high-severity), so it is still worth doing.
 7. **siwx-oidc ignores SIGTERM** (full 10 s SIGKILL grace, in-flight requests
