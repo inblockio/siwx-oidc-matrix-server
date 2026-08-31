@@ -126,16 +126,40 @@ services:
   livekit:
     # Pinned: an unpinned :latest jumps SFU versions on any `docker compose pull`
     # (deploy.sh), which can change call behavior unannounced. Bump deliberately.
-    image: livekit/livekit-server:v1.12.0
+    image: livekit/livekit-server:v1.13.6
     restart: unless-stopped
     command: --config /etc/livekit.yaml
     environment:
       LIVEKIT_KEYS: "${LIVEKIT_KEY}: ${LIVEKIT_SECRET}"
     ports:
       - "7881:7881/tcp"
-      - "50100-50200:50100-50200/udp"
+      # Below the Linux ephemeral range (32768-60999) so these listeners cannot
+      # collide with the host's own ephemeral source ports. MUST match
+      # rtc.port_range_start/end in config/livekit.yaml exactly, and the host
+      # firewall must allow 20100:20200/udp before this is rolled out (T4,
+      # docs/superpowers/plans/2026-08-01-av-hardening-config.md).
+      - "20100-20200:20100-20200/udp"
+      # Embedded TURN (see docs/superpowers/plans/2026-08-03-turn-tls-edge-
+      # termination.md). UDP leg only: TURN-TLS terminates at the edge
+      # (caddy-l4 SNI split on 443 → plaintext TURN to container port 5349
+      # over the proxy network), so 5349 must NOT be host-published. ufw must
+      # allow 3478/udp.
+      - "3478:3478/udp"
     volumes:
       - ./config/livekit.yaml:/etc/livekit.yaml:ro
+    healthcheck:
+      # busybox wget (the image has no curl); GET / is LiveKit's unauthenticated
+      # liveness endpoint. It answers 406 until the node publishes its first
+      # stats tick, most of it the use_external_ip STUN lookup — hence
+      # start_period. Re-measured against livekit/livekit-server:v1.13.6 + this
+      # config on 2026-08-30: first response (406) at ~6s, 200 by ~17s, so the
+      # 30s start_period still covers it. (Was 8s on v1.12.0 — slower, same
+      # 406-then-200 semantics, still inside the window.)
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:7880/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     networks:
       - portal-net
       - default
@@ -146,23 +170,53 @@ services:
     # (verified 2026-07-31 via `docker inspect` on agentic.inblock.io;
     # dev-staging runs the SAME digest, so this default is safe for both
     # boxes' next `up -d`).
-    image: ${LK_JWT_IMAGE_REF:-ghcr.io/element-hq/lk-jwt-service:latest@sha256:29918567e6b7cd920e2853b4cd6848ce01b79947c3d19a9f1ed5b74f0a2a88bf}
+    # Tag is "0.5.0": GHCR drops the "v" of the v0.5.0 release (2026-06-03), and
+    # both `0.5.0` and `latest` resolved to the digest below when checked
+    # against the GHCR API on 2026-08-01. Same bytes as the previous pin — this
+    # only replaces the moving `latest` label, so a `compose pull` can no longer
+    # change call behavior unannounced (which is how the hard
+    # LIVEKIT_FULL_ACCESS_HOMESERVERS requirement below arrived unnoticed).
+    image: ${LK_JWT_IMAGE_REF:-ghcr.io/element-hq/lk-jwt-service:0.6.0@sha256:822f0c03a3bdd924da92afc2e8ec59de5dda17af42d32e71e11f269c3517abf7}
     restart: unless-stopped
     environment:
+      # MUST stay the PUBLIC wss:// URL — do not "fix" it to http://livekit:7880.
+      # Through v0.6.0 LIVEKIT_URL is used for BOTH the client-facing SFU URL it
+      # hands out AND its own server-side RoomService (CreateRoom) client; there
+      # is still no separate override for the latter (LIVEKIT_CS_API_URL_OVERRIDES
+      # is the Matrix C-S API, not LiveKit). So the CreateRoom call hairpins back
+      # in through Caddy, which is why the /livekit/sfu/twirp/* block there is
+      # scoped to non-private source IPs. Rationale + the live check this still
+      # needs: T6/H5, docs/superpowers/plans/2026-08-01-av-hardening-config.md.
       LIVEKIT_URL: "wss://${MATRIX_HOST}/livekit/sfu"
       LIVEKIT_KEY: "${LIVEKIT_KEY}"
       LIVEKIT_SECRET: "${LIVEKIT_SECRET}"
       LIVEKIT_JWT_BIND: ":8080"
       LIVEKIT_INSECURE_SKIP_VERIFY_TLS: "${LIVEKIT_INSECURE_SKIP_VERIFY_TLS:-false}"
-      # Required as of a recent lk-jwt-service release (was previously
-      # optional/absent) — the container now refuses to start without it,
-      # restart-looping with "LIVEKIT_FULL_ACCESS_HOMESERVERS environment
-      # variable must be set". Found 2026-07-30 on dev-staging; :latest is
-      # unpinned and had drifted. Grants full LiveKit room-creation access
-      # to our own homeserver only (element-hq/lk-jwt-service README).
+      # Mandatory since v0.5.0: without it the container exits at startup with
+      # "LIVEKIT_FULL_ACCESS_HOMESERVERS environment variable must be set"
+      # (reproduced against the pinned digest, 2026-08-01). Must stay an
+      # explicit hostname — "*" would grant LiveKit room-creation to users of
+      # ANY federated homeserver. Startup echoes the parsed value, so the
+      # deployed setting is checkable in the logs.
       LIVEKIT_FULL_ACCESS_HOMESERVERS: "${MATRIX_HOST}"
+    # lk-jwt 0.6.0 ships an image-level HEALTHCHECK that is unconditionally
+    # broken: /lk-jwt-service-healthcheck builds its URL as
+    # "http://localhost:" + LIVEKIT_JWT_BIND, so our (and upstream's own)
+    # canonical ":8080" produces "http://localhost::8080/healthz" ->
+    # `invalid port "::8080" after host`, failing forever. Setting a bare
+    # "8080" fixes the helper but makes the SERVER exit 1 with
+    # `listen tcp: address 8080: missing port in address` — mutually
+    # exclusive, verified against the pinned digest on 2026-08-30. Left
+    # enabled it marks the container unhealthy and ci-deploy.sh's health
+    # gate fails EVERY converge, wedging dev-staging CD. Disabling restores
+    # the 0.5.0 behaviour this service was always documented to have
+    # ("no healthcheck by design"); probe /healthz externally instead.
+    healthcheck:
+      disable: true
     depends_on:
       matrix_synapse:
+        condition: service_healthy
+      livekit:
         condition: service_healthy
     networks:
       - portal-net

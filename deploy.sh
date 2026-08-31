@@ -15,7 +15,8 @@ set -euo pipefail
 #
 # Prerequisites:
 #   - SSH access to deploy@agentic.inblock.io via ~/.ssh/id_ed25519
-#   - portal-caddy-1 running on the server with portal-net network
+#   - a Caddy container named portal-caddy* (default portal-caddy-1) running
+#     on the server with portal-net network
 #   - DNS records for matrix.inblock.io, siwx-oidc.inblock.io, element.inblock.io
 
 SERVER="deploy@agentic.inblock.io"
@@ -149,7 +150,13 @@ element.inblock.io {
 }
 EOF
   echo "Caddy entries added."
-  docker exec portal-caddy-1 caddy reload --config /etc/caddy/Caddyfile
+  # Docker renames a container on a name conflict by prefixing the colliding
+  # id, so a plain literal here can silently start missing the reload after
+  # a restart/recreate. This runs on prod, which cannot be verified from a
+  # dev checkout, so resolve by name filter and fall back to the literal
+  # rather than risk breaking a working deploy on an unverified rename.
+  CADDY_CID="$(docker ps -q --filter name=portal-caddy 2>/dev/null | head -1)"
+  docker exec "${CADDY_CID:-portal-caddy-1}" caddy reload --config /etc/caddy/Caddyfile
   echo "Caddy reloaded."
 fi
 CADDYFILE_SCRIPT

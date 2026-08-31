@@ -60,8 +60,11 @@ list**.
 particular never run it there with an explicit `-f docker-compose-dev.yml`:
 that drops the override and resurrects the duplicate proxy pair. The
 `deployment` project is already running (`docker compose ls`); leave it alone.
-If that app ever needs a restart, restart the *container*
-(`docker restart deployment-aqua-container-1`), not the compose project.
+If that app ever needs a restart, restart the *container*, not the compose
+project — resolve it by name filter first, since Docker renames a container
+on a name conflict and the compose-generated literal is not stable:
+`CID=$(docker ps -q --filter name=deployment-aqua-container | head -1);
+docker restart "${CID:-deployment-aqua-container-1}"`.
 
 ### Landmine 3 (design): the proxy must not live in an app's compose project
 
@@ -238,6 +241,15 @@ H1 de-risk — it exercises exactly the DNS names and ports the Caddyfile uses,
 from a container on the same network Caddy will join, with zero disruption:
 
 ```bash
+# Docker renames a container on a name conflict, and its embedded DNS answers
+# to the CURRENT name only — so confirm deployment-aqua-container-1 is still
+# the live name (and matches what Caddyfile.dev-aquafire's reverse_proxy
+# upstreams reference) before trusting a NO_RESPONSE below as a real finding:
+AQUA_CID="$(docker ps -q --filter name=deployment-aqua-container | head -1)"
+if [ -n "$AQUA_CID" ] && [ "$(docker inspect --format='{{.Name}}' "$AQUA_CID" | sed 's#^/##')" != "deployment-aqua-container-1" ]; then
+  echo "WARNING: deployment-aqua-container-1 has been renamed — update the probe below and Caddyfile.dev-aquafire"
+fi
+
 docker run --rm --network proxy_net alpine:latest sh -c '
 for t in deployment-aqua-container-1:3600 deployment-aqua-container-1:3000 \
          aqua-explorer:80 aquafier-rs:3000 excalidraw:80; do
@@ -272,9 +284,14 @@ does not have to touch the firewall during a stack bring-up. Touch nothing else.
 
 ```bash
 sudo ufw allow 7881/tcp comment 'livekit sfu'
-sudo ufw allow 50100:50200/udp comment 'livekit media'
+sudo ufw allow 20100:20200/udp comment 'livekit media'
 sudo ufw status verbose
 ```
+
+The media range moved from 50100-50200 to 20100-20200 on 2026-08-01 (below the
+Linux ephemeral range; see the av-hardening plan, T4). A box provisioned before
+that has the old rule: add the new one BEFORE converging the stack, then
+`sudo ufw delete allow 50100:50200/udp` once calls are verified on the new range.
 
 No `8448` rule is needed — federation uses `.well-known` delegation to 443.
 
@@ -968,9 +985,12 @@ existing containers are untouched until the pull succeeds.
 
 ```bash
 # Baseline BEFORE triggering the run — capture the currently-running
-# siwx-oidc image digest on the box:
+# siwx-oidc image digest on the box. Resolve the container by compose
+# service, not by the compose-generated name literal (Docker renames on a
+# name conflict, and the live container is now fa538faf65ed_matrix-staging-…):
 ssh -p 8022 -i ~/.ssh/id_inblock_deploy dev@207.154.209.103 \
-  "docker inspect --format='{{.Image}}' matrix-staging-siwx-oidc-1 \
+  "SIWX_CID=\$(docker compose -p matrix-staging -f /home/dev/matrix-staging/docker-compose.dev-staging.yml ps -q siwx-oidc); \
+   docker inspect --format='{{.Image}}' \$SIWX_CID \
      | xargs docker image inspect --format='{{join .RepoDigests \", \"}}'"
 
 # Trigger (step 3 above), wait for the run to finish green.
@@ -981,7 +1001,8 @@ ssh -p 8022 -i ~/.ssh/id_inblock_deploy dev@207.154.209.103 \
 # digest changes on essentially every dispatched run even without a new
 # commit, since the image layers/labels are freshly built).
 ssh -p 8022 -i ~/.ssh/id_inblock_deploy dev@207.154.209.103 \
-  "docker inspect --format='{{.Image}}' matrix-staging-siwx-oidc-1 \
+  "SIWX_CID=\$(docker compose -p matrix-staging -f /home/dev/matrix-staging/docker-compose.dev-staging.yml ps -q siwx-oidc); \
+   docker inspect --format='{{.Image}}' \$SIWX_CID \
      | xargs docker image inspect --format='{{join .RepoDigests \", \"}}'"
 
 # Cross-check against what GHCR actually published (from the Actions log

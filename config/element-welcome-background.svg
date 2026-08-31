@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice">
+  <!--
+    inblock.io welcome-page background (branding.welcome_background_url).
+    Palette matches the "inblock.io Dark" theme in element-config.json:
+    base #0f0f13..#1a1a20, accent #E8611A/#EF5402. Kept dim so the Glass
+    modal and white text on the welcome/login pages stay readable.
+  -->
+  <defs>
+    <linearGradient id="base" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#17171d"/>
+      <stop offset="0.55" stop-color="#101015"/>
+      <stop offset="1" stop-color="#0b0b0f"/>
+    </linearGradient>
+    <radialGradient id="glowA" cx="0.80" cy="0.12" r="0.65">
+      <stop offset="0" stop-color="#E8611A" stop-opacity="0.38"/>
+      <stop offset="0.35" stop-color="#E8611A" stop-opacity="0.10"/>
+      <stop offset="0.7" stop-color="#E8611A" stop-opacity="0.02"/>
+      <stop offset="1" stop-color="#E8611A" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowB" cx="0.08" cy="0.95" r="0.55">
+      <stop offset="0" stop-color="#EF5402" stop-opacity="0.20"/>
+      <stop offset="0.4" stop-color="#EF5402" stop-opacity="0.05"/>
+      <stop offset="1" stop-color="#EF5402" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1920" height="1080" fill="url(#base)"/>
+  <rect width="1920" height="1080" fill="url(#glowA)"/>
+  <rect width="1920" height="1080" fill="url(#glowB)"/>
+
+  <!-- Angular "origami fold" facets echoing the bird logo, near-subliminal. -->
+  <g fill="#E8611A">
+    <polygon points="1920,0 1920,360 1500,0" fill-opacity="0.09"/>
+    <polygon points="1920,360 1500,0 1220,0" fill-opacity="0.04"/>
+    <polygon points="0,1080 520,1080 0,760" fill-opacity="0.07"/>
+    <polygon points="0,760 520,1080 860,1080" fill-opacity="0.03"/>
+  </g>
+  <g stroke="#ffffff" fill="none" stroke-width="2">
+    <path d="M1220 0 L1920 360" stroke-opacity="0.05"/>
+    <path d="M0 760 L860 1080" stroke-opacity="0.05"/>
+    <path d="M1920 620 L1180 1080" stroke-opacity="0.03"/>
+    <path d="M340 0 L0 300" stroke-opacity="0.03"/>
+  </g>
+</svg>

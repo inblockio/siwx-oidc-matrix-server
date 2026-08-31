@@ -16,6 +16,32 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${REPO_ROOT}/.env.e2e"
 NET="siwx-e2eh-net"
 
+# Same env-overridable digest pin as docker-compose.yml / docker-compose.e2e.yml.
+LK_JWT_IMAGE_REF="${LK_JWT_IMAGE_REF:-ghcr.io/element-hq/lk-jwt-service:0.6.0@sha256:822f0c03a3bdd924da92afc2e8ec59de5dda17af42d32e71e11f269c3517abf7}"
+
+# Env-overridable image refs, same convention as LK_JWT_IMAGE_REF above. The
+# defaults are exactly what the harness has always run, so an unset environment
+# behaves identically. Overriding lets a version-bump branch validate a candidate
+# image WITHOUT clobbering the shared localhost/* tags the siwx-real-* stack uses:
+#   SYNAPSE_IMAGE_REF=localhost/siwx-real-synapse:mas e2e-harness/up.sh
+SYNAPSE_IMAGE_REF="${SYNAPSE_IMAGE_REF:-localhost/siwx-real-synapse:local}"
+# ---------------------------------------------------------------------------
+# 2026-08-30: this default WAS `localhost/siwx-oidc:local-grace`, a hand-built
+# tag named after the long-finished refresh-token-grace work. By the time it was
+# found it was FIVE WEEKS OLD (built 2026-07-25), so every "green" harness run
+# in between had validated a five-week-old siwx-oidc binary while claiming to
+# exercise current code — including runs used to judge the Task 2 admin-token
+# mint and the Task 3 synapse_client port, neither of which was in that image.
+#
+# This is the SAME defect class as the stale OIDC_E2EH_DIR default and the
+# missing zero-tests guard: the harness testing something other than what it
+# says it tests. Fixing the default alone would just rot again, so run.sh now
+# ASSERTS that the image is not older than the siwx-oidc commit under test.
+# Rebuild with:  podman build -t localhost/siwx-oidc:e2eh-$(git rev-parse --short HEAD) .
+# ---------------------------------------------------------------------------
+SIWX_OIDC_IMAGE_REF="${SIWX_OIDC_IMAGE_REF:-localhost/siwx-oidc:e2eh-5f47a9b}"
+LIVEKIT_IMAGE_REF="${LIVEKIT_IMAGE_REF:-livekit/livekit-server:v1.13.6}"
+
 FRESH=0
 [ "${1:-}" = "--fresh" ] && FRESH=1
 
@@ -61,7 +87,7 @@ podman run -d --name siwx-e2eh-redis --network "${NET}" --restart unless-stopped
   --health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5 \
   docker.io/library/redis:7-alpine redis-server --appendonly yes >/dev/null
 
-# 5. siwx-oidc (reuse localhost/siwx-oidc:local-grace; listens on 8081 internally)
+# 5. siwx-oidc (SIWX_OIDC_IMAGE_REF; listens on 8081 internally)
 echo "[up] starting siwx-e2eh-oidc"
 podman run -d --name siwx-e2eh-oidc --network "${NET}" --restart unless-stopped \
   -e SIWEOIDC_ADDRESS=0.0.0.0 \
@@ -77,9 +103,9 @@ podman run -d --name siwx-e2eh-oidc --network "${NET}" --restart unless-stopped 
   -e RUST_LOG="${RUST_LOG}" \
   --health-cmd "wget --no-verbose --tries=1 --spider http://127.0.0.1:8081/.well-known/openid-configuration" \
   --health-interval 10s --health-timeout 5s --health-retries 5 --health-start-period 10s \
-  localhost/siwx-oidc:local-grace >/dev/null
+  "${SIWX_OIDC_IMAGE_REF}" >/dev/null
 
-# 6. synapse (reuse localhost/siwx-real-synapse:local; internal 8008, published 18448)
+# 6. synapse (SYNAPSE_IMAGE_REF; internal 8008, published 18448)
 #    First boot generates homeserver.yaml from the env contract in synapse_entrypoint.sh.
 echo "[up] starting siwx-e2eh-synapse (host ${SYNAPSE_HOST_PORT} -> 8008)"
 podman run -d --name siwx-e2eh-synapse --network "${NET}" --restart unless-stopped \
@@ -95,7 +121,7 @@ podman run -d --name siwx-e2eh-synapse --network "${NET}" --restart unless-stopp
   -v siwx-e2eh-matrix-data:/data \
   --health-cmd "curl -fSs http://localhost:8008/health || exit 1" \
   --health-interval 15s --health-timeout 5s --health-retries 5 --health-start-period 30s \
-  localhost/siwx-real-synapse:local >/dev/null
+  "${SYNAPSE_IMAGE_REF}" >/dev/null
 
 # 7. livekit (publish 7880 for the AV check + 7881/tcp + 20100-20200 (below the ephemeral range)/udp)
 echo "[up] starting siwx-e2eh-livekit"
@@ -105,21 +131,33 @@ podman run -d --name siwx-e2eh-livekit --network "${NET}" --restart unless-stopp
   -p "${LIVEKIT_RTC_UDP_START}-${LIVEKIT_RTC_UDP_END}:${LIVEKIT_RTC_UDP_START}-${LIVEKIT_RTC_UDP_END}/udp" \
   -e LIVEKIT_KEYS="${LIVEKIT_KEY}: ${LIVEKIT_SECRET}" \
   -v "${REPO_ROOT}/config/livekit.e2e.yaml:/etc/livekit.yaml:ro" \
-  livekit/livekit-server:v1.12.0 --config /etc/livekit.yaml >/dev/null
+  "${LIVEKIT_IMAGE_REF}" --config /etc/livekit.yaml >/dev/null
 
 # 8. lk-jwt-service (internal :8080; reached via caddy /livekit/jwt)
+#    Digest-pinned to the SAME ref production runs (docker-compose.yml), so the
+#    harness exercises the pinned binary rather than the moving `latest` label.
+#    LIVEKIT_FULL_ACCESS_HOMESERVERS is the harness's own server name, not "*":
+#    v0.5.0 refuses to boot without it, and an explicit host exercises the same
+#    allowlist parsing prod uses (startup echoes the parsed value).
 #    INSECURE_SKIP_VERIFY must be the EXACT magic string YES_I_KNOW_WHAT_I_AM_DOING
 #    ("true" is silently ignored), so lk-jwt accepts the self-signed cert the
 #    federation TLS shim (step 8b) presents on localhost:8448.
+#    --no-healthcheck: 0.6.0 ships an image-level HEALTHCHECK whose helper
+#    builds "http://localhost:" + LIVEKIT_JWT_BIND, so ":8080" yields
+#    "http://localhost::8080/healthz" and fails forever; a bare "8080" fixes
+#    the helper but makes the server exit 1 ("missing port in address").
+#    Mutually exclusive -> disable it (matches this service's long-standing
+#    "no healthcheck by design"); probe /healthz externally instead.
 echo "[up] starting siwx-e2eh-lk-jwt"
 podman run -d --name siwx-e2eh-lk-jwt --network "${NET}" --restart unless-stopped \
+  --no-healthcheck \
   -e LIVEKIT_URL="ws://siwx-e2eh-livekit:7880" \
   -e LIVEKIT_KEY="${LIVEKIT_KEY}" \
   -e LIVEKIT_SECRET="${LIVEKIT_SECRET}" \
   -e LIVEKIT_JWT_BIND=":8080" \
-  -e LIVEKIT_FULL_ACCESS_HOMESERVERS="*" \
+  -e LIVEKIT_FULL_ACCESS_HOMESERVERS="${MATRIX_SERVER_NAME}" \
   -e LIVEKIT_INSECURE_SKIP_VERIFY_TLS="YES_I_KNOW_WHAT_I_AM_DOING" \
-  ghcr.io/element-hq/lk-jwt-service:latest >/dev/null
+  "${LK_JWT_IMAGE_REF}" >/dev/null
 
 # 8b. Federation TLS shim — runs IN siwx-e2eh-lk-jwt's network namespace so its
 #     localhost:8448 IS the loopback lk-jwt dials when resolving the "localhost"

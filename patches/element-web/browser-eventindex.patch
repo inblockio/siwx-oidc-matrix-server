@@ -1,5 +1,5 @@
 diff --git a/apps/web/src/components/views/rooms/RoomSearchAuxPanel.tsx b/apps/web/src/components/views/rooms/RoomSearchAuxPanel.tsx
-index 14c7ad5..8e89da7 100644
+index b2a7119..cb40f8a 100644
 --- a/apps/web/src/components/views/rooms/RoomSearchAuxPanel.tsx
 +++ b/apps/web/src/components/views/rooms/RoomSearchAuxPanel.tsx
 @@ -16,6 +16,7 @@ import { PosthogScreenTracker } from "../../../PosthogTrackers";
@@ -19,10 +19,10 @@ index 14c7ad5..8e89da7 100644
  
      return (
          <>
-@@ -46,6 +49,9 @@ const RoomSearchAuxPanel: React.FC<Props> = ({ searchInfo, isRoomEncrypted, onSe
-                             <InlineSpinner />
-                         )}
-                         <SearchWarning kind={WarningKind.Search} isRoomEncrypted={isRoomEncrypted} showLogo={false} />
+@@ -52,6 +55,9 @@ const RoomSearchAuxPanel: React.FC<Props> = ({ searchInfo, isRoomEncrypted, onSe
+                             scope={scope}
+                             roomId={searchInfo?.roomId}
+                         />
 +                        {stillIndexing ? (
 +                            <div className="mx_RoomSearchAuxPanel_indexing">{_t("room|search|still_indexing")}</div>
 +                        ) : null}
@@ -30,10 +30,10 @@ index 14c7ad5..8e89da7 100644
                  </div>
                  <div className="mx_RoomSearchAuxPanel_buttons">
 diff --git a/apps/web/src/i18n/strings/en_EN.json b/apps/web/src/i18n/strings/en_EN.json
-index c5740df..d6c2e2e 100644
+index e89b35d..a99f4bf 100644
 --- a/apps/web/src/i18n/strings/en_EN.json
 +++ b/apps/web/src/i18n/strings/en_EN.json
-@@ -2104,7 +2104,8 @@
+@@ -2086,7 +2086,8 @@
                  "one": "1 result found for “<query/>”",
                  "other": "%(count)s results found for “<query/>”"
              },
@@ -1377,7 +1377,7 @@ index 0000000..f9ddb1a
 +
 +export default BrowserEventIndexManager;
 diff --git a/apps/web/src/vector/platform/WebPlatform.ts b/apps/web/src/vector/platform/WebPlatform.ts
-index 88aa7ee..6e4b490 100644
+index a546ad5..db0c459 100644
 --- a/apps/web/src/vector/platform/WebPlatform.ts
 +++ b/apps/web/src/vector/platform/WebPlatform.ts
 @@ -12,6 +12,8 @@ import { logger } from "matrix-js-sdk/src/logger";
@@ -1389,15 +1389,15 @@ index 88aa7ee..6e4b490 100644
  import dis from "../../dispatcher/dispatcher";
  import { hideToast as hideUpdateToast, showToast as showUpdateToast } from "../../toasts/UpdateToast";
  import { Action } from "../../dispatcher/actions";
-@@ -37,6 +39,7 @@ function getNormalizedAppVersion(version: string): string {
- export default class WebPlatform extends BasePlatform {
+@@ -38,6 +40,7 @@ export default class WebPlatform extends BasePlatform {
+     // oxlint-disable-next-line node/no-process-env
      private static readonly VERSION = process.env.VERSION!; // baked in by Webpack
      private readonly registerServiceWorkerPromise: Promise<void>;
 +    private eventIndexManager: BrowserEventIndexManager | null = null;
  
      public constructor() {
          super();
-@@ -268,6 +271,12 @@ export default class WebPlatform extends BasePlatform {
+@@ -269,6 +272,12 @@ export default class WebPlatform extends BasePlatform {
          window.location.reload();
      }
  

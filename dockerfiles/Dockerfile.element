@@ -14,7 +14,7 @@
 # ---------------------------------------------------------------------------
 FROM node:24-bullseye AS builder
 
-ARG ELEMENT_WEB_TAG=v1.12.24
+ARG ELEMENT_WEB_TAG=v1.12.26
 
 WORKDIR /src
 
@@ -23,10 +23,36 @@ WORKDIR /src
 RUN git clone --depth 1 --branch "${ELEMENT_WEB_TAG}" \
       https://github.com/element-hq/element-web.git /src
 
-# Apply our vendored patch. Fail the build loudly if it does not apply cleanly,
-# so a tag bump that breaks the patch is caught here, not at runtime.
+# Apply our vendored patches. Fail the build loudly if any does not apply
+# cleanly, so a tag bump that breaks one is caught here, not at runtime. They are
+# separate files, and applied separately, so the failure names the guilty patch.
+#
+#  - force-first-device-recovery: OUR policy (a recovery key is mandatory).
+#  - setup-encryption-busy-wedge:  an UPSTREAM Element 1.12.20 defect, carried
+#    here only until it is fixed upstream. Drop this one on a tag bump that
+#    already contains the fix rather than forward-porting it by reflex.
+#  - honest-qr-disabled-reason:    UPSTREAM honesty defect. "Show QR code" blames
+#    the account provider for a block that is actually this session's own crypto
+#    state. Ours does support MSC4108 device link, so the message is simply false.
+#  - offer-verify-current-session: UPSTREAM dead end. An unverified session was
+#    shown a card that offered no action and no reason, leaving the DESTRUCTIVE
+#    identity reset as the only visible exit.
+#  - browser-eventindex:           OUR policy (staging). Implements the stock
+#    EventIndex hook so E2EE search works in hosted Element Web. Gated off on
+#    the production hostname.
+#
+# Order matters only for en_EN.json, which five of them touch in different
+# places; applied in this order every hunk lands (verified against a pristine
+# v1.12.26 tree, 2026-08-30). Registry with why/evidence/retirement per patch:
+# patches/element-web/README.md — no patch ships without an entry there.
 COPY patches/element-web/force-first-device-recovery.patch /tmp/ew.patch
 RUN git apply --verbose /tmp/ew.patch
+COPY patches/element-web/setup-encryption-busy-wedge.patch /tmp/ew-busy.patch
+RUN git apply --verbose /tmp/ew-busy.patch
+COPY patches/element-web/honest-qr-disabled-reason.patch /tmp/ew-qr-reason.patch
+RUN git apply --verbose /tmp/ew-qr-reason.patch
+COPY patches/element-web/offer-verify-current-session.patch /tmp/ew-verify-offer.patch
+RUN git apply --verbose /tmp/ew-verify-offer.patch
 
 # QR-link check-code UX (2026-08-01): auto-approve once both MSC4108 check-code
 # digits are typed (the deliberate read+type is the security property, the extra
@@ -35,10 +61,10 @@ RUN git apply --verbose /tmp/ew.patch
 COPY patches/element-web/auto-approve-check-code.patch /tmp/ew-checkcode.patch
 RUN git apply --verbose /tmp/ew-checkcode.patch
 
-# Encrypted-room search. Implements BaseEventIndexManager so hosted Element
-# Web can search E2EE rooms. Enabled on prod via
-# features.feature_inblock_encrypted_search (bind-mounted config). Independent
-# of the other patches. See docs/audits/2026-08-14-encrypted-search-eventindex-audit.md.
+# Encrypted-room search for hosted Element Web (dev-staging only). Implements
+# BaseEventIndexManager so supportsEventIndexing() is true on
+# dev.element.inblock.io. Independent of the other patches (new files +
+# WebPlatform.ts). See patches/element-web/README.md.
 COPY patches/element-web/browser-eventindex.patch /tmp/ew-eventindex.patch
 RUN git apply --verbose /tmp/ew-eventindex.patch
 
@@ -93,6 +119,7 @@ COPY config/element-nginx-security-headers.inc /etc/nginx/conf.d/element-securit
 COPY config/element-config.json /app/config.json
 COPY config/element-theme-overrides.css /app/element-theme-overrides.css
 COPY config/inblockio_logo_dark.png /app/inblockio_logo_dark.png
+COPY config/element-welcome-background.svg /app/welcome-background.svg
 COPY config/favicon.ico /app/favicon.ico
 COPY config/favicon-24.png /app/favicon-24.png
 COPY config/favicon-120.png /app/favicon-120.png

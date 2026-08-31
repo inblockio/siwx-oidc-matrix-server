@@ -157,13 +157,17 @@ to a token pin. Nord is exempt (it owns its palette).
 3. **Version-bump tripwire (run in CI after a tag bump):** confirm the dot token
    and green value have not moved under a new Element/Compound version:
    ```bash
+   # Resolve the running container by compose project+service labels, not by
+   # the compose-generated name literal — Docker renames on a name conflict.
+   EW_CID="$(docker ps -q --filter label=com.docker.compose.project=matrix \
+     --filter label=com.docker.compose.service=element-web | head -1)"
    # member-list dot: must still read icon-accent-primary
-   docker exec matrix-element-web-1 sh -c \
+   docker exec "${EW_CID:-matrix-element-web-1}" sh -c \
      'grep -rhoE "\.mx_PresenceIconView_online[^{]*\{[^}]*\}" /app/bundles/*/*.css | sort -u'
    # room-header dot: must still be the $accent ::before our override repaints
-   docker exec matrix-element-web-1 sh -c \
+   docker exec "${EW_CID:-matrix-element-web-1}" sh -c \
      'grep -rhoE "\.mx_WithPresenceIndicator_icon_online[^{]*\{[^}]*\}" /app/bundles/*/*.css | sort -u'
-   docker exec matrix-element-web-1 sh -c \
+   docker exec "${EW_CID:-matrix-element-web-1}" sh -c \
      'grep -rhoE "\-\-cpd-color-(icon-accent-primary|green-900):[^;}]*" /app/bundles/*/*.css | sort -u'
    ```
    Expect the member-list dot to read `icon-accent-primary` (green `green-900`),

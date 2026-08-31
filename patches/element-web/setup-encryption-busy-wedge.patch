@@ -1,0 +1,64 @@
+diff --git a/apps/web/src/stores/SetupEncryptionStore.ts b/apps/web/src/stores/SetupEncryptionStore.ts
+index 9e324b6..866009f 100644
+--- a/apps/web/src/stores/SetupEncryptionStore.ts
++++ b/apps/web/src/stores/SetupEncryptionStore.ts
+@@ -161,6 +161,14 @@ export class SetupEncryptionStore extends EventEmitter {
+                 logger.debug("SetupEncryptionStore.usePassphrase: done");
+                 this.phase = Phase.Done;
+                 this.emit("update");
++            } else {
++                // Same single-sample race as onVerificationRequestChange, and originally with
++                // no `else` at all: a falsy read left `phase` on the Phase.Busy set at the top
++                // of this method with nothing scheduled to revisit it. That is the R5/R6 dead
++                // end - a user on their only device types the CORRECT recovery phrase, 4S
++                // unlocks, and they still never reach the app.
++                logger.debug("SetupEncryptionStore.usePassphrase: cross-signing not ready yet; polling");
++                void this.awaitCrossSigningReady();
+             }
+         } catch (e) {
+             if (e instanceof AccessCancelledError) {
+@@ -201,7 +209,44 @@ export class SetupEncryptionStore extends EventEmitter {
+             const publicKeysTrusted = await MatrixClientPeg.safeGet().getCrypto()?.getCrossSigningKeyId();
+             this.phase = publicKeysTrusted ? Phase.Done : Phase.Busy;
+             this.emit("update");
++            if (!publicKeysTrusted) {
++                // Phase.Busy here is a bet that `onUserTrustStatusChanged` will fire and finish
++                // the transition. When it does not, the store stays Busy forever and
++                // COMPLETE_SECURITY renders a "Verify this device" screen with NO BUTTONS - a
++                // dead end whose only escape is a page reload, even though the device is
++                // already fully verified. Measured 2026-07-26 after a SUCCESSFUL SAS: phase=2,
++                // crossSigningReady=true, ownDeviceStatus.crossSigningVerified=true, all
++                // private keys cached. The verification worked; only the UI was stuck.
++                void this.awaitCrossSigningReady();
++            }
++        }
++    };
++
++    /**
++     * Bounded poll for cross-signing readiness after a completed verification or 4S unlock.
++     *
++     * Both call sites sample `getCrossSigningKeyId()` exactly once, at the instant their
++     * operation reports success, and that sample races the identity refresh which follows it.
++     * Losing the race leaves `Phase.Busy` with nothing scheduled to revisit it.
++     *
++     * Deliberately a poll rather than another event listener: the failure being recovered from
++     * IS a missing event, so subscribing again would inherit the same failure mode.
++     */
++    private awaitCrossSigningReady = async (): Promise<void> => {
++        for (let i = 0; i < 20; i++) {
++            await new Promise((resolve) => setTimeout(resolve, 500));
++            // Something else finished the job, or we were stopped - never fight it.
++            if (!this.started || this.phase !== Phase.Busy) return;
++            const keyId = await MatrixClientPeg.safeGet().getCrypto()?.getCrossSigningKeyId();
++            if (keyId) {
++                this.phase = Phase.Done;
++                this.emit("update");
++                return;
++            }
+         }
++        // Still not ready after ~10s. Leave the phase alone: Busy is the honest state, and
++        // silently forcing Done would claim a verification we cannot confirm.
++        logger.warn("SetupEncryptionStore: cross-signing not ready 10s after verification completed");
+     };
+ 
+     public skip(): void {

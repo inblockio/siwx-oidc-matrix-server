@@ -14,6 +14,15 @@ rtc:
   port_range_start: 20100
   port_range_end: 20200
   use_external_ip: false
+  # No rtc.ips.excludes here — deliberate asymmetry vs config/livekit.yaml.
+  # Production/dev exclude the shared reverse-proxy subnet (172.18.0.0/16)
+  # from ICE candidates because those boxes are multi-homed (compose-default
+  # net + proxy net) and STUN picks up the wrong interface. This hermetic
+  # harness is single-network (podman network `siwx-e2eh-net`, currently
+  # 10.89.1.0/24 — NOT 172.18.0.0/16, checked live 2026-08-02) and
+  # use_external_ip is already false above, so STUN never runs and there is
+  # no private candidate to exclude: harness clients connect over the private
+  # bridge on purpose and NEED those candidates to reach the SFU.
 room:
   auto_create: true
 logging:

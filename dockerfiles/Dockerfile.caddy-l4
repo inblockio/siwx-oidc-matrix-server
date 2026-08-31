@@ -1,0 +1,37 @@
+# Caddy + caddy-l4 (layer4), custom-built via xcaddy.
+#
+# PURPOSE: TURN-TLS SNI split on :443. Stock Caddy has no way to inspect the
+# raw TLS ClientHello SNI before termination, so a bare Caddy on this box
+# cannot divert only the TURN hostname (dev.turn.matrix.inblock.io /
+# turn.matrix.inblock.io) to LiveKit's plaintext external_tls listener while
+# leaving every other :443 vhost untouched. caddy-l4's `layer4` Caddyfile
+# app + `listener_wrappers` adds that SNI-based demux ahead of the `tls`
+# wrapper. See docs/superpowers/plans/2026-08-03-turn-tls-edge-termination.md
+# for the full design (Caddyfile.dev-aquafire carries the actual
+# `servers :443 { listener_wrappers { layer4 { ... } tls } }` block that
+# consumes this image).
+#
+# VERSION-LOCK RATIONALE (verified 2026-08-03 against upstream):
+#   caddy-l4 v0.1.2's go.mod pins `github.com/caddyserver/caddy/v2 v2.11.4`
+#   EXACTLY (not >=, not a range) — https://github.com/mholt/caddy-l4/blob/
+#   v0.1.2/go.mod. xcaddy statically links whatever `caddy` module version is
+#   resolved at build time, so the builder base image's Caddy version and the
+#   plugin's pinned Caddy version must match, or `xcaddy build` either fails
+#   to resolve or silently pulls in a second, inconsistent copy of caddy/v2.
+#   `caddy:2.11.4-builder` is therefore not an arbitrary "latest stable" pick;
+#   it is the specific tag that satisfies caddy-l4 v0.1.2's exact pin.
+#
+# BUMP WARNING: if you bump either version, you MUST re-check the pin
+# pairing first (read the target caddy-l4 tag's go.mod for its
+# `caddyserver/caddy/v2` requirement) and update BOTH the builder tag below
+# and the final-stage tag to match. Bumping just one, or bumping to a caddy-l4
+# tag whose go.mod requires a different Caddy version than the builder ships,
+# reintroduces the exact skew this pin exists to prevent.
+
+# ---- build stage ----
+FROM caddy:2.11.4-builder AS builder
+RUN xcaddy build \
+    --with github.com/mholt/caddy-l4@v0.1.2
+# ---- final stage ----
+FROM caddy:2.11.4
+COPY --from=builder /usr/bin/caddy /usr/bin/caddy

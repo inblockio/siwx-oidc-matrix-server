@@ -1,54 +1,71 @@
-(strip_upstream_cors) {
-    header_down -Access-Control-Allow-Origin
-    header_down -Access-Control-Allow-Methods
-    header_down -Access-Control-Allow-Headers
-    header_down -Access-Control-Allow-Credentials
-    header_down -Access-Control-Expose-Headers
-    header_down -Access-Control-Max-Age
-    header_down -Vary
+{
+    # TURN-over-TLS SNI split (2026-08-03 prod promotion; see repo
+    # docs/superpowers/plans/2026-08-03-turn-tls-edge-termination.md).
+    # layer4 must precede tls: it reads the raw ClientHello SNI. Only the
+    # TURN hostname is diverted; all other 443 traffic is untouched.
+    servers :443 {
+        listener_wrappers {
+            layer4 {
+                # matching_timeout raised from the 3s caddy-l4 default
+                # (2026-08-18 RCA): the default silently killed any conn whose
+                # ClientHello had not fully arrived within 3s (zero-byte close,
+                # logged as "aborted matching according to timeout"). Lossy or
+                # reduced-MTU mobile links routinely straggle past 3s (browser
+                # post-quantum ClientHello spans a full-MSS segment; Windows TCP
+                # blackhole probing needs ~3-5s), which broke every fresh
+                # wss:// LiveKit SFU join ("ServerUnreachable") while
+                # warm-connection /sync kept working. 10s restores pre-layer4
+                # tolerance; junk connections still get dropped, just later.
+                matching_timeout 10s
+                @turn_sni tls sni turn.matrix.inblock.io
+                route @turn_sni {
+                    tls
+                    proxy tcp/livekit:5349
+                }
+            }
+            tls
+        }
+    }
 }
 
-(public_cors) {
-    @cors_preflight method OPTIONS
-    header Access-Control-Allow-Origin "*"
-    header Access-Control-Allow-Methods "GET, HEAD, POST, PUT, DELETE, OPTIONS"
-    header Access-Control-Allow-Headers "X-Requested-With, Content-Type, Authorization, Date"
-    header Access-Control-Max-Age "86400"
-    respond @cors_preflight 204
-}
-
-# HSTS (checklist docs/2026-07-31-element-deploy-audit-checklist.md, Section 1,
-# S8/S9). Verbatim copy of Caddyfile.dev-aquafire's (hsts) snippet — see that
-# file for the full `?` (default, not set/add) rationale citing RFC 6797 §8.1
-# first-header-wins. `element.inblock.io` / `matrix.inblock.io` currently emit
-# no Strict-Transport-Security of their own, confirmed live 2026-07-31, so `?`
-# behaves like a plain set today; it is future-proofed against an upstream
-# someday emitting its own (stricter or not) HSTS header the same way
-# dev-aquafire's aquafier-rs upstream already does.
-(hsts) {
-    header ?Strict-Transport-Security "max-age=31536000"
+# Shared basic-auth gate for the non-public previews (user: website).
+# Single source of truth - rotate the hash here and every vhost that
+# imports it follows. Generate with: caddy hash-password
+# Credential is supplied via the environment (WEBSITE_BASICAUTH_HASH,
+# a bcrypt hash from `caddy hash-password`). NEVER commit the literal
+# hash: this file is version-controlled.
+(website_gate) {
+	basic_auth {
+		website {env.WEBSITE_BASICAUTH_HASH}
+	}
 }
 
 :80 {
     respond "OK" 200
 }
 
+# TURN cert-automation host: every :443 connection with this SNI is diverted
+# to LiveKit by the layer4 wrapper above; this site exists so Caddy obtains/
+# renews the LE cert the l4 tls terminator uses. TLS-ALPN-01 would be
+# intercepted by the SNI matcher, so issuance is HTTP-01 (port 80) only.
+turn.matrix.inblock.io {
+    tls {
+        issuer acme {
+            disable_tlsalpn_challenge
+        }
+    }
+    respond "TURN-over-TLS termination endpoint" 200
+}
+
 matrix.inblock.io {
-    # NOTE (Stage-B2 hardening, 2026-07-31): /home/portal/portal/Caddyfile on
-    # the box (mounted into portal-caddy-1) is the LIVE file; this repo copy
-    # already had drift from it BEFORE this change (different CORS
-    # mechanism, an MSC4191 device-delete redirect, 3 unrelated site blocks,
-    # and a malformed .well-known/matrix/client key that the live file has
-    # and this repo copy does not — see
-    # docs/2026-07-31-element-deploy-audit-checklist.md, "Chosen fix
-    # locations" section, for the full catalogue). That pre-existing drift
-    # is left untouched here — only the HSTS / MSC1929-support /
-    # Server-banner-suppression additions below were made, mirrored onto
-    # both this file and the live one via
-    # scripts/prod-caddy-harden-20260731.sh (which is the actual deploy
-    # vehicle; editing this repo file alone changes nothing on the box).
     encode zstd gzip
-    import hsts
+
+    # Stage-B2 hardening (2026-07-31): HSTS. See
+    # docs/2026-07-31-element-deploy-audit-checklist.md, "Chosen fix
+    # locations" section. No snippet infrastructure exists in this live
+    # file (unlike the repo copy / Caddyfile.dev-aquafire), so the
+    # directive is inlined here rather than introducing one.
+    header ?Strict-Transport-Security "max-age=31536000"
 
     handle /.well-known/matrix/server {
         respond `{"m.server": "matrix.inblock.io:443"}`
@@ -57,12 +74,11 @@ matrix.inblock.io {
         header Access-Control-Allow-Origin *
         respond `{"m.homeserver": {"base_url": "https://matrix.inblock.io"}, "m.authentication": {"issuer": "https://siwx-oidc.inblock.io/", "account": "https://siwx-oidc.inblock.io/account"}, "org.matrix.msc4143.rtc_foci": [{"type": "livekit", "livekit_service_url": "https://matrix.inblock.io/livekit/jwt"}]}`
     }
-
-    # MSC1929 (ratified): support-contact discovery. Checklist S6, Section 4
-    # — 404 on both dev and prod confirmed live 2026-07-31. Same JSON as
-    # Caddyfile.dev-aquafire's dev.matrix.inblock.io block. Support contact
-    # = tim.bansemer@inblock.io (operator org address; no support_page
-    # exists, so that key is omitted).
+    # Stage-B2 hardening (2026-07-31): MSC1929 (ratified) support-contact
+    # discovery. Checklist S6, Section 4 — 404 confirmed live 2026-07-31.
+    # Same JSON as Caddyfile.dev-aquafire. Contact =
+    # tim.bansemer@inblock.io (operator org address; no support_page
+    # exists so that key is omitted).
     handle /.well-known/matrix/support {
         header Content-Type application/json
         header Access-Control-Allow-Origin *
@@ -70,29 +86,37 @@ matrix.inblock.io {
     }
 
     handle /_matrix/client/v3/login {
-        import public_cors
         reverse_proxy siwx-oidc:8081 {
-            import strip_upstream_cors
+            header_down -Access-Control-Allow-Origin
+            header_down -Access-Control-Allow-Methods
+            header_down -Access-Control-Allow-Headers
+            header_down -Vary
         }
     }
     handle /_matrix/client/v3/logout {
-        import public_cors
         reverse_proxy siwx-oidc:8081 {
-            import strip_upstream_cors
+            header_down -Access-Control-Allow-Origin
+            header_down -Access-Control-Allow-Methods
+            header_down -Access-Control-Allow-Headers
+            header_down -Vary
         }
     }
     handle /_matrix/client/v3/refresh {
-        import public_cors
         reverse_proxy siwx-oidc:8081 {
-            import strip_upstream_cors
+            header_down -Access-Control-Allow-Origin
+            header_down -Access-Control-Allow-Methods
+            header_down -Access-Control-Allow-Headers
+            header_down -Vary
         }
     }
 
     # MSC4108: QR code login rendezvous.
-    # header_down -Server on these two Synapse-proxying handles + the
-    # catch-all below (checklist Section 5; see Caddyfile.dev-aquafire's
-    # matching handles for the full header_down-vs-site-level-header
-    # decision note). Scoped to matrix_synapse:8080 only.
+    # Stage-B2 hardening (2026-07-31): header_down -Server on these two
+    # Synapse-proxying handles + the catch-all below (checklist Section 5
+    # — confirmed live "Server: Synapse/1.154.0"). Scoped to
+    # matrix_synapse:8080 only; the siwx-oidc handles elsewhere in this
+    # block are untouched (out of scope, and their CORS header_down
+    # lines are load-bearing — do not add -Server there).
     handle /_matrix/client/unstable/org.matrix.msc4108/* {
         reverse_proxy matrix_synapse:8080 {
             header_down -Server
@@ -104,6 +128,7 @@ matrix.inblock.io {
         }
     }
 
+
     # MatrixRTC: lk-jwt-service (OpenID -> LiveKit JWT exchange)
     handle_path /livekit/jwt {
         reverse_proxy lk-jwt-service:8080
@@ -112,22 +137,52 @@ matrix.inblock.io {
         reverse_proxy lk-jwt-service:8080
     }
 
-    # MatrixRTC: LiveKit SFU WebSocket signaling
+    # MatrixRTC: LiveKit SFU. Port 7880 muxes WebSocket signaling AND the
+    # Twirp management API; the edge is the only place Twirp can be
+    # restricted (2026-08-03 promotion of the dev-validated hardening).
+    @livekit_twirp_public {
+        not remote_ip private_ranges
+    }
+    handle /livekit/sfu/twirp/* {
+        respond @livekit_twirp_public 403
+        uri strip_prefix /livekit/sfu
+        reverse_proxy livekit:7880
+    }
+    handle_path /livekit/sfu {
+        reverse_proxy livekit:7880
+    }
     handle_path /livekit/sfu/* {
         reverse_proxy livekit:7880
     }
-
-    # SEC-0003: the Synapse admin + MAS provisioning surfaces must never be reachable
-    # from the internet. siwx-oidc reaches them over the Docker network
-    # (http://matrix_synapse:8080), bypassing Caddy, so denying them here breaks
-    # nothing. Without this, a leak of the MAS bearer becomes remote full admin.
     handle /_synapse/admin/* {
         respond 404
     }
     handle /_synapse/mas/* {
         respond 404
     }
-
+    # MSC4191: in-client device sign-out (Element "Sessions" manager) -> siwx-oidc.
+    # Only DELETE on a specific device + the bulk delete_devices are redirected;
+    # GET/PUT on /devices* stay on Synapse, so listing/rename are unaffected.
+    @siwx_device_delete {
+        method DELETE
+        path /_matrix/client/v3/devices/*
+    }
+    handle @siwx_device_delete {
+        reverse_proxy siwx-oidc:8081 {
+            header_down -Access-Control-Allow-Origin
+            header_down -Access-Control-Allow-Methods
+            header_down -Access-Control-Allow-Headers
+            header_down -Vary
+        }
+    }
+    handle /_matrix/client/v3/delete_devices {
+        reverse_proxy siwx-oidc:8081 {
+            header_down -Access-Control-Allow-Origin
+            header_down -Access-Control-Allow-Methods
+            header_down -Access-Control-Allow-Headers
+            header_down -Vary
+        }
+    }
     handle {
         reverse_proxy matrix_synapse:8080 {
             header_down -Server
@@ -137,11 +192,22 @@ matrix.inblock.io {
 
 siwx-oidc.inblock.io {
     encode zstd gzip
-    import public_cors
+
+    header Access-Control-Allow-Origin "https://element.inblock.io"
+    header Access-Control-Allow-Methods "GET, POST, OPTIONS"
+    header Access-Control-Allow-Headers "Content-Type, Authorization"
+
+    @options method OPTIONS
+    handle @options {
+        respond 204
+    }
 
     handle {
         reverse_proxy siwx-oidc:8081 {
-            import strip_upstream_cors
+            header_down -Access-Control-Allow-Origin
+            header_down -Access-Control-Allow-Methods
+            header_down -Access-Control-Allow-Headers
+            header_down -Vary
         }
     }
 }
@@ -149,9 +215,8 @@ siwx-oidc.inblock.io {
 element.inblock.io {
     encode zstd gzip
     # Stage-B2 hardening (2026-07-31): HSTS (checklist Section 1, S8/S9 —
-    # FAIL confirmed live before this change: no Strict-Transport-Security
-    # on element.inblock.io). See the (hsts) snippet definition above.
-    import hsts
+    # FAIL confirmed live before this change).
+    header ?Strict-Transport-Security "max-age=31536000"
     reverse_proxy element-web:8080
 }
 
@@ -167,4 +232,42 @@ timestamps.inblock.io {
 agentic.inblock.io {
     encode zstd gzip
     reverse_proxy portal:8080
+}
+
+
+audit.inblock.io {
+    encode zstd gzip
+    import website_gate
+    reverse_proxy regulator:8791
+}
+
+viewer.inblock.io {
+    # Shared-password gate for the Aqua state viewer preview (user: website).
+    import website_gate
+
+    # The viewer streams nodes over SSE. These paths must not be compressed or
+    # buffered, or the graph appears to hang while frames sit in the encoder --
+    # flush_interval -1 disables response buffering.
+    @sse path /api/events /api/sessions/*/events
+    handle @sse {
+        reverse_proxy viewer:8080 {
+            flush_interval -1
+        }
+    }
+
+    handle {
+        encode zstd gzip
+        reverse_proxy viewer:8080
+    }
+}
+
+projects.inblock.io {
+    encode zstd gzip
+    import website_gate
+    reverse_proxy projects:8080
+}
+
+aqua-registry.inblock.io {
+    encode zstd gzip
+    reverse_proxy aqua-registry:8088
 }

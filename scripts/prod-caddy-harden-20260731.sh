@@ -50,6 +50,11 @@
 set -euo pipefail
 
 CADDY_FILE="${CADDY_FILE:-/home/portal/portal/Caddyfile}"
+# Resolve dynamically by default — Docker renames a container on a name
+# conflict, so the literal can go stale — while still honoring an explicit
+# CADDY_CONTAINER override (e.g. the scratch-container testing path above)
+# and falling back to the literal if resolution finds nothing.
+CADDY_CONTAINER="${CADDY_CONTAINER:-$(docker ps -q --filter name=portal-caddy 2>/dev/null | head -1)}"
 CADDY_CONTAINER="${CADDY_CONTAINER:-portal-caddy-1}"
 # Host-side source path as it appears in `docker inspect`'s Mounts[].Source
 # for the real deployment. Kept independently overridable (defaults to

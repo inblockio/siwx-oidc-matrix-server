@@ -164,8 +164,10 @@ Passkey registration fails?
   +-- "M_UNKNOWN" or "M_FORBIDDEN" after successful redirect
   |     -> Token introspection failing at Synapse
   |     -> MAS_SHARED_SECRET mismatch
-  |     -> Check: docker compose exec matrix_synapse yq '.matrix_authentication_service.secret' /data/homeserver.yaml
-  |     -> Compare: docker compose exec siwx-oidc printenv SIWEOIDC_MAS_SHARED_SECRET
+  |     -> Check (fingerprints only, NEVER print the secret itself):
+  |          syn=$(docker compose exec -T matrix_synapse yq -r '.matrix_authentication_service.secret' /data/homeserver.yaml | tr -d '\r\n' | sha256sum | cut -c1-12)
+  |          oidc=$(docker compose exec -T siwx-oidc printenv SIWEOIDC_MAS_SHARED_SECRET | tr -d '\r\n' | sha256sum | cut -c1-12)
+  |          [ "$syn" = "$oidc" ] && echo "MATCH ($syn)" || echo "MISMATCH: $syn vs $oidc"
   |
   +-- User provisioned but can't send messages / E2EE broken
         -> Device verification needed (expected on every fresh login)

@@ -66,11 +66,14 @@ docker compose exec element-web cat /app/config.json
 
 **Diagnose**:
 ```bash
-# Check what Synapse has
-docker compose exec matrix_synapse yq '.matrix_authentication_service.secret' /data/homeserver.yaml
-
-# Check what siwx-oidc receives
-docker compose exec siwx-oidc printenv SIWEOIDC_MAS_SHARED_SECRET
+# Compare WITHOUT printing either secret. The question is only "do they match?",
+# which a fingerprint answers. NEVER echo the value: anything printed in an agent
+# session is transmitted off-machine (five credential exposures on this box to date).
+syn=$(docker compose exec -T matrix_synapse yq -r '.matrix_authentication_service.secret' \
+        /data/homeserver.yaml | tr -d '\r\n' | sha256sum | cut -c1-12)
+oidc=$(docker compose exec -T siwx-oidc printenv SIWEOIDC_MAS_SHARED_SECRET \
+        | tr -d '\r\n' | sha256sum | cut -c1-12)
+[ "$syn" = "$oidc" ] && echo "MATCH ($syn)" || echo "MISMATCH: synapse=$syn oidc=$oidc"
 ```
 
 **Fix**: If they differ, update homeserver.yaml to match .env, then restart Synapse.

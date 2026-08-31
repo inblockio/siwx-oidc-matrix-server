@@ -1,0 +1,114 @@
+# LiveKit SFU config for the dev-staging box (dev-aquafire, 207.154.209.103).
+#
+# Identical to config/livekit.yaml (production) except for the `turn:` block
+# at the bottom, which enables the embedded TURN server here first. See
+# docs/superpowers/plans/2026-08-02-livekit-embedded-turn.md for the full
+# hypothesis register, verification plan, and prod-graduation checklist.
+port: 7880
+bind_addresses:
+  - "0.0.0.0"
+rtc:
+  tcp_port: 7881
+  # Below the Linux ephemeral range (32768-60999) so these listeners cannot be
+  # squatted by the host's own ephemeral source ports; matches
+  # config/livekit.e2e.yaml. MUST match the docker-compose.dev-staging.yml
+  # ports mapping, and the host firewall must allow 20100:20200/udp.
+  port_range_start: 20100
+  port_range_end: 20200
+  use_external_ip: true
+  # The livekit container is attached to TWO docker networks: its own compose
+  # default net (STUN maps it to the host's public IP) and the shared reverse-
+  # proxy net (172.18.0.0/16) that exists only so Caddy can reach :7880. STUN
+  # fails on the proxy-net interface and LiveKit then advertises that private
+  # bridge IP AS IF it were external ("using external IPs" lists two entries).
+  # When a real client's ICE selects it, DTLS times out and the call carries
+  # no media. Excluding the proxy-net subnet removes that candidate entirely.
+  # VERIFY after every restart: `docker logs <livekit> | grep 'using external
+  # IPs'` must show exactly ONE entry (the public IP).
+  ips:
+    excludes:
+      - "172.18.0.0/16"
+room:
+  auto_create: false
+logging:
+  level: info
+
+# --- Embedded TURN (dev-staging first) ----------------------------------
+#
+# !! VERSION-PROVENANCE WARNING (added 2026-08-30) !!
+# The "verified facts" below were read out of the livekit-server **v1.12.0**
+# source tree. dev-staging has since been upgraded and now runs **v1.13.6**
+# (plan 2026-08-30-dev-stack-upgrade.md, H8/AC6). The facts have NOT been
+# re-read against v1.13.6 source, so treat every "v1.12.0 hardcodes / ships no
+# default" statement below as ASSERTED-AT-1.12.0, not verified-at-current.
+#
+# What IS known about the running version, first-hand:
+#   * v1.13.6 starts successfully with exactly this config, so nothing here is
+#     rejected by the newer parser, and the mandatory-ports claim (a) cannot be
+#     failing — the server would refuse to start.
+#   * TURN/STUN/cert and an SFU media loadtest were verified green on v1.13.6
+#     (H8): audio 747 packets, video 1907 packets, 0% loss.
+#   * NOT re-verified on v1.13.6: the port-443 hardcode in claim (b). If a
+#     client-side TURN URL ever looks wrong, re-read pkg/service/turn.go at the
+#     v1.13.6 tag FIRST — do not trust (b) below as current.
+#   * Related and already settled from the v1.13.x diff (plan D8): LiveKit PR
+#     #4723 dropped only H.264 **baseline `42001f`** from the default offer;
+#     constrained baseline `42e01f` and high `640032` remain, alongside
+#     VP8/VP9/AV1.
+#
+# All facts below verified against livekit-server v1.12.0 (config-sample.yaml
+# + pkg/config/config.go + pkg/service/turn.go + pkg/service/roommanager.go
+# at the v1.12.0 tag). Full detail and the hypothesis register:
+# docs/superpowers/plans/2026-08-02-livekit-embedded-turn.md (original
+# embedded-TURN rollout) and
+# docs/superpowers/plans/2026-08-03-turn-tls-edge-termination.md (this
+# block's current edge-termination shape).
+#
+# (a) tls_port AND udp_port are MANDATORY — v1.12.0 ships NO compiled
+#     defaults for either. Omit one and TURN startup fails with "invalid
+#     TURN ports". Both are set explicitly below.
+#
+# (b) THE 443 HARDCODE — read this before assuming what URL clients dial.
+#     livekit-server v1.12.0 hardcodes the advertised TURN-TLS URL to port
+#     443 regardless of tls_port (pkg/service/turn.go builds the ICE server
+#     list consumed by roommanager.go's iceServersForParticipant, which does:
+#       fmt.Sprintf("turns:%s:443?transport=tcp", domain)
+#     This USED to be a problem (Caddy owned 443 with no way to route a raw
+#     TLS stream anywhere but an HTTP handler) but now actually WORKS: the
+#     edge (caddy-l4, see Caddyfile.dev-aquafire's `servers :443 {
+#     listener_wrappers { layer4 { ... } } }` block) inspects the ClientHello
+#     SNI for `dev.turn.matrix.inblock.io` BEFORE Caddy's normal `tls`
+#     wrapper gets it, terminates TLS itself using Caddy's shared cert cache,
+#     and proxies the decrypted TCP stream to this container's plaintext
+#     tls_port (5349) over proxy_net. So the client's hardcoded
+#     `turns:dev.turn.matrix.inblock.io:443` now lands exactly where it
+#     needs to. TURN-UDP is unaffected either way: it is advertised
+#     correctly as `turn:<node-ip>:<udp_port>?transport=udp` directly against
+#     this container's udp_port.
+#
+# (c) external_tls: true (NOT cert_file/key_file) — TLS termination happens
+#     at the edge (caddy-l4), not in this process. pkg/service/turn.go opens
+#     a BARE plaintext `net.Listen` on tls_port when external_tls is set (no
+#     PROXY protocol), which is exactly what `proxy tcp/livekit:5349` in the
+#     Caddyfile dials. tls_port (5349) MUST NOT be published to the host —
+#     it is edge-internal, reachable only from caddy-l4 over proxy_net;
+#     publishing it would let a client bypass the edge's TLS termination
+#     entirely and hit LiveKit's TURN port with no TLS. Only udp_port (3478)
+#     needs a host publish + firewall rule for TURN-UDP.
+#
+# (d) SUPERSEDED: the earlier in-process-TLS design (LiveKit terminating TLS
+#     itself via cert_file/key_file, fed by scripts/livekit-turn-cert-sync.sh
+#     sync-copying Caddy's ACME cert on a timer) is retired by (c) above —
+#     external_tls ignores cert paths entirely, so cert_file/key_file are
+#     removed below. The cert-sync script and its systemd units
+#     (systemd/livekit-turn-cert-sync.{service,timer}) are LEFT IN THE REPO,
+#     unused by this file, as the tooling for the passthrough alternative
+#     (LiveKit terminating TLS directly on a dedicated IP, no edge demux) —
+#     see the plan doc's decision record for why edge termination (variant 2)
+#     was chosen instead.
+turn:
+  enabled: true
+  domain: dev.turn.matrix.inblock.io
+  external_tls: true
+  tls_port: 5349
+  udp_port: 3478

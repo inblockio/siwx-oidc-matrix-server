@@ -73,7 +73,7 @@ ssh -i ~/.ssh/id_ed25519 deploy@agentic.inblock.io \
 
 Possible remaining issues:
 - **lk-jwt-service cannot reach LiveKit via public URL** (`wss://matrix.inblock.io/livekit/sfu`): lk-jwt-service runs inside Docker and connects to LiveKit through the public internet (DNS -> Caddy -> LiveKit). If this fails, fix by adding `extra_hosts` to resolve `matrix.inblock.io` to Caddy's Docker IP, or set a separate internal LiveKit URL.
-- **WebSocket upgrade issues**: Caddy's `handle_path` should pass WebSocket upgrades through, but verify with `docker logs portal-caddy-1 2>&1 | grep livekit`.
+- **WebSocket upgrade issues**: Caddy's `handle_path` should pass WebSocket upgrades through, but verify with `CID=$(docker ps -q --filter name=portal-caddy | head -1); docker logs "${CID:-portal-caddy-1}" 2>&1 | grep livekit`.
 - **`LIVEKIT_INSECURE_SKIP_VERIFY_TLS`**: Currently `false`. If lk-jwt-service fails TLS verification when connecting to LiveKit via the public URL, try setting to `true` temporarily.
 
 ### After Element X works: merge to main
@@ -134,7 +134,7 @@ ssh -i ~/.ssh/id_ed25519 deploy@agentic.inblock.io \
 
 # LiveKit logs (look for "secret is too short" error)
 ssh -i ~/.ssh/id_ed25519 deploy@agentic.inblock.io \
-  "docker logs matrix-livekit-1 2>&1 | head -10"
+  "cd /home/deploy/matrix/stack && docker compose logs livekit --tail 10"
 ```
 
 ## Commits on this branch

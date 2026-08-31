@@ -63,8 +63,21 @@ siwx-oidc-matrix-server/
 | `proxy`          | `nginxproxy/nginx-proxy:alpine`            | 80, 443       | Reverse proxy; aliases both hostnames on the Docker network |
 | `letsencrypt`    | `nginxproxy/acme-companion`                | —             | Auto-provisions TLS for proxy |
 | `element-web`    | `./dockerfiles/Dockerfile.element` (Element Web) | 80 (internal) | SIWX auto-login client, served via proxy at `${CLIENT_HOST}` |
-| `livekit`        | `livekit/livekit-server:v1.12.0` (pinned, no `:latest`) | 7881/tcp, 50100-50200/udp | LiveKit SFU for MatrixRTC (Element Call) |
-| `lk-jwt-service` | `ghcr.io/element-hq/lk-jwt-service:latest`       | 8080 (internal) | Validates Matrix OpenID tokens, issues LiveKit JWTs |
+| `livekit`        | `livekit/livekit-server:v1.13.6` (pinned, no `:latest`) | 7881/tcp, 20100-20200/udp | LiveKit SFU for MatrixRTC (Element Call). UDP range must stay below the ephemeral range and match `config/livekit.yaml` |
+| `lk-jwt-service` | `ghcr.io/element-hq/lk-jwt-service:0.6.0@sha256:822f0c03…` (pinned) | 8080 (internal) | Validates Matrix OpenID tokens, issues LiveKit JWTs. Requires `LIVEKIT_FULL_ACCESS_HOMESERVERS` (explicit hostname, never `*`). Healthcheck DISABLED in every compose file (`healthcheck: disable: true`) — 0.6.0 ships an image-level HEALTHCHECK that is unconditionally broken (see below); probe `/healthz` externally instead. Since 0.6.0 it resolves the C-S API via `.well-known` discovery, ignoring the deprecated `delay_cs_api_url` request parameter |
+
+**lk-jwt 0.6.0's built-in healthcheck is broken — keep it disabled.** The image's
+`/lk-jwt-service-healthcheck` helper builds its probe URL as
+`"http://localhost:" + LIVEKIT_JWT_BIND`. Our value — and upstream's own
+documented one — is `:8080`, which yields `http://localhost::8080/healthz` and
+fails permanently with `invalid port "::8080" after host`. Setting a bare `8080`
+satisfies the helper but the **server** then refuses to start
+(`listen tcp: address 8080: missing port in address`, container exits 1), so no
+single value satisfies both. Verified against the pinned digest on 2026-08-30.
+Left enabled it marks the container unhealthy, and `ci-deploy.sh`'s health gate
+then fails EVERY dev-staging converge — including unrelated element-web and
+synapse deploys. `/healthz` itself works and already existed in 0.5.0 (a 200
+with an empty body), so external probing loses nothing.
 
 Volumes: `matrix_data` (Synapse data), `proxy_data_*` (nginx/acme state).
 
@@ -199,7 +212,7 @@ rejects it. Keep the slash in `Caddyfile.production`, `Caddyfile.local`, and
 **Element Web is built from source (not the prebuilt image).**
 `dockerfiles/Dockerfile.element` is a multi-stage build that clones
 `element-hq/element-web` at a pinned tag (`ARG ELEMENT_WEB_TAG`, currently
-`v1.12.24`), applies the vendored patches in `patches/element-web/`
+`v1.12.26`), applies the vendored patches in `patches/element-web/`
 (`git apply --verbose`, fail-loud), runs `pnpm --filter element-web build`,
 then serves the bundle via `nginxinc/nginx-unprivileged` with the inblock.io
 overlay + existing entrypoint (no entrypoint change; a
@@ -207,7 +220,7 @@ overlay + existing entrypoint (no entrypoint change; a
 **Canonical patch/feature list:** `patches/element-web/README.md` (what / why /
 retirement / which branch's Dockerfile applies it). POLICY patches on both
 `dev` and `main` today include forced first-device 4S recovery and the browser
-EventIndex (hosted E2EE search). v1.12.24 is a pnpm + nx monorepo needing
+EventIndex (hosted E2EE search). v1.12.26 is a pnpm + nx monorepo needing
 Node >=22.18; the builder uses `node:24-bullseye`. To bump Element, update
 `ELEMENT_WEB_TAG` and refresh every listed patch per
 `docs/element-web-source-build.md`. No separate fork is vendored (the source is
@@ -253,19 +266,88 @@ docker compose exec matrix_synapse sh -c '
 docker compose restart matrix_synapse
 ```
 
-## MSC3861 Delegated Auth (feat/msc3861 branch)
+## Delegated auth (stable Matrix Authentication Service integration)
 
-The stack now uses MSC3861 delegated authentication instead of legacy OIDC provider mode:
+Synapse delegates ALL auth to siwx-oidc via token introspection:
 
-- Synapse delegates ALL auth to siwx-oidc via token introspection
 - Opaque tokens: `mat_` (access, 300s TTL), `mcr_` (refresh, 86400s TTL)
 - User provisioning: siwx-oidc calls `/_synapse/mas/` endpoints to create users/devices
 - Token revocation: `POST /oauth2/revoke` + `POST /_matrix/client/v3/logout`
+
+**Config schema (since Synapse 1.157.0 / this repo 2026-08-30).** The experimental
+`experimental_features.msc3861` block was REMOVED upstream in 1.157.0 and is now a
+hard `ConfigError` that refuses to boot. The stable replacement is a top-level block:
+
+```yaml
+matrix_authentication_service:
+  enabled: true
+  endpoint: <siwx-oidc base URL>   # see below
+  secret:   <MAS_SHARED_SECRET>
+```
+
+`endpoint` is the ONLY location knob. Synapse derives BOTH
+`{endpoint}/.well-known/openid-configuration` and `{endpoint}/oauth2/introspect`
+from it and **ignores the metadata document's own `introspection_endpoint`**.
+
+- There is no `issuer_metadata` override any more, and none is needed. siwx-oidc
+  builds its whole discovery document from `SIWEOIDC_BASE_URL` (host-independent —
+  it does not echo the request `Host`), so pointing `endpoint` at the docker-internal
+  address still yields the PUBLIC issuer/endpoint URLs, which Synapse forwards to
+  browsers verbatim via `GET /_matrix/client/v1/auth_metadata`. That is exactly the
+  decoupling the old hand-built `issuer_metadata` provided, now for free.
+- The advertised `issuer` and `account_management_uri` now come from siwx-oidc's own
+  metadata, so the RFC 8414 §3.3 trailing-slash byte-match with
+  `.well-known/matrix/client` is owned by siwx-oidc alone and can no longer drift from
+  Synapse's config. (It HAD drifted: dev-staging carried `msc3861.issuer` with no
+  trailing slash.)
+- The shared secret keeps its double duty: introspection is authenticated with
+  `Authorization: Bearer <secret>`, and `is_request_using_the_shared_secret()`
+  survives — so *introspection* needed no change.
+
+  > **CORRECTED 2026-08-30. This bullet previously ended "No siwx-oidc code change
+  > was required for this migration." That was exactly false**, and it was the most
+  > load-bearing sentence in this section — it would have sent a reader into the
+  > 1.159 upgrade expecting a config-only change.
+  >
+  > Synapse 1.157 **deleted** the `msc3861.admin_token` shim, which is what had let
+  > siwx-oidc reach `/_synapse/admin/*` by presenting the raw shared secret. The
+  > shared secret is still accepted for *introspection*; it is **no longer accepted
+  > as admin authority**. That forced real code:
+  >
+  > * **`src/admin_token.rs` is new** — a `POST /oauth2/admin_token` endpoint that
+  >   mints a short-TTL access token carrying `urn:synapse:admin:*`. Its existence
+  >   refutes the old claim.
+  > * **`src/synapse_client.rs` was ported**: `delete_device` / `deactivate_user` /
+  >   `reactivate_user` moved to `/_synapse/mas/*`; `list_devices` / `get_device`
+  >   moved onto the minted admin token.
+  > * **`has_cross_signing_keys` was silently broken** (plan D1): `keys/query` with
+  >   the raw secret returned `401`, which degraded into a `ResetUnconfirmed`
+  >   readback — telling users "we could not confirm your reset took effect" while
+  >   the reset HAD been granted. A user-facing silent failure that would have
+  >   shipped had the migration been treated as config-only.
+  > * `scripts/matrix-storage-controller.sh` was re-authed onto the same mint.
+  >
+  > See `docs/superpowers/plans/2026-08-30-dev-stack-upgrade.md` (H2, H3, H4, D1, D4).
+
+**Written by an ALWAYS-RUN entrypoint block, because it is also the migration.**
+`entrypoints/matrix_server.sh::apply_mas_config()` (and its twin in
+`real-stack/synapse_entrypoint.sh`) deletes any leftover `msc3861` and writes the
+block on EVERY boot, not just first boot. This is load-bearing: the setup section is
+first-boot-only, so an already-provisioned `/data/homeserver.yaml` would otherwise
+keep its `msc3861` block forever and crash-loop on upgrade.
+
+**Rollback is NOT just an image revert.** Rolling back to a pre-1.157 image on a
+migrated volume leaves a `homeserver.yaml` with no `msc3861` block, and the old
+entrypoint will not re-create it (first-boot guard). Restore a pre-migration
+`homeserver.yaml` backup as well.
 
 Key env vars:
 - `MAS_SHARED_SECRET`: Shared between Synapse and siwx-oidc for introspection auth
 - `SIWEOIDC_MAS_SHARED_SECRET`: Same value, consumed by siwx-oidc (figment prefix)
 - `SIWEOIDC_SYNAPSE_ENDPOINT`: How siwx-oidc reaches Synapse (e.g., `http://matrix_synapse:8080`)
+- `SIWEOIDC_INTERNAL_URL` (optional): in-network siwx-oidc base. When set (local/e2e)
+  it becomes `matrix_authentication_service.endpoint`; otherwise `SIWEOIDC_BASE_URL`
+  is used, which is what prod/dev-staging already did under msc3861.
 
 ### Device lifecycle
 

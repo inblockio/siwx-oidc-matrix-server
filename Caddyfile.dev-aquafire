@@ -65,6 +65,44 @@
     # for a zero-downtime config change without exposing the admin API
     # externally. Not disabled outright ("admin off") because T3's staged
     # cutover benefits from being able to reload without a restart.
+
+    # TURN-TLS edge termination (caddy-l4). See
+    # docs/superpowers/plans/2026-08-03-turn-tls-edge-termination.md. This
+    # box's Caddy image must be built from dockerfiles/Dockerfile.caddy-l4
+    # (stock caddy:2-alpine has no `layer4` module and will fail to parse
+    # this block — see that Dockerfile's header for the version pin).
+    servers :443 {
+        listener_wrappers {
+            # layer4 MUST precede tls: it inspects the raw ClientHello SNI
+            # before decryption. Only the TURN hostname is diverted; all
+            # other 443 traffic (and all h3/QUIC on udp/443 — wrappers are
+            # TCP-only) flows on unchanged.
+            layer4 {
+                # matching_timeout raised from the 3s caddy-l4 default,
+                # mirroring the prod fix (2026-08-18, RCA 2026-08-16): the
+                # default silently killed any conn whose ClientHello had not
+                # fully arrived within 3s (zero-byte close, logged as
+                # "aborted matching according to timeout"). Lossy/reduced-MTU
+                # mobile links routinely straggle past 3s (post-quantum
+                # ClientHello spans a full-MSS segment; Windows TCP blackhole
+                # probing needs ~3-5s), which broke every fresh wss:// LiveKit
+                # SFU join ("ServerUnreachable") while warm-connection /sync
+                # kept working. 10s restores pre-layer4 tolerance; junk
+                # connections still get dropped, just later.
+                matching_timeout 10s
+                @turn_sni tls sni dev.turn.matrix.inblock.io
+                route @turn_sni {
+                    # Terminate TLS here using Caddy's shared cert cache
+                    # (cert automated by the dummy site below), then proxy
+                    # the decrypted TURN/TCP stream to LiveKit's
+                    # external_tls plaintext listener.
+                    tls
+                    proxy tcp/livekit:5349
+                }
+            }
+            tls
+        }
+    }
 }
 
 (strip_upstream_cors) {
@@ -238,7 +276,41 @@ dev.matrix.inblock.io {
         reverse_proxy lk-jwt-service:8080
     }
 
-    # MatrixRTC: LiveKit SFU WebSocket signaling
+    # MatrixRTC: LiveKit SFU. Port 7880 muxes WebSocket signaling AND the Twirp
+    # management API (/twirp/livekit.RoomService/* plus Egress/Ingress/SIP),
+    # with no upstream flag to split or disable it — so the edge is the only
+    # place it can be restricted (S3, 2026-08-01 av-hardening audit).
+    #
+    # The carve-out is NOT decoration: lk-jwt-service's own CreateRoom call
+    # uses its public LIVEKIT_URL (v0.5.0 has no internal-API override, see
+    # docker-compose.dev-staging.yml), so it hairpins back in through Caddy and
+    # MUST keep working. It is expected to arrive with a private (Docker NAT)
+    # source address. Caddy resolves `private_ranges` to 10/8, 172.16/12,
+    # 192.168/16, 127.0.0.1/8, fd00::/8, ::1.
+    #
+    # Ordering: `handle` sorts ahead of `handle_path` in Caddy's directive
+    # order and all of them share one mutually-exclusive group, so this block
+    # is reached first; it is also written first so the file reads the way it
+    # behaves. Parity with Caddyfile.production.
+    @livekit_twirp_public {
+        not remote_ip private_ranges
+    }
+    handle /livekit/sfu/twirp/* {
+        respond @livekit_twirp_public 403
+        uri strip_prefix /livekit/sfu
+        reverse_proxy livekit:7880
+    }
+
+    # Bare path: lk-jwt-service's LIVEKIT_URL ends at "/livekit/sfu" with no
+    # trailing segment, and `/livekit/sfu/*` does NOT match it, so without this
+    # exact-match block the bare path 404s. handle_path strips the whole matched
+    # path, leaving "/" upstream — same idiom as /livekit/jwt.
+    handle_path /livekit/sfu {
+        reverse_proxy livekit:7880
+    }
+
+    # Everything else under the SFU (/rtc, /rtc/validate, …) — deliberately not
+    # enumerated, so unknown-but-legitimate SFU endpoints keep working.
     handle_path /livekit/sfu/* {
         reverse_proxy livekit:7880
     }
@@ -280,10 +352,55 @@ dev.matrix.inblock.io {
     }
 }
 
+# TURN-over-TLS cert automation host. Every :443 connection with this SNI is
+# intercepted by the layer4 wrapper above and proxied to LiveKit, so this
+# site almost never serves HTTP. It exists so Caddy obtains/renews the LE
+# certificate the l4 tls terminator reads from the shared cache. TLS-ALPN-01
+# would be intercepted by the SNI matcher (the validation handshake carries
+# this SNI), so it is disabled: issuance runs HTTP-01 on port 80, outside the
+# :443-scoped wrapper. NAMING: dev DNS puts `dev.` FIRST (dev.turn.…), prod
+# is turn.matrix.inblock.io.
+# See docs/superpowers/plans/2026-08-03-turn-tls-edge-termination.md.
+dev.turn.matrix.inblock.io {
+    tls {
+        issuer acme {
+            disable_tlsalpn_challenge
+        }
+    }
+    respond "TURN-over-TLS termination endpoint" 200
+}
+
 dev.siwx.inblock.io {
     encode zstd gzip
     import hsts
     import public_cors
+
+    # ---------------------------------------------------------------------
+    # ADMIN-TOKEN MINT: INTERNAL ONLY -- deliberately NOT routed publicly.
+    #
+    # POST /oauth2/admin_token mints a short-TTL access token carrying
+    # `urn:synapse:admin:*`. It is authenticated by the MAS shared secret, so
+    # public exposure was not an open door -- it answered 401 -- but it put the
+    # one endpoint that vends Synapse admin authority on the public internet as
+    # an online guessing oracle against a single static secret, with no rate
+    # limiting in front of it.
+    #
+    # Matches the posture already chosen for `/_synapse/*`, which the edge also
+    # refuses (plan D22).
+    #
+    # SAFE because BOTH callers are in-network and never traverse Caddy:
+    #   * siwx-oidc hosts the endpoint itself;
+    #   * scripts/matrix-storage-controller.sh mints via OIDC_INTERNAL_URL,
+    #     default `http://siwx-oidc:8081`, with the curl executed INSIDE the
+    #     Synapse container, which shares the compose network.
+    # Verified 2026-08-30: that exact internal call returns 200 with scope
+    # `urn:matrix:client:api:* urn:synapse:admin:*` BOTH before and after this.
+    #
+    # 404, not 403: same as `/_synapse/*`, and it does not confirm to an
+    # unauthenticated caller that the endpoint exists.
+    handle /oauth2/admin_token* {
+        respond 404
+    }
 
     # Load-bearing: siwx-oidc emits its own CORS headers. Without stripping
     # them here, the browser sees TWO Access-Control-Allow-Origin headers
