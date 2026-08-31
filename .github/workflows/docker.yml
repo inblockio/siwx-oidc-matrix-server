@@ -2,7 +2,11 @@ name: Publish Docker
 
 on:
   push:
-    branches: [main, dev]
+    # `main` is the only trunk as of 2026-09-01; `dev` was consolidated into
+    # it and deleted. Re-adding a second long-lived branch here means a second
+    # floating tag, which is how prod and dev-staging ended up tracking
+    # different lines in the first place.
+    branches: [main]
     tags: ['*']
     # Doc-only commits were rebuilding+moving the :main digest with no code
     # change (observed 2026-07-31) — that breaks digest-based promotion
