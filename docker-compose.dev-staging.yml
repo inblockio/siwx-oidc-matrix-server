@@ -123,6 +123,20 @@ services:
       SIWEOIDC_REQUIRE_SECRET: "false"
       SIWEOIDC_SUPPORTED_DID_METHODS: '["pkh","key"]'
       SIWEOIDC_MATRIX_SERVER_NAME: ${MATRIX_HOST}
+      # aqua-auth 0.7.0 shared credential store. EMPTY (the default) means the
+      # legacy webauthn:credential/* namespace only, bit for bit what this box
+      # did before -- siwx-oidc treats unset and blank identically as OFF.
+      #
+      # Note this service takes an explicit `environment:` map, NOT `env_file`,
+      # so a variable added to .env alone never reaches the container. It has to
+      # be listed here as well or the flag is silently inert: the operator sets
+      # it, sees no error, and believes dual-write is on while nothing mirrors.
+      #
+      # Set to redis://redis to enable dual-write into aqua:webauthn:*. Run
+      # `migrate-credentials --apply` first so the picker is complete from the
+      # first request, and confirm the boot line reads "dual-write ENABLED" --
+      # siwx-oidc refuses to start if this names a Redis it cannot open.
+      AQUA_WEBAUTHN_REDIS_URL: ${AQUA_WEBAUTHN_REDIS_URL:-}
       RUST_LOG: ${RUST_LOG}
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:${SIWEOIDC_PORT}/.well-known/openid-configuration"]
