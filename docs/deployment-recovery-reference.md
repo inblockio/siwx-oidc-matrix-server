@@ -259,6 +259,56 @@ docker inspect --format='{{.Image}}' "$SIWX_CID" \
   | xargs docker image inspect --format='{{join .RepoDigests ", "}}'
 ```
 
+### Redis: snapshot before any change that writes to `webauthn:*`
+
+There is deliberately **no scheduled Redis backup**. The reasoning, settled
+2026-09-01: for host loss or service loss a DigitalOcean droplet snapshot already
+contains Redis, so a second copy buys nothing and you restore the whole box
+anyway. A separate copy only earns its keep in the one case the droplet snapshot
+serves badly, namely **Redis damaged while Synapse is healthy** (a bad write or
+delete against the credential keyspace). There, a full restore is not just
+expensive, it is destructive: it discards every message since the snapshot to
+repair something that never touched messages.
+
+That is a **change** risk, not a random-failure risk, so the instrument is a gate
+in the change procedure rather than a timer:
+
+> Before any change that writes to `webauthn:credential/*`, `webauthn:link/*` or
+> `webauthn:by_did/*`, snapshot Redis. Specifically: enabling the aqua-auth
+> credential-store dual-write, and anything exercising `purge_identity`, which
+> does a `KEYS`-scan-and-delete across the first two.
+
+```bash
+# on the box, as the user that owns the stack
+TS=$(date -u +%Y%m%dT%H%M%SZ)
+C=$(docker ps -qf name=redis | head -1)
+docker exec "$C" redis-cli BGREWRITEAOF
+until [ "$(docker exec "$C" redis-cli info persistence | grep -c 'aof_rewrite_in_progress:0')" = 1 ]; do sleep 1; done
+docker exec "$C" redis-cli BGSAVE
+until [ "$(docker exec "$C" redis-cli info persistence | grep -c 'rdb_bgsave_in_progress:0')" = 1 ]; do sleep 1; done
+sudo cp -a /var/lib/docker/volumes/matrix_redis_data/_data "/home/deploy/backups/redis/data-$TS"
+echo "$TS" | sudo tee /home/deploy/backups/redis/LATEST
+```
+
+Copy the **whole `/data` tree**, not just one file. With `appendonly yes` Redis
+loads from `appendonlydir/` and ignores `dump.rdb`, so an RDB-only copy restores
+nothing; the RDB is kept alongside as a consistent point-in-time image for
+inspection. A torn AOF tail is safe because `aof-load-truncated` defaults on.
+This is the exact artifact shape whose restore was exercised on 2026-08-31, so
+the procedure is tested rather than assumed.
+
+Restore: stop the container, replace `/data` with the snapshot, start it.
+
+**Rolling Redis back does not lock anyone out.** `siwx-oidc`
+`src/webauthn.rs:499` rejects a login only when `new_counter < stored_counter`.
+Restoring an older snapshot *lowers* the stored counter, so the authenticator's
+counter is higher and the clone check passes. Old snapshots stay usable.
+
+Handle the artifact as credential-bearing: `0600` under a `0700` directory, never
+inside a git working tree, and never off-host unencrypted. On-host encryption is
+pointless here, since a droplet snapshot captures the live unencrypted volume
+anyway; encryption only earns anything for a copy that leaves the machine.
+
 ## The prod edge (portal-caddy-1)
 
 `portal-caddy-1` terminates TLS for **eleven** hostnames on `agentic.inblock.io`,
