@@ -2,8 +2,8 @@
 
 This directory is the **complete, canonical list of every modification we apply to
 upstream Element Web source** before building. `dockerfiles/Dockerfile.element` is the
-single build source for the element-web images (lab, dev-staging `:dev`, prod digest
-promotion), and it applies exactly the patches listed here, each with
+single build source for the element-web images (lab, dev-staging, prod digest
+promotion; all now built from `main`), and it applies exactly the patches listed here, each with
 `git apply --verbose` so **a patch that stops applying fails the image build loudly** —
 never silently at runtime.
 
@@ -42,11 +42,19 @@ Rules of this registry:
 
 ## Which Dockerfile applies what
 
-`dev` / `:dev` applies every numbered patch below. `main` / prod image
-source applies **1, 5, and 6 only** (recovery, check-code, EventIndex).
-Entries 2–4 are still policy we maintain; they ship on staging until
-promoted. A tag bump must still try them in this file's order when
-refreshing the `dev` Dockerfile.
+**One Dockerfile, all six patches.** `dockerfiles/Dockerfile.element` on `main`
+applies every numbered patch below, in this file's order.
+
+This section used to describe a split: the `dev` Dockerfile applied all six
+while the `main` one applied 1, 5 and 6 only, with entries 2–4 described as
+"policy we maintain; they ship on staging until promoted". Both halves of that
+are now wrong. `dev` was merged into `main` on 2026-09-01 and deleted, so there
+is a single Dockerfile. And the "not yet on prod" half was **already** false
+before that merge: prod's element image was built from `dev` (revision
+`60b037b`), so production has been running all six patches, entries 2–4
+included, since it adopted that build.
+
+A tag bump must try every patch in this file's order.
 
 ---
 
@@ -138,7 +146,7 @@ refreshing the `dev` Dockerfile.
 
 ### 6. `browser-eventindex.patch` — UPSTREAM-TRACKED (PR #34718 open; carry until merged)
 
-- **Applied by:** `dev` Dockerfile and `main` Dockerfile (prod).
+- **Applied by:** `dockerfiles/Dockerfile.element` (the only one).
 - **What:** a `BrowserEventIndexManager` implementing Element's
   `BaseEventIndexManager` so `WebPlatform.getEventIndexingManager()` is
   non-null and `supportsEventIndexing()` is true. The stock Search UX and
@@ -246,8 +254,9 @@ against a pristine tree, in Dockerfile order):
 | 5 | `auto-approve-check-code` | applies clean, carried |
 | 6 | `browser-eventindex` | **forward-ported** (context-only; see entry 6) |
 
-Verified afterwards in BOTH apply orders against a pristine v1.12.26 tree: the `dev`
-order (all six) and the `main`/prod subset (1, 5, 6).
+Verified afterwards in BOTH apply orders against a pristine v1.12.26 tree: the
+all-six order and the then-`main` subset (1, 5, 6). Only the all-six order still
+exists; the subset is kept here as the record of what was checked.
 
 **Verified in the DEPLOYED artifact, not just against a tree (2026-08-31).** "Applies
 clean" only proves a patch can be applied; it does not prove the code reached the

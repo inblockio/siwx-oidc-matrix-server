@@ -218,9 +218,10 @@ then serves the bundle via `nginxinc/nginx-unprivileged` with the inblock.io
 overlay + existing entrypoint (no entrypoint change; a
 `/usr/share/nginx/html -> /app` symlink restores serving).
 **Canonical patch/feature list:** `patches/element-web/README.md` (what / why /
-retirement / which branch's Dockerfile applies it). POLICY patches on both
-`dev` and `main` today include forced first-device 4S recovery and the browser
-EventIndex (hosted E2EE search). v1.12.26 is a pnpm + nx monorepo needing
+retirement). There is ONE Dockerfile and it applies all six patches; the old
+`dev`-applies-six / `main`-applies-three split ended when `dev` was merged into
+`main` on 2026-09-01. POLICY patches include forced first-device 4S recovery and
+the browser EventIndex (hosted E2EE search). v1.12.26 is a pnpm + nx monorepo needing
 Node >=22.18; the builder uses `node:24-bullseye`. To bump Element, update
 `ELEMENT_WEB_TAG` and refresh every listed patch per
 `docs/element-web-source-build.md`. No separate fork is vendored (the source is
