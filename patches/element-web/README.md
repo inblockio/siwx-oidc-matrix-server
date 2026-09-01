@@ -161,8 +161,19 @@ A tag bump must try every patch in this file's order.
   owner-reported prod reset failure (2026-08-01).
 - **Evidence:** siwx-oidc repo `docs/2026-08-01-HANDOVER-elementx-verify-open-question.md`
   §4; `docs/2026-08-02-elementx-verify-RESOLVED-identity-binding-walk.md`.
-- **Upstream status:** NOT upstreamable (deployment policy). The `{}`-tombstone probe
-  semantics are specific to our vendored probes.
+- **Upstream status:** the forced-setup half is NOT upstreamable (deployment policy).
+  The `{}`-tombstone half IS an upstream defect and is already reported.
+- **Tracking:** [element-hq/element-web#29133](https://github.com/element-hq/element-web/issues/29133)
+  "Element offers to verify with Security Key when security key has been deleted",
+  **open**, `T-Defect S-Minor A-E2EE-Cross-Signing`, filed by **richvdh (Element's
+  crypto lead)** 2025-01-29, no activity since. Its repro sets
+  `m.secret_storage.default_key` to `{}`: the exact tombstone our probes handle.
+  Do not file a duplicate.
+- **No upstream fix is coming for the root cause.** MSC3391 ("API to delete account
+  data", matrix-spec-proposals#3391) was **closed after FCP with no maintainer
+  interest**, and matrix-js-sdk `setDefaultKeyId` documents the `{}`-as-delete
+  convention as deliberate. So the tombstone half of this patch is effectively
+  permanent, not "carry until fixed". Verified 2026-09-01.
 - **Retirement:** only if upstream ships an equivalent forced-recovery deployment option.
 - **Coverage:** Element suite journey walks (first-login wizard legs, reset-after-no-
   recovery walk) exercise the forced wizard on every login.
@@ -179,7 +190,15 @@ A tag bump must try every patch in this file's order.
   observed at 1.12.20); still applies cleanly at 1.12.24 **and at 1.12.26** (2026-08-30
   bump) — i.e. upstream has NOT restructured or fixed the Busy handling, so the
   retirement condition below is NOT met and the patch is carried forward unchanged.
-- **Upstream status:** not yet filed — file against element-hq/element-web.
+- **Upstream status:** related upstream report exists; ours is not separately filed.
+- **Tracking:** [element-hq/element-web#29553](https://github.com/element-hq/element-web/issues/29553)
+  "In verification dialog, 'Verify with Recovery Key or Phrase' does nothing if 4S
+  secrets are encrypted with the wrong 4S key", **open**, **`S-Major`**, filed by
+  **richvdh**, last updated 2025-08-22, still unfixed after a year. Same symptom class
+  (recovery-key verification silently dead-ends) but a **different trigger**: theirs is
+  a 4S key mismatch, ours is `Phase.Busy` after a verification that already SUCCEEDED.
+  Treat as related, not identical. #30551 was closed as a duplicate of it.
+  Verified 2026-09-01.
 - **Retirement:** a tag bump where the patch no longer applies because upstream
   restructured/fixed the Busy handling, or an upstream fix lands. Drop, don't port.
 - **Coverage:** `ew-verify-sas.spec.mjs` leg 8; H3-C completes SAS through the patched path.
@@ -197,7 +216,13 @@ A tag bump must try every patch in this file's order.
   or file server bugs for a client-side state.
 - **Evidence:** siwx-oidc repo
   `docs/audits/2026-07-25-verify-with-other-device-gap-evaluation.md` §4.2.3 + §6.2(6).
-- **Upstream status:** not yet filed — this misleads every MSC4108 deployment; file it.
+- **Upstream status:** not filed, and **searched 2026-09-01: no upstream match exists**,
+  so filing fresh carries no duplicate risk. Searched the literal
+  "Not supported by your account provider" string, `SessionManagerTab`,
+  `isCrossSigningReady`, and MSC4108 QR disabled-reason. Nearest adjacent item is
+  [#28371](https://github.com/element-hq/element-web/issues/28371), **closed as
+  not-planned**, which is about the *login* flow rather than the Link-new-device
+  section, so it is not our bug. Filing is gated: see "Upstream filing policy" above.
 - **Retirement:** upstream replaces the blanket "not supported" string with a
   crypto-state-aware reason.
 - **Coverage:** `ew-patch-honesty.spec.mjs` PH-0/PH-1 (siwx-oidc repo).
@@ -215,7 +240,21 @@ A tag bump must try every patch in this file's order.
   identity resets — the amplifier pattern of the 2026-06-12 incident.
 - **Evidence:** siwx-oidc repo `docs/audits/2026-07-25-R4-recheck-verdict.md`;
   incident analysis referenced in CLAUDE.md (device lifecycle section).
-- **Upstream status:** not yet filed — patch is already PR-shaped (carries a test edit).
+- **Upstream status:** not filed, and **searched 2026-09-01: no upstream match exists**.
+  Patch is already PR-shaped (carries the upstream unit-test edit), so it is the
+  cheapest of the three to file. Nearest adjacent item is
+  [#30755](https://github.com/element-hq/element-web/issues/30755) "Don't offer to
+  verify other devices if we don't have all the secrets", **open**, which is the
+  *inverse* concern (other devices, not the current one) and does not cover ours.
+  Filing is gated: see "Upstream filing policy" above.
+- **Follow-up before the next bump:** [#29258](https://github.com/element-hq/element-web/issues/29258)
+  closed via **merged PR #30596** (2025-09-12), a redesign of the verify-device modal
+  that landed in the same UI area this patch touches. It reportedly does not alter the
+  `isVerified === null` branch, but that could NOT be confirmed from source (GitHub code
+  search requires login). **Manually diff `DeviceVerificationStatusCard.tsx` against this
+  patch at the next Element bump.** This is the one patch whose clean application is
+  strong evidence of continued necessity, because it edits an upstream unit test, so a
+  silent shift here matters more than elsewhere.
 - **Retirement:** upstream accepts the PR or fixes the null-handling equivalently.
 - **Coverage:** `ew-patch-honesty.spec.mjs` PH-0/PH-2 (siwx-oidc repo).
 
@@ -227,6 +266,9 @@ A tag bump must try every patch in this file's order.
 - **Why:** removes a pointless interaction from the QR device-link ceremony.
 - **Evidence:** dev-staging QR walk friction, 2026-08-01.
 - **Upstream status:** UX opinion; could be proposed upstream as behavior or option.
+  **Searched 2026-09-01: no upstream issue or PR exists** for MSC4108 check-code
+  auto-approval, in element-web, element-desktop, the archived matrix-react-sdk, or
+  matrix-authentication-service. Filing fresh is safe. See also the keep ruling above.
 - **Retirement:** upstream streamlines the check-code step.
 - **Coverage:** exercised by the QR-link browser walks (check-code leg).
 
