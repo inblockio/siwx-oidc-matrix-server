@@ -40,6 +40,56 @@ Rules of this registry:
 
 ---
 
+## Upstream filing policy (ruling, 2026-09-01)
+
+Three patches (2, 3, 4) are marked "not yet filed upstream". **Do not file them
+yet.** Filing is gated on the outcome of entry 6.
+
+**The reasoning:** upstream engagement has an unknown price here. Rather than
+pay it three more times on faith, entry 6 (`browser-eventindex`,
+element-hq/element-web PR **#34718**) is the pilot. Its outcome decides whether
+filing is worth repeating.
+
+- **If #34718 succeeds** -> file 2, 3 and 4. Entry 4 goes first: it is already
+  PR-shaped and carries the upstream unit-test edit, so it is the cheapest.
+- **If #34718 fails** -> do NOT file the others. Carry them as vendored patches
+  and stop treating "not yet filed" as a TODO.
+
+**The gate must be evaluable, so define the outcomes rather than eyeballing it:**
+
+| Outcome | Meaning |
+|---|---|
+| SUCCESS | Merged, **or** a maintainer explicitly commits to merging it after changes. |
+| FAILURE | Closed unmerged, explicitly rejected, **or** no maintainer engagement for 3 months. |
+| AMBIGUOUS | Maintainers want a substantially different implementation. Engagement works but costs more than one PR's worth; re-decide, do not auto-file. |
+
+**Evaluate at the next Element tag bump, or 2026-12-01, whichever comes first.**
+Without a date this becomes an indefinite wait and the three patches stay in
+limbo by default.
+
+**Baseline as of 2026-09-01** (so drift is measurable, not remembered):
+
+- #34718 open, not draft, not merged. Opened 2026-08-15, last activity
+  2026-08-31.
+- CI **green** (4 passed, 2 skipped, 0 failed). `mergeable_state: unstable`
+  reflects a pending required check, NOT a broken build. Nothing here is
+  blocked on us.
+- 9 conversation comments, **0 review comments**. Discussion is at the
+  should-we/how-should-we level, not line-by-line review.
+- Labels `T-Enhancement`, `Z-Community-PR`. Framed as a feature rather than a
+  defect, and flagged as an outside contribution, both of which historically
+  move slower than maintainer-authored fixes.
+
+## Entry 5: keep (ruling, 2026-09-01)
+
+`auto-approve-check-code` was challenged on cost/benefit: it is the only patch
+here that fixes no defect, it modifies an MSC4108 device-linking security
+ceremony, and it carries a standing re-review obligation at every Element bump,
+all to remove one click. **Ruled: keep it.** The deliberate read-and-type of the
+check code is the security property; the extra Continue click is not, and the
+ceremony friction it removes is worth the maintenance. Recorded so this is not
+re-litigated each time someone audits the registry.
+
 ## What runs on prod today
 
 **All six patches are built into the production image and all six are active on
