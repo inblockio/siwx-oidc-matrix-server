@@ -365,6 +365,62 @@ Still open: converting this to a small compose file so the edge stops being an
 undeclared container. Deliberately not done during the 2026-09-01 window, to
 keep that change to a single variable.
 
+### Testing the TURN server for real (not just the TLS handshake)
+
+An `openssl s_client` against `turn.matrix.inblock.io:443` proves only that TLS
+terminates with the right certificate. It does NOT prove TURN works. Two cheaper
+checks and one real one, in increasing strength:
+
+1. **Routing discriminator (no credentials needed).** `curl https://turn.matrix.inblock.io/`
+   must **hang and return `http_code=000`**, while another host through the same
+   edge returns promptly. A TURN backend does not speak HTTP, so a hang is the
+   pass condition. If it returns an HTTP status, layer4 is NOT intercepting that
+   SNI and the request fell through to the cert-automation site block.
+2. **`Starting TURN server` in the LiveKit log**, with the expected
+   `turn.portTLS: 5349`, `turn.portUDP: 3478`, `turn.externalTLS: true`.
+3. **A real allocation.** `scripts/turnprobe/main.go` mints LiveKit TURN
+   credentials with LiveKit's own scheme and performs an actual TURN `Allocate`
+   over TLS. This is the only check that exercises the whole chain.
+
+Neither box has Go, so run the prober in a container **on the target host**, so
+the LiveKit key and secret never leave it. Hairpin NAT works on prod, so a probe
+run there still traverses the public path (DNS -> :443 -> Caddy layer4 -> SNI
+split -> plaintext -> `livekit:5349`).
+
+```bash
+# copy the prober to the target, then, ON that host:
+cd /tmp/turnprobe
+umask 077
+KEY=$(grep -oE '^LIVEKIT_KEY=.*'    <stack>/.env | head -1 | cut -d= -f2- | tr -d '"')
+SEC=$(grep -oE '^LIVEKIT_SECRET=.*' <stack>/.env | head -1 | cut -d= -f2- | tr -d '"')
+printf 'LK_KEY=%s\nLK_SECRET=%s\nTURN_PROBE_HOST=turn.matrix.inblock.io\n' "$KEY" "$SEC" > .lkenv
+unset KEY SEC
+docker run --rm --network host -v /tmp/turnprobe:/src -w /src --env-file /tmp/turnprobe/.lkenv \
+  golang:1.24-alpine sh -c '
+    go mod init probe >/dev/null 2>&1
+    go get github.com/jxskiss/base62@latest github.com/pion/turn/v4@latest >/dev/null 2>&1
+    go run main.go "$LK_KEY" "$LK_SECRET"'
+shred -u .lkenv
+```
+
+Use an **env-file, not `-e` flags**: `-e KEY=value` puts the secret on the
+`docker run` command line, where any local user can read it out of `ps`.
+
+Passing output, prod, 2026-09-01:
+
+```
+TLS OK: cipher=1301 verified-chains-present=true peer-cn=turn.matrix.inblock.io
+ALLOCATION OK: relayed address = 142.93.168.4:34967
+```
+
+**The relay range is deliberately not exposed.** LiveKit allocates relays from
+`30000-40000`, and that range is neither published by the compose `ports:` map
+nor allowed in ufw, on prod OR on dev-staging where this design was validated.
+That is correct, not an oversight: the client-to-TURN leg runs over the TLS
+connection on 443, and the relay is used between the embedded TURN server and
+LiveKit's own SFU inside the container. Clients never address the relay
+directly. Do not "fix" this by opening 30000-40000/udp.
+
 ## Data Loss Impact Assessment
 
 | Data | Location | Backed Up? | Impact if Lost |
