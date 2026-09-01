@@ -61,10 +61,13 @@ RUN git apply --verbose /tmp/ew-verify-offer.patch
 COPY patches/element-web/auto-approve-check-code.patch /tmp/ew-checkcode.patch
 RUN git apply --verbose /tmp/ew-checkcode.patch
 
-# Encrypted-room search for hosted Element Web (dev-staging only). Implements
-# BaseEventIndexManager so supportsEventIndexing() is true on
-# dev.element.inblock.io. Independent of the other patches (new files +
-# WebPlatform.ts). See patches/element-web/README.md.
+# Encrypted-room search for hosted Element Web. Implements BaseEventIndexManager
+# so supportsEventIndexing() is true. NOT dev-staging-only: the hostname check
+# (STAGING_HOSTS) is only the fallback when features.feature_inblock_encrypted_search
+# is UNSET. An explicit `true` overrides it, and prod sets exactly that, so this
+# is LIVE on element.inblock.io (verified 2026-09-01 against the served
+# config.json). Independent of the other patches (new files + WebPlatform.ts).
+# See patches/element-web/README.md, "What runs on prod today".
 COPY patches/element-web/browser-eventindex.patch /tmp/ew-eventindex.patch
 RUN git apply --verbose /tmp/ew-eventindex.patch
 

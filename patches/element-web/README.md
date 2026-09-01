@@ -40,6 +40,42 @@ Rules of this registry:
 
 ---
 
+## What runs on prod today
+
+**All six patches are built into the production image and all six are active on
+`element.inblock.io`.** Verified 2026-09-01 against the deployed artifact
+(`element-web@sha256:d7ba8b7b`, label `org.opencontainers.image.revision=60b037b`)
+and the config prod actually serves.
+
+| # | Patch | Purpose | Active on prod |
+|---|---|---|---|
+| 1 | `force-first-device-recovery` | Makes 4S recovery-key setup **mandatory on the first device**, so every later device has cross-signing secrets to join against. Deployment policy, permanent. | yes, ungated |
+| 2 | `setup-encryption-busy-wedge` | Recovers from an upstream post-verification `Phase.Busy` dead end that is indistinguishable from "verification failed" to the user. | yes, ungated |
+| 3 | `honest-qr-disabled-reason` | When "Show QR code" is blocked by **this session's own** crypto state, stop reporting it as the account provider not supporting device link. The stock string is simply false for us and hides the actual remedy. | yes, ungated |
+| 4 | `offer-verify-current-session` | `DeviceVerificationStatusCard` gave an unverified **current** session a card with no action and no reason, leaving the destructive identity reset as the only visible exit. | yes, ungated |
+| 5 | `auto-approve-check-code` | MSC4108 QR device-link check-code auto-approves once both digits are typed. The deliberate read-and-type is the security property; the extra confirm click is not. | yes, ungated |
+| 6 | `browser-eventindex` | A `BrowserEventIndexManager` implementing `BaseEventIndexManager` so E2EE room search works in hosted Element Web. Upstream PR #34718. | **yes, via explicit flag** |
+
+Entry 6 is the only gated one, and the gate is easy to read backwards:
+
+```
+flag === false  -> off
+flag === true   -> ON, and this OVERRIDES the hostname check
+flag unset      -> on only for STAGING_HOSTS (dev.element.inblock.io, localhost, 127.0.0.1)
+```
+
+Prod serves `features.feature_inblock_encrypted_search: true`, so encrypted
+search is **on in production by explicit opt-in**. dev-staging leaves the flag
+unset and gets it from the `STAGING_HOSTS` fallback. Both are on, by different
+mechanisms. Any comment claiming this patch is "dev-staging only" or "gated off
+on the production hostname" describes only the unset-flag fallback and is wrong
+about prod as configured.
+
+To turn it off in production, set the flag to `false` in prod's bind-mounted
+`config/element-config.json`. Removing the key is NOT equivalent: it falls
+through to the hostname check, which also yields off, but only by accident of
+prod's hostname not being in `STAGING_HOSTS`.
+
 ## Which Dockerfile applies what
 
 **One Dockerfile, all six patches.** `dockerfiles/Dockerfile.element` on `main`
