@@ -31,15 +31,20 @@ EIP-191, Ed25519, or P-256 keys.
 > the live A/V hardening). Runbook, evidence and rollback:
 > `docs/superpowers/plans/2026-08-31-prod-cutover-siwx-oidc-0.7.0.md`.
 >
-> **Dev staging 2026-09-25** (dev-aquafire, `~/matrix-staging`): runs **Synapse
-> 1.161.0** `synapse@sha256:4b830a74…` (`rev=0db1740`, pinned via `.env`),
-> **Element Web 1.12.29** `element-web@sha256:6f399c36…` (`rev=0786800`, same
-> A+B+C+D-core+E patch content), **LiveKit v1.13.7**, **lk-jwt-service 0.7.0**
-> (healthcheck re-enabled) and **Redis 8.10.2**, the last four pinned LITERALLY in
-> the box's compose file. All of it is merged to `main` (PRs #9-#11), and
-> `docker-compose.dev-staging.yml` defaults to exactly these digests. **Prod
-> promotion of this set is PENDING** (Tim's call). The dev deploy timer is stopped
-> and pins by digest, so a `:main` push does not reach dev either.
+> **Dev staging 2026-09-25** (dev-aquafire, `~/matrix-staging`): runs the exact
+> `:main` digests (rev `0a58e7e`) that go to prod: **Synapse 1.161.0**
+> `synapse@sha256:2f1b6c17…`, **Element Web 1.12.29** `element-web@sha256:8cea1873…`
+> (A+B+C+D-core+E, content-identical to the branch builds 4b830a74…/6f399c36… tested
+> first), **LiveKit v1.13.7**, **lk-jwt-service 0.7.0** (healthcheck on), **Redis
+> 8.10.2**, and siwx-oidc pinned by digest (`siwx-oidc@sha256:7610f878…`, rev 17d1461).
+> The box's `.env` is the single source of truth for every image ref and its compose is
+> `docker-compose.dev-staging.yml` verbatim (whose defaults are these digests).
+> **The dev auto-pull (`matrix-staging-deploy.timer`) is RETIRED** (disabled,
+> 2026-09-25): a `:main` push reaches neither box. Deploy dev like prod: edit one
+> digest in `.env`, `up --dry-run`, `up -d --no-deps <svc>` (any `.env` edit also
+> recreates Synapse via `env_file`). See `docs/2026-07-30-dev-staging-dev-aquafire.md`
+> §9. **Prod promotion of this set is planned for 2026-09-25 ~21:30 UTC**, gated on
+> Tim's explicit go.
 >
 > **Caddyfiles carry `rate_limit` blocks that NO running Caddy can parse**
 > (since 42dac7b). Neither box's Caddy has the caddy-ratelimit module; only the
