@@ -409,6 +409,8 @@ customisation survived: brand `inblock.io Chat`, `permalink_prefix`
 `element_call.use_exclusively` with no hardcoded `url` so the local SFU is used,
 `feature_inblock_encrypted_search: true`, `force_verification: true`,
 `sso_redirect_options.immediate: true`.
+(2026-09-25 note: that key was renamed to `feature_web_event_index` on
+2026-09-13; the old key is read by nothing.)
 
 ### Rollback for these two
 
