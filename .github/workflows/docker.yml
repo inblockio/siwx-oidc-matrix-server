@@ -82,7 +82,15 @@ jobs:
   # Deploys the just-published `main` images to the dev-staging box
   # (dev-aquafire, 207.154.209.103). Only fires on an actual push to `main`
   # (not tag pushes or GitHub releases, both of which also satisfy the `on:
-  # push` trigger above) or an explicit manual dispatch.
+  # push` trigger above) or an explicit manual dispatch OF `main`.
+  #
+  # A dispatch of any other branch builds branch-tagged images only
+  # (`:<branch>`, `:sha-<sha>`; `latest` is gated on the default branch and no
+  # rule emits `:main`), so a deploy from it could only re-converge the box on
+  # the `.env` pins it already has. It is therefore never wanted, and it would
+  # turn "build me a candidate image" into a touch of a box carrying real users
+  # the day DEV_STAGING_DEPLOY_KEY is configured. Stage a branch image by
+  # pinning its digest in the box's SYNAPSE_IMAGE_REF / ELEMENT_IMAGE_REF.
   #
   # The SSH key is a dedicated, restricted deploy key (see
   # docs/2026-07-30-dev-staging-dev-aquafire.md, "CI auto-deploy — pending
@@ -98,7 +106,7 @@ jobs:
   deploy-dev-staging:
     name: Deploy to dev-staging
     needs: build-and-push
-    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' }}
+    if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
     steps:
       # Secret-presence guard: DEV_STAGING_DEPLOY_KEY does not exist yet
