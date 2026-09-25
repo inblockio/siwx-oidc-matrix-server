@@ -40,16 +40,15 @@ services:
   redis:
     # REDIS_IMAGE_REF: env-overridable digest-pinned ref — same pattern as
     # SYNAPSE_IMAGE_REF/ELEMENT_IMAGE_REF in docker-compose.dev-staging.yml.
-    # Default = what production currently runs (redis:latest resolving to
-    # this digest, Redis 8.8.0, verified 2026-07-31 via `docker inspect` +
-    # `redis-server --version` on agentic.inblock.io), so prod's next
-    # `docker compose up -d` with no override is a no-op, not a surprise
-    # upgrade. Do NOT bump this default without a deliberate compat check:
-    # dev-staging independently runs a NEWER redis (8.10.0, digest
-    # 077ba791...) against its own AOF file, and the two have already
-    # diverged — a downgrade of either box against an existing AOF is a
-    # data-loss risk, not just a version bump.
-    image: ${REDIS_IMAGE_REF:-redis:latest@sha256:aa049e689e141a4358ad1d4562dc49c88a89fbab711fd8fcc33f684c80b26301}
+    # Default (2026-09-25) = the version TESTED on dev-staging: redis 8.10.2
+    # (Docker Official Image; index digest cross-checked against
+    # docker-library/repo-info). PROD DOES NOT RUN THIS: it runs redis 8.8.0
+    # (redis:latest@sha256:aa049e68..., verified 2026-07-31) and pins it via
+    # REDIS_IMAGE_REF in /home/deploy/matrix/stack/.env, which wins over this
+    # default. Taking prod to the default is a deliberate forward upgrade
+    # (8.8 -> 8.10 against prod's AOF) and needs its own promotion step; a
+    # DOWNGRADE of either box against an existing AOF is a data-loss risk.
+    image: ${REDIS_IMAGE_REF:-redis:8.10.2@sha256:d5ac52db24d4e70566fe9944f22cf5bdc2bc739b05c0f426335161ea6c23f3b3}
     command: redis-server --appendonly yes
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -126,7 +125,11 @@ services:
   livekit:
     # Pinned: an unpinned :latest jumps SFU versions on any `docker compose pull`
     # (deploy.sh), which can change call behavior unannounced. Bump deliberately.
-    image: livekit/livekit-server:v1.13.6
+    # Default (2026-09-25) = v1.13.7 tag@digest, the version TESTED on
+    # dev-staging. Prod runs v1.12.0 (its stack dir carries server-local
+    # edits); LIVEKIT_IMAGE_REF in prod's .env is the place to pin it, and the
+    # move to v1.13.x is its own promotion step.
+    image: ${LIVEKIT_IMAGE_REF:-livekit/livekit-server:v1.13.7@sha256:6fd3b7088874c4d119160dd688798dfec852bc014786d392caad15f6f63912a3}
     restart: unless-stopped
     command: --config /etc/livekit.yaml
     environment:
@@ -166,17 +169,14 @@ services:
 
   lk-jwt-service:
     # LK_JWT_IMAGE_REF: env-overridable digest-pinned ref, same pattern as
-    # REDIS_IMAGE_REF above. Default = what production currently runs
-    # (verified 2026-07-31 via `docker inspect` on agentic.inblock.io;
-    # dev-staging runs the SAME digest, so this default is safe for both
-    # boxes' next `up -d`).
-    # Tag is "0.5.0": GHCR drops the "v" of the v0.5.0 release (2026-06-03), and
-    # both `0.5.0` and `latest` resolved to the digest below when checked
-    # against the GHCR API on 2026-08-01. Same bytes as the previous pin — this
-    # only replaces the moving `latest` label, so a `compose pull` can no longer
-    # change call behavior unannounced (which is how the hard
-    # LIVEKIT_FULL_ACCESS_HOMESERVERS requirement below arrived unnoticed).
-    image: ${LK_JWT_IMAGE_REF:-ghcr.io/element-hq/lk-jwt-service:0.6.0@sha256:822f0c03a3bdd924da92afc2e8ec59de5dda17af42d32e71e11f269c3517abf7}
+    # REDIS_IMAGE_REF above. Default (2026-09-25) = lk-jwt-service 0.7.0 (Rust
+    # rewrite; GHCR index digest), the version TESTED on dev-staging. PROD
+    # DOES NOT RUN THIS: it runs 0.5.0, pinned via LK_JWT_IMAGE_REF in its .env.
+    # 0.7.0 behaviour change (#222): only LIVEKIT_FULL_ACCESS_HOMESERVERS users
+    # and local users may publish; federated users get subscribe-only tokens.
+    # When prod is promoted to 0.7.0, re-enable the healthcheck below exactly
+    # as docker-compose.dev-staging.yml does (0.7.0's helper works, #215).
+    image: ${LK_JWT_IMAGE_REF:-ghcr.io/element-hq/lk-jwt-service:0.7.0@sha256:e0c7cecfa74e2342a3e79d47e1d4ab4bd228fe05b1a4dc4ba7f807686b0c214b}
     restart: unless-stopped
     environment:
       # MUST stay the PUBLIC wss:// URL — do not "fix" it to http://livekit:7880.
@@ -211,6 +211,9 @@ services:
     # gate fails EVERY converge, wedging dev-staging CD. Disabling restores
     # the 0.5.0 behaviour this service was always documented to have
     # ("no healthcheck by design"); probe /healthz externally instead.
+    # Still disabled HERE on purpose (2026-09-25): prod's .env pins 0.5.0, and
+    # this file must not start health-gating an image it was never verified
+    # against. Re-enable together with the prod 0.7.0 promotion.
     healthcheck:
       disable: true
     depends_on:
