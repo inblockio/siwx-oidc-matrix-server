@@ -20,7 +20,7 @@ The rules are the same as `patches/element-web/README.md`, and for the same reas
 
    ```bash
    # Fetch the two files at the new tag and dry-run every patch against them.
-   TAG=v1.160.0
+   TAG=v1.161.0
    d=$(mktemp -d); mkdir -p "$d/synapse/config" "$d/synapse/handlers"
    for f in config/experimental handlers/profile; do
      curl -sSf "https://raw.githubusercontent.com/element-hq/synapse/$TAG/synapse/$f.py" \
@@ -36,6 +36,20 @@ The rules are the same as `patches/element-web/README.md`, and for the same reas
    forward-porting: a patch that no longer applies often means upstream changed
    that code — check whether they merged it, and if so DROP the patch rather than
    porting it by reflex.
+
+   Then run the patch's own regression tests against an upstream checkout of the
+   new tag carrying the patch (a clone under `~/.cache`, never `/tmp`), together
+   with upstream's profile suites:
+
+   ```bash
+   cd <synapse-checkout-at-TAG>
+   patch -p1 --forward --batch --fuzz=0 < "$REPO/patches/synapse/msc4133-profile-field-write-policy.patch"
+   cp "$REPO/patches/synapse/tests/test_msc4133_write_policy.py" tests/handlers/
+   poetry install    # --extras all needs pg_config; not required for SQLite tests
+   poetry run trial -j8 tests.handlers.test_msc4133_write_policy \
+     tests.rest.client.test_profile tests.handlers.test_profile \
+     tests.storage.test_profile tests.config.test_experimental tests.rest.synapse.mas
+   ```
 5. **`patch`, not `git apply`.** `matrixdotorg/synapse:v1.159.0` ships neither
    `git` nor `patch` (verified 2026-09-10), and the installed tree under
    `site-packages/` is not a git repository. The Dockerfile installs `patch` and
@@ -117,7 +131,33 @@ upstream test files, and the changelog.
 `f043c26fb`, 2026-08-14). Backporting an older revision would produce a guard that
 blocks *our own* admin write.
 
-**Applies cleanly to v1.159.0** — verified, not assumed. The PR's merge base
+**Forward-ported to v1.161.0 (2026-09-25).** Two `handlers/profile.py` hunks stopped
+applying: upstream #20135 changed the tail of `set_field` (the helper's anchor), and
+#20172 inserted a user-existence lookup (`404 M_NOT_FOUND` for a user that does not
+exist) directly after the ownership check where our guard sits. The guard code and
+its messages are byte-identical to the PR; only the anchors moved. The policy
+decision, recorded in the patch header:
+
+- **Our 403 runs before upstream's 404.** A non-admin write of a listed field is
+  refused `403 M_FORBIDDEN` whatever the store says about the target user, with no
+  database read. Authorization precedes resource lookup (upstream's own ownership
+  403 also precedes the 404), and the policy is a property of the field, not of the
+  user's row.
+- **Admins are unchanged.** `by_admin` is still exempt, so siwx-oidc's minted admin
+  token and the MAS API still write `io.inblock.did`; a write for a user that does not
+  exist gets upstream's 404 exactly as on stock 1.161.0.
+- **The status code stays 403 for PUT and DELETE.** Upstream #20173 moved its own
+  "profile changes are disabled" refusals (`enable_set_displayname` /
+  `enable_set_avatar_url`) from 400 to 403 per the spec, which is the code this guard
+  always used, so we are now consistent with upstream rather than divergent. Upstream's
+  own ownership check in `delete_profile_field` still says 400; it precedes our guard
+  and is not ours to change.
+
+No other 1.160/1.161 change adds a custom-field write path around the guarded methods
+(every caller still funnels through `set_profile_field` / `delete_profile_field`,
+replication included).
+
+**Applied cleanly to v1.159.0** (the original backport) — verified, not assumed. The PR's merge base
 (`c0357de4e`) carries `handlers/profile.py` and `config/experimental.py`
 **byte-identical** to tag `v1.159.0`, so all five hunks land at their exact upstream
 offsets under `--fuzz=0`. It does **not** apply to 1.157.x: `handlers/profile.py` is
@@ -152,7 +192,14 @@ merged version is a no-op for our config.
    must stay user-owned. The three-tier identity model (alias / MXID / DID) is
    therefore enforced structurally, not by convention.
 
-**Test coverage.** `siwx-oidc/tests/e2e_did_field_live.rs` (`--ignored`, run against
+**Test coverage.** `patches/synapse/tests/test_msc4133_write_policy.py` (7 trial
+tests, run per the bump procedure above): the real field name on the stable REST route
+for PUT and DELETE, the admin exemption, a stored value surviving a user overwrite and
+delete, and the 403-before-404 ordering. It fails on unpatched 1.161.0 (3 failures) and
+when the guard is moved after the existence lookup (verified by mutation, 2026-09-25).
+Upstream's own PR tests (`tests/rest/client/test_profile.py`,
+`tests/config/test_experimental.py` from #19980) also pass against the forward-port.
+End to end: `siwx-oidc/tests/e2e_did_field_live.rs` (`--ignored`, run against
 the local e2e harness): a user token's PUT and DELETE of `io.inblock.did` each answer
 403 `M_FORBIDDEN`, while siwx-oidc's minted admin token still writes it successfully,
 and an unprotected control field remains user-writable.
@@ -192,6 +239,17 @@ image whose build applies the patch with `--fuzz=0`, so a build that loses the
 patch produces no image at all. An image carrying the guard necessarily carries
 the patched Synapse. The only way to pair the two is to bind-mount the entrypoint
 into a stock image, which is exactly what the acceptance script does on purpose.
+
+**Rollback (1.161.0 to 1.159.0).** Schema-compatible: `SCHEMA_VERSION` 94 and
+`SCHEMA_COMPAT_VERSION` 84 at both tags. But 1.161 queues three background updates
+that 1.159 has no handler for (`device_lists_changes_in_room_unconverted_idx`,
+`e2e_cross_signing_signatures_remove_duplicates`,
+`e2e_cross_signing_signatures_add_key_id_to_index`). If they are still pending, 1.159
+logs `Error doing update` five times and stops running background updates altogether
+(the server keeps serving). Check before rolling back:
+the image has no `sqlite3` CLI, so
+`docker compose exec matrix_synapse python -c "import sqlite3; print(sqlite3.connect('/data/homeserver.db').execute('SELECT update_name FROM background_updates').fetchall())"`
+must not list any of the three.
 
 **Retirement condition.** #19980 (or a successor implementing issue #18525) merges
 and ships in a Synapse release we have adopted, with the guard still exempting
