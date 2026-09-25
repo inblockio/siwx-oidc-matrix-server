@@ -334,7 +334,7 @@ apply_did_field_protection() {
   # so that adopting the merged PR is a no-op for this config.
 
   # The field name must satisfy Synapse's Common Namespaced Identifier Grammar
-  # (1.159.0 util/stringutils.py:53, enforced by is_namedspaced_grammar() at
+  # (1.159.0 util/stringutils.py:53, unchanged at 1.161.0; enforced by is_namedspaced_grammar() at
   # rest/client/profile.py:138/179/240 on EVERY custom-field GET/PUT/DELETE).
   # A name that fails it is unreachable on the C-S API for everybody — including
   # siwx-oidc's own admin PUT — so a denylist carrying one is inert and the whole
@@ -400,6 +400,18 @@ apply_matrixrtc_config() {
   yq -i ".rc_message.burst_count = 30" /data/homeserver.yaml
 
   # MatrixRTC transport: LiveKit SFU
+  #
+  # Synapse 1.161.0 DEPRECATES `livekit_service_url` and adds an optional sibling
+  # `url` (the SFU WebSocket URL). We deliberately keep `livekit_service_url`
+  # and do NOT write `url`: upstream says to keep listing the deprecated key for
+  # older clients, and a client that sees `url` switches to reaching the LiveKit
+  # authorization service through the C-S API, which only works when
+  # lk-jwt-service is registered as an application service. Ours is not (it
+  # runs as a plain HTTP service behind /livekit/jwt), so adding `url` would
+  # break calls for exactly the newer clients. Adopt `url` together with the
+  # appservice registration, never on its own. 1.161 also starts validating
+  # every transport entry (strict strings, and a livekit transport needs `url`
+  # or `livekit_service_url`), which the two keys below satisfy.
   yq -i ".matrix_rtc.transports[0].type = \"livekit\"" /data/homeserver.yaml
   yq -i ".matrix_rtc.transports[0].livekit_service_url = \"https://${MATRIX_HOST}/livekit/jwt\"" /data/homeserver.yaml
 }
@@ -465,7 +477,7 @@ fi
 # owned by the WARNING above plus /start.py's own explicit "Config file does not
 # exist" error, and stealing it would replace a precise diagnosis with a vaguer
 # one. (`/start.py` with no args is run-mode and never rewrites the config —
-# verified against v1.159.0's start.py, which only generates in `generate` /
+# verified against v1.159.0's start.py (docker/ unchanged at 1.161.0), which only generates in `generate` /
 # `migrate_config` modes — so there is no post-gate write to worry about.)
 # -----------------------------------------------------------------------------
 if [ -f /data/homeserver.yaml ]; then
