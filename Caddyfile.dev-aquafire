@@ -1,6 +1,25 @@
 ##############################################################################
 # Caddyfile.dev-aquafire
 #
+# !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+# DO NOT APPLY THIS FILE TO A BOX YET (recorded 2026-09-25).
+#
+# Since 42dac7b this file carries `rate_limit` blocks (the edge limiter for the
+# public GET /resolve on the siwx vhost). `rate_limit` is NOT stock Caddy: it
+# needs the caddy-ratelimit module, which only the CI-built caddy-l4 image
+# from 42dac7b onward contains (ghcr.io/inblockio/siwx-oidc-matrix-server/
+# caddy-l4, dockerfiles/Dockerfile.caddy-l4). NEITHER running Caddy has it:
+# dev-aquafire runs `caddy-l4:2.11.4-l4v0.1.2` built on the box, prod runs
+# portal-caddy-1. A Caddy without the module REFUSES TO PARSE the file, so a
+# reload fails (at best) or a restart takes every vhost on the box down.
+#
+# Order of operations: first ship and run a Caddy image that has the module,
+# verify `caddy list-modules | grep rate_limit` inside the running container,
+# THEN reload with this file. Until then the live file on each box stays the
+# version without the limiter (dev: ~/caddy-proxy/Caddyfile.dev-aquafire).
+# Reload in place, never `mv` over the bind-mounted file (inode trap).
+# !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+#
 # Static Caddy config for the dev-aquafire box (207.154.209.103). This Caddy
 # REPLACES nginx-proxy + acme-companion (containers `aqua_proxy` / `aqua_acme`,
 # docker-gen VIRTUAL_HOST pattern) as the box's SOLE reverse proxy + TLS
@@ -623,5 +642,35 @@ draw.inblock.io {
     encode zstd gzip
     import hsts
     import legacy_body_limit
-    reverse_proxy excalidraw:80
+
+    # Share links ("Share -> Export to Link"), served SAME-ORIGIN.
+    #
+    # Excalidraw's share feature was broken here until 2026-09-02: the stock
+    # image posts the scene to https://json.excalidraw.com/api/v2/post/, and
+    # that backend (github.com/excalidraw/excalidraw-store) returns an
+    # Access-Control-Allow-Origin header only for five hardcoded
+    # excalidraw.com-family origins. Verified live against the real endpoint:
+    #
+    #   Origin: https://excalidraw.com   -> access-control-allow-origin: https://excalidraw.com
+    #   Origin: https://draw.inblock.io  -> no ACAO header at all
+    #
+    # so the browser blocked the response and the app showed "Couldn't create
+    # shareable link". Nothing Caddy can send on OUR responses affects that
+    # allowlist -- CORS is enforced on the *other* server's response. The fix is
+    # to stop calling their backend: the frontend image is patched to use the
+    # relative path /api/v2/, which lands here, and this route sends it to our
+    # own excalidraw-store. Same origin means there is no CORS check left to
+    # fail.
+    #
+    # This route MUST come before the catch-all: without it /api/v2/* falls
+    # through to the excalidraw nginx, which 404s, and sharing breaks again.
+    # Deployment: /home/dev/excalidraw/ (docker-compose project `excalidraw`),
+    # source in this repo under deploy/dev-aquafire/excalidraw/.
+    handle /api/v2/* {
+        reverse_proxy excalidraw-store:8080
+    }
+
+    handle {
+        reverse_proxy excalidraw:80
+    }
 }
