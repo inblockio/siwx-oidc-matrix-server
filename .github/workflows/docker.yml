@@ -112,9 +112,10 @@ jobs:
       # Secret-presence guard: DEV_STAGING_DEPLOY_KEY does not exist yet
       # (pending PAT rotation, see docs/2026-07-30-dev-staging-dev-aquafire.md
       # §9). Without this guard every push-to-main run of this job would go
-      # red. The box's pull-model systemd timer (matrix-staging-deploy.timer)
-      # is the primary auto-deploy mechanism in the meantime, so a missing
-      # secret here is expected steady state, not a failure — this job SKIPS
+      # red. Since 2026-09-25 dev-staging does NOT auto-deploy at all (the
+      # box's matrix-staging-deploy.timer is retired; deploys are manual,
+      # digest-pinned .env edits), so a missing secret here is the intended
+      # steady state, not a failure — this job SKIPS
       # cleanly (green) rather than erroring, and every step below is gated
       # on the same condition.
       - name: Check deploy key configured
@@ -154,4 +155,4 @@ jobs:
       - name: Deploy skipped (secret not configured)
         if: steps.check-secret.outputs.ok != 'true'
         run: |
-          echo "::notice title=Push-model deploy skipped::DEV_STAGING_DEPLOY_KEY is not set in this repo, so the push-model CI deploy is dormant. The dev-staging box converges via its own pull-model systemd timer (matrix-staging-deploy.timer, polls every 5 minutes) instead. See docs/2026-07-30-dev-staging-dev-aquafire.md section 9 to enable this job once the secret exists." | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "::notice title=Push-model deploy skipped::DEV_STAGING_DEPLOY_KEY is not set in this repo, so the push-model CI deploy is dormant. dev-staging is deployed manually by digest-pinned .env edits (the matrix-staging-deploy.timer auto-pull was retired 2026-09-25). See docs/2026-07-30-dev-staging-dev-aquafire.md section 9." | tee -a "$GITHUB_STEP_SUMMARY"

@@ -48,23 +48,21 @@ services:
     # (element-web:sha-4a3d434 drifted from the bytes originally deployed
     # under that tag), so tag-only pinning is not sufficient — see
     # .env.dev-staging.example and docs/2026-07-30-dev-staging-dev-aquafire.md.
-    # Defaults (2026-09-25) = the digests dev-staging runs and tested, so a
-    # fresh checkout reproduces the tested stack rather than whatever `:main`
-    # resolves to today. Synapse 1.161.0 = rev 0db1740 (branch
-    # chore/synapse-1.161, merged to main 2026-09-25). THE BOX pins this one via
-    # SYNAPSE_IMAGE_REF in its .env (same digest).
+    # Defaults (2026-09-25) = the `:main` digests (rev 0a58e7e) that dev-staging
+    # runs and that go to production, so a fresh checkout reproduces the tested
+    # stack rather than whatever `:main` resolves to today. Synapse 1.161.0,
+    # functionally identical to the branch build 4b830a74... (rev 0db1740) that
+    # was tested first. Rollback on the box: 4b830a74... (same 1.161.0 content).
     #
-    # !! THE BOX DOES NOT RUN THIS FILE VERBATIM (2026-09-25). Its compose pins
-    # redis, element-web, livekit and lk-jwt-service LITERALLY (no ${VAR}),
-    # because its .env is also matrix_synapse's env_file: editing .env would
-    # recreate Synapse on the next `up -d`. Its .env still carries STALE
-    # ELEMENT_IMAGE_REF (5fab1bcb..., 1.12.26) and LK_JWT_IMAGE_REF (0.6.0)
-    # values that the literal pins supersede. So before replacing the box's
-    # compose with this file, update those two .env values at an attended
-    # Synapse recreate, or this file's ${VAR} lookups will pick the stale
-    # .env values over the defaults below (and lk-jwt 0.6.0 would fail the
-    # healthcheck this file re-enables).
-    image: ${SYNAPSE_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/synapse@sha256:4b830a744c74a58dcfe0c72e94254300c1acd4cab9b68b93e9d81438b99b2b97}
+    # THE BOX RUNS THIS FILE VERBATIM (since 2026-09-25) and its .env is the
+    # single source of truth: every service's *_IMAGE_REF is set there to a
+    # digest, so these defaults only matter for a fresh checkout. Deploys are
+    # manual and digest-pinned (the matrix-staging-deploy.timer auto-pull is
+    # RETIRED): edit one *_IMAGE_REF in .env, `up --dry-run`, then
+    # `up -d --no-deps <svc>`. Remember .env is ALSO matrix_synapse's env_file,
+    # so ANY .env edit recreates Synapse at its next `up`: plan it (see
+    # docs/2026-07-30-dev-staging-dev-aquafire.md section 9).
+    image: ${SYNAPSE_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/synapse@sha256:2f1b6c17406c6031d16436287527524df7b095cfd2ea954f9fd4594fe959552a}
     restart: unless-stopped
     expose:
       - "${MATRIX_PORT}"
@@ -94,10 +92,9 @@ services:
     # REDIS_IMAGE_REF: same env-overridable digest-pin pattern as
     # SYNAPSE_IMAGE_REF/ELEMENT_IMAGE_REF above. Default (2026-09-25) = what
     # THIS BOX runs: redis 8.10.2 (Docker Official Image; index digest
-    # cross-checked against docker-library/repo-info). The box pins it
-    # LITERALLY in its compose and ALSO carries the same digest in .env. Prod
-    # runs an OLDER redis (8.8.0, aa049e68...) against its own AOF, so never
-    # copy this default to prod without a deliberate upgrade step; a
+    # cross-checked against docker-library/repo-info), set in the box's .env.
+    # Production is upgraded 8.8.0 -> 8.10.2 in a deliberate, backed-up step
+    # (runbook 2026-09-25-prod-promotion); 8.10 data files are one-way, so a
     # downgrade of either box against a live AOF is a data-loss risk.
     image: ${REDIS_IMAGE_REF:-redis:8.10.2@sha256:d5ac52db24d4e70566fe9944f22cf5bdc2bc739b05c0f426335161ea6c23f3b3}
     command: redis-server --appendonly yes
@@ -118,6 +115,7 @@ services:
     # have proven republishable and `:main`/`:dev` can resolve to different
     # bytes than the ones validated, so a tag name may misdescribe the image.
     # Defaults to :main so a fresh checkout with no overrides still starts.
+    # The box pins it by digest in .env (no longer the floating :dev tag).
     image: ${SIWX_OIDC_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc:main}
     restart: unless-stopped
     depends_on:
@@ -162,10 +160,11 @@ services:
 
   element-web:
     # See SYNAPSE_IMAGE_REF comment above — same split-var rationale.
-    # Default (2026-09-25) = Element Web v1.12.29, rev 0786800 (A+B+C+D-core+E
-    # browser EventIndex, same patch content as 1.12.26), the digest this box
-    # runs and pins LITERALLY. Rollback: sha256:5fab1bcb... (1.12.26).
-    image: ${ELEMENT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/element-web@sha256:6f399c365f4268dffef53e8c54a1139a7615e6adf05c57a548a3a62ae7bccc95}
+    # Default (2026-09-25) = Element Web v1.12.29 `:main` build, rev 0a58e7e
+    # (A+B+C+D-core+E browser EventIndex, same content as the branch build
+    # 6f399c36... rev 0786800 tested first), the digest this box runs via .env.
+    # Rollback: 6f399c36... (same 1.12.29 content), then 5fab1bcb... (1.12.26).
+    image: ${ELEMENT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/element-web@sha256:8cea1873e57402701958100f79bff0f7f9672012c05c33bf1bf4c8972538c393}
     restart: unless-stopped
     environment:
       MATRIX_BASE_URL: ${MATRIX_BASE_URL}
@@ -192,7 +191,7 @@ services:
     # Pinned: an unpinned :latest jumps SFU versions on any `docker compose pull`,
     # which can change call behavior unannounced. Bump deliberately.
     # 2026-09-25: v1.13.7, tag@digest (Docker Hub index digest), the version
-    # this box runs and pins LITERALLY. LIVEKIT_IMAGE_REF overrides.
+    # this box runs (LIVEKIT_IMAGE_REF in its .env, same digest).
     image: ${LIVEKIT_IMAGE_REF:-livekit/livekit-server:v1.13.7@sha256:6fd3b7088874c4d119160dd688798dfec852bc014786d392caad15f6f63912a3}
     restart: unless-stopped
     command: --config /etc/livekit.yaml
@@ -248,9 +247,8 @@ services:
   lk-jwt-service:
     # LK_JWT_IMAGE_REF: same env-overridable digest-pin pattern as
     # REDIS_IMAGE_REF above. Default (2026-09-25) = lk-jwt-service 0.7.0 (Rust
-    # rewrite; GHCR index digest), the version this box runs and pins
-    # LITERALLY. Its .env still says 0.6.0 (inert while the literal pin
-    # stands, see the SYNAPSE_IMAGE_REF note). Rollback: 0.6.0@sha256:822f0c03...
+    # rewrite; GHCR index digest), the version this box runs via .env.
+    # Rollback: 0.6.0@sha256:822f0c03...
     # AND restore `healthcheck: disable: true` below.
     # 0.7.0 behaviour change (#222): only LIVEKIT_FULL_ACCESS_HOMESERVERS users
     # and local users may publish; federated users get subscribe-only tokens.

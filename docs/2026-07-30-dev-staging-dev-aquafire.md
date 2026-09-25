@@ -17,7 +17,8 @@ commands.
   passes.
 - Secrets are generated ON THE BOX, never committed, never pasted into
   chat/CI logs.
-- Do not rely on watchtower; deploys are explicit (`docker compose pull && up -d`).
+- Do not rely on watchtower; deploys are explicit. Since 2026-09-25 they are
+  also digest-pinned and manual (the auto-pull timer is retired, see §9).
 - Never reboot this box as part of any procedure here.
 
 ---
@@ -712,9 +713,54 @@ stack (H5 pre-check).
 
 ## 9. CI auto-deploy (T5)
 
-**Status: the box auto-deploys today, with no GitHub secret involved.**
-Auto-deploy has two independent mechanisms, and only one of them is
-currently live:
+> **RETIRED 2026-09-25 (Tim's decision). dev-staging no longer auto-deploys.**
+> `matrix-staging-deploy.timer` is **disabled and stopped**
+> (`sudo systemctl disable --now matrix-staging-deploy.timer`; the `.service`
+> is `static`, so nothing starts it and a reboot does not re-arm it). Dev now
+> follows the same explicit, digest-pinned promotion model as prod.
+>
+> **Why:** the timer ran `ci-deploy.sh` (`compose pull && up -d`) every 5 min
+> against floating tags (`synapse:main`/`:dev`, `siwx-oidc:dev`). Dev drifted
+> away from what had been tested, and services restarted for real users
+> unannounced, including mid-call.
+>
+> **How to deploy now.** On the box, `~/matrix-staging/.env` is the **single
+> source of truth**: `SYNAPSE_`, `ELEMENT_`, `SIWX_OIDC_`, `REDIS_`, `LIVEKIT_`
+> and `LK_JWT_IMAGE_REF` are all `@sha256:` pins, and the compose file is this
+> repo's `docker-compose.dev-staging.yml` verbatim (no literal pins).
+>
+> ```sh
+> cd ~/matrix-staging
+> C="docker compose -p matrix-staging -f docker-compose.dev-staging.yml"
+> cp -p .env .env.bak-$(date -u +%Y%m%d)-<why>   # backup; edit IN PLACE, never mv over .env
+> #   ...change ONE *_IMAGE_REF to the new digest...
+> docker pull <new ref>                           # pre-pull, no effect on running services
+> $C up --dry-run                                 # name exactly what will recreate
+> python3 ~/.cache/lkrooms.py                     # active_rooms=0 before touching the call path
+> $C up -d --no-deps <svc>
+> $C up --dry-run                                 # must predict ZERO recreates afterwards
+> ```
+>
+> **Caveat:** `.env` is also `matrix_synapse`'s `env_file`, so ANY `.env`
+> edit recreates Synapse (~20 s) at its next `up`. Batch `.env` edits and
+> recreate Synapse deliberately, first, in a no-active-calls moment. Gates
+> after a change: public federation/`/version`, aqua-e2e 13/13 plus
+> `AQUA_E2E_FORCE_RELAY=1` 13/13, `scripts/element-deploy-audit.sh` 0 FAIL,
+> clean logs. Record in the box's backup bundle `APPLIED.md`/`ROLLBACK.md`.
+> Box-side note: `/home/dev/AUTO-PULL-RETIRED.md`.
+>
+> **Re-enable** (only by a deliberate decision):
+> `sudo systemctl enable --now matrix-staging-deploy.timer`. With every ref
+> digest-pinned it would be a no-op anyway. The push-model job below is still
+> dormant (the repo has no `DEV_STAGING_DEPLOY_KEY` secret, checked
+> 2026-09-25); if it is ever wired, it too only converges to the pinned `.env`.
+>
+> Everything below in this section is the **historical** (2026-07-30 to
+> 2026-09-25) design, kept for context.
+
+**Status (historical, until 2026-09-25): the box auto-deployed, with no
+GitHub secret involved.** Auto-deploy had two independent mechanisms, and
+only one of them was live:
 
 - **Pull-model systemd timer (PRIMARY, live now).** `matrix-staging-deploy.timer`
   runs on the box itself, polling `ci-deploy.sh` on a schedule. It needs no
@@ -1099,9 +1145,10 @@ promotion or recovery on this stack, dev-staging or prod.
      pair that would fight Caddy for 80/443, on this box, today. Any future
      runbook or agent touching that directory must restate this, not assume
      the reader (human or agent) remembers it from here.
-   - The **CI timer semantics** in §9 (pull-model
-     `matrix-staging-deploy.timer` as PRIMARY convergence mechanism; the
-     push-model `deploy-dev-staging` CI job as SECONDARY and dormant without
+   - The **deploy semantics** in §9 (since 2026-09-25: NO auto-deploy, the
+     pull-model `matrix-staging-deploy.timer` is RETIRED and dev converges
+     only by a manual, digest-pinned `.env` edit + `up -d --no-deps <svc>`;
+     the push-model `deploy-dev-staging` CI job is dormant without
      `DEV_STAGING_DEPLOY_KEY`) are the current source of truth for "how does
      dev-staging actually converge." Re-verify both still hold — which
      mechanism is primary, whether the secret has since been wired in —
