@@ -260,6 +260,7 @@ rejects it. Keep the slash in `Caddyfile.production`, `Caddyfile.local`, and
 **Element Web is built from source (not the prebuilt image).**
 `dockerfiles/Dockerfile.element` is a multi-stage build that clones
 `element-hq/element-web` at a pinned tag (`ARG ELEMENT_WEB_TAG`, currently
+`v1.12.29` on branch `chore/element-web-1.12.29`; the live images are still
 `v1.12.26`), applies the vendored patches in `patches/element-web/`
 (`git apply --verbose`, fail-loud), runs `pnpm --filter element-web build`,
 then serves the bundle via `nginxinc/nginx-unprivileged` with the inblock.io
@@ -272,7 +273,7 @@ retirement). There is ONE Dockerfile and it applies all six patches; the old
 The browser EventIndex (hosted E2EE search) is NOT policy: it is the one
 UPSTREAM-TRACKED entry (element-web PR #34718), it is gated by the labs flag
 `feature_web_event_index` (default off) since the patch was regenerated on
-2026-09-12, and it retires when that PR merges. v1.12.26 is a pnpm + nx monorepo needing
+2026-09-12, and it retires when that PR merges. Element Web is a pnpm + nx monorepo needing
 Node >=22.18; the builder uses `node:24-bullseye`. To bump Element, update
 `ELEMENT_WEB_TAG` and refresh every listed patch per
 `docs/element-web-source-build.md`. No separate fork is vendored (the source is

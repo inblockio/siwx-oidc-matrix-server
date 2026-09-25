@@ -14,7 +14,7 @@
 # ---------------------------------------------------------------------------
 FROM node:24-bullseye AS builder
 
-ARG ELEMENT_WEB_TAG=v1.12.26
+ARG ELEMENT_WEB_TAG=v1.12.29
 
 WORKDIR /src
 
@@ -43,7 +43,8 @@ RUN git clone --depth 1 --branch "${ELEMENT_WEB_TAG}" \
 #
 # Order matters only for en_EN.json, which five of them touch in different
 # places; applied in this order every hunk lands (verified against a pristine
-# v1.12.26 tree, 2026-08-30). Registry with why/evidence/retirement per patch:
+# v1.12.26 tree, 2026-08-30, and a pristine v1.12.29 tree, 2026-09-25).
+# Registry with why/evidence/retirement per patch:
 # patches/element-web/README.md — no patch ships without an entry there.
 COPY patches/element-web/force-first-device-recovery.patch /tmp/ew.patch
 RUN git apply --verbose /tmp/ew.patch
@@ -90,9 +91,9 @@ RUN git apply --verbose /tmp/ew-checkcode.patch
 # BaseEventIndexManager.ts, indexing/EventIndex.ts and their tests as well as the
 # new files, so it is neither independent of the en_EN.json ordering above nor
 # confined to files only this feature owns. indexing/EventIndex.ts in particular
-# differs between v1.12.26 and upstream develop, so a tag bump must re-check that
-# the 3-way apply has not imported unrelated develop changes -- entry 6 says what
-# to look for.
+# drifts between tags and upstream develop (v1.12.29 now carries develop's two
+# awaited addRoomCheckpoint calls), so a tag bump must re-check that the only
+# delta in that file is our shouldCrawl work -- entry 6 says what to look for.
 # See patches/element-web/README.md, entry 6.
 COPY patches/element-web/browser-eventindex.patch /tmp/ew-eventindex.patch
 RUN git apply --verbose /tmp/ew-eventindex.patch

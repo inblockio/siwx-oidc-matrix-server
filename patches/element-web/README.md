@@ -274,6 +274,23 @@ A tag bump must try every patch in this file's order.
   patch at the next Element bump.** This is the one patch whose clean application is
   strong evidence of continued necessity, because it edits an upstream unit test, so a
   silent shift here matters more than elsewhere.
+- **Forward-ported to v1.12.29 (2026-09-25).** `DeviceVerificationStatusCard.tsx` is
+  byte-identical at v1.12.26 and v1.12.29 (the follow-up diff above is therefore done:
+  no upstream change to the `isVerified === null` branch). The only port is the test:
+  upstream moved `test/unit-tests/.../DeviceVerificationStatusCard-test.tsx` to vitest at
+  `src/components/views/settings/devices/DeviceVerificationStatusCard.test.tsx` (#34848),
+  and the hunk now targets that file. Added/removed lines are identical to the v1.12.26
+  patch.
+- **Known red upstream tests, PRE-EXISTING (not caused by the port):** this patch renders
+  `{blockedByCurrentSession && ...}` beside the button, so `DeviceSecurityCard` receives
+  a children array and renders an **empty** `mx_DeviceSecurityCard_actions` div where it
+  used to render none. Four upstream snapshots fail on that (2 in
+  `DeviceVerificationStatusCard.test.tsx`, 2 in `SessionManagerTab.test.tsx`). Reproduced
+  identically on v1.12.26 with the live patch set (jest, 2026-09-25), so prod has shipped
+  the empty div since this patch landed. Cosmetic; fix or re-snapshot when this is filed
+  upstream. Patches 1 and 5 carry the same kind of pre-existing red: `MatrixChat.test.tsx`
+  "unskippable verification" x2 (forced 4S recovery replaces the Complete Security screen)
+  and `LoginWithQR.test.tsx` "reciprocate" x2 (check-code auto-approve changes the props).
 - **Retirement:** upstream accepts the PR or fixes the null-handling equivalently.
 - **Coverage:** `ew-patch-honesty.spec.mjs` PH-0/PH-2 (siwx-oidc repo).
 
@@ -650,6 +667,36 @@ A tag bump must try every patch in this file's order.
     `coldScanSessions` (the session `Map`) and `pageColdScanSession` — not as the
     type itself, which TypeScript erased. Property names, method names, store
     names and string literals are the reliable class of marker here.
+- **TAG BUMP to v1.12.29, 2026-09-25 (same A+B+C+D-core+E content, no new
+  increment).** Provenance is unchanged (`7280a73f90`); the added/removed lines are
+  byte-identical to the third-carry patch except for the three mechanical ports below,
+  so every gate and bundle marker of the third carry still describes this code.
+  1. `apps/web/src/settings/Settings.tsx`: the interface hunk's trailing context line
+     was `"feature_custom_themes": IFeature;`, which upstream deleted (#34703, custom
+     themes promoted to devtools). Context re-pointed to the next line
+     (`"feature_exclude_insecure_devices"`); the inserted `feature_web_event_index`
+     entry, its labs group, levels and default are unchanged.
+  2. `SearchWarning-test.tsx` was deleted in the Jest->Vitest move (#34839). The hunks
+     now target `apps/web/src/components/views/elements/SearchWarning.test.tsx`, with
+     `jest.useFakeTimers` / `jest.advanceTimersByTimeAsync` -> `vi.*` and `vi` added to
+     the vitest import. **All SearchWarning coverage is now VITEST**, so the old
+     "SearchWarning is jest, run both runners" gotcha no longer applies at this tag.
+  3. Patch regenerated from the applied tree (`git diff -O <original file order>`) so
+     offsets and index lines match v1.12.29.
+  - **Base-drift re-check (the `indexing/EventIndex.ts` hazard):** v1.12.29 now itself
+    contains develop's two `await this.addRoomCheckpoint(...)` (#34586,
+    no-floating-promises). The patch applied **without** `--3way`, and the only delta
+    in the file is still our `shouldCrawl` work (`+47/-3`), so nothing else leaked in.
+    The upstream `await`s do not touch the lines the crawl bound changes.
+  - **Gates on v1.12.29 with all eight patches applied:** vitest **294/294**
+    (`BrowserEventIndexManager`, `WebPlatform`, `eventIndexBounds`, `ElectronPlatform`,
+    `PWAPlatform`, `EventIndex`) and **48/48** (`SearchWarning`, `EventIndexPanel`,
+    `RoomSearchAuxPanel`, all vitest now), the same totals as the third carry; `tsc
+    --noEmit` 0 errors in project sources (7, all inside `node_modules/matrix-js-sdk`);
+    `oxlint` clean on every touched file; `pnpm run i18n` regenerates to zero diff;
+    `node --test scripts/browser-eventindex-invariants.mjs` 12/12. One timing test
+    (`per-flush cost ... < 10 ms`) read 12.4 ms under a 28-file parallel run and passed
+    3/3 in isolation.
 - **Upstream status: FILED AND ACTIVELY TRACKED — we are trying to get this
   merged.** [element-hq/element-web#34718](https://github.com/element-hq/element-web/pull/34718)
   "Add a browser EventIndex so encrypted-room search works on the web"

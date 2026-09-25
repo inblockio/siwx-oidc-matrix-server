@@ -70,10 +70,10 @@ index 87cb911..21cb9cd 100644
      );
  };
 diff --git a/apps/web/src/i18n/strings/en_EN.json b/apps/web/src/i18n/strings/en_EN.json
-index 64938cb..824f263 100644
+index 3397af7..494582a 100644
 --- a/apps/web/src/i18n/strings/en_EN.json
 +++ b/apps/web/src/i18n/strings/en_EN.json
-@@ -2987,6 +2987,7 @@
+@@ -2937,6 +2937,7 @@
              "verified_sessions_explainer_1": "Verified sessions have been confirmed your digital identity.",
              "verified_sessions_explainer_2": "This means that you have all the keys needed to unlock your encrypted messages and confirm to other users that you trust this session.",
              "verified_sessions_list_description": "For best security, remove any session that you don't recognize or use anymore.",
@@ -81,11 +81,11 @@ index 64938cb..824f263 100644
              "verify_session": "Verify session",
              "web_session": "Web session"
          },
-diff --git a/apps/web/test/unit-tests/components/views/settings/devices/DeviceVerificationStatusCard-test.tsx b/apps/web/test/unit-tests/components/views/settings/devices/DeviceVerificationStatusCard-test.tsx
-index 4059c9a..17f267a 100644
---- a/apps/web/test/unit-tests/components/views/settings/devices/DeviceVerificationStatusCard-test.tsx
-+++ b/apps/web/test/unit-tests/components/views/settings/devices/DeviceVerificationStatusCard-test.tsx
-@@ -48,14 +48,19 @@ describe("<DeviceVerificationStatusCard />", () => {
+diff --git a/apps/web/src/components/views/settings/devices/DeviceVerificationStatusCard.test.tsx b/apps/web/src/components/views/settings/devices/DeviceVerificationStatusCard.test.tsx
+index 1f9abbf..c6c02bf 100644
+--- a/apps/web/src/components/views/settings/devices/DeviceVerificationStatusCard.test.tsx
++++ b/apps/web/src/components/views/settings/devices/DeviceVerificationStatusCard.test.tsx
+@@ -46,14 +46,19 @@ describe("<DeviceVerificationStatusCard />", () => {
              expect(getByText("Verify your current session for enhanced secure messaging.")).toBeTruthy();
          });
  

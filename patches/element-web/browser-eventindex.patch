@@ -530,10 +530,10 @@ index 091a32e..ccff106 100644
      }
  
 diff --git a/apps/web/src/i18n/strings/en_EN.json b/apps/web/src/i18n/strings/en_EN.json
-index e89b35d..dc68b83 100644
+index 84dcab5..0ff72dd 100644
 --- a/apps/web/src/i18n/strings/en_EN.json
 +++ b/apps/web/src/i18n/strings/en_EN.json
-@@ -1569,6 +1569,8 @@
+@@ -1577,6 +1577,8 @@
          "video_rooms_faq2_answer": "Yes, the chat timeline is displayed alongside the video.",
          "video_rooms_faq2_question": "Can I use text chat alongside the video call?",
          "video_rooms_feedbackSubheading": "Thank you for trying the beta, please go into as much detail as you can so we can improve it.",
@@ -542,7 +542,7 @@ index e89b35d..dc68b83 100644
          "wysiwyg_composer": "Rich text editor"
      },
      "labs_mjolnir": {
-@@ -2418,9 +2420,11 @@
+@@ -2427,9 +2429,11 @@
          "reset_title": "Reset event store?",
          "warning_kind_files": "This version of %(brand)s does not support viewing some encrypted files",
          "warning_kind_files_app": "Use the <a>Desktop app</a> to see all encrypted files",
@@ -875,7 +875,7 @@ index 3b284cd..69078e8 100644
  
  /**
 diff --git a/apps/web/src/indexing/EventIndex.ts b/apps/web/src/indexing/EventIndex.ts
-index 6b6f351..de53e9e 100644
+index 73a855a..6884210 100644
 --- a/apps/web/src/indexing/EventIndex.ts
 +++ b/apps/web/src/indexing/EventIndex.ts
 @@ -68,6 +68,17 @@ export default class EventIndex extends EventEmitter {
@@ -968,7 +968,7 @@ index 6b6f351..de53e9e 100644
              // a sync with limited room timelines happens, so go back to sleep.
              if (checkpoint === undefined) {
 diff --git a/apps/web/src/settings/Settings.tsx b/apps/web/src/settings/Settings.tsx
-index 08aac45..39dfaa5 100644
+index fe75a94..f9aedf6 100644
 --- a/apps/web/src/settings/Settings.tsx
 +++ b/apps/web/src/settings/Settings.tsx
 @@ -214,6 +214,7 @@ export interface Settings {
@@ -978,8 +978,8 @@ index 08aac45..39dfaa5 100644
 +    "feature_web_event_index": IFeature;
      "feature_wysiwyg_composer": IFeature;
      "feature_mjolnir": IFeature;
-     "feature_custom_themes": IFeature;
-@@ -474,6 +475,15 @@ export const SETTINGS: Settings = {
+     "feature_exclude_insecure_devices": IFeature;
+@@ -476,6 +477,15 @@ export const SETTINGS: Settings = {
          supportedLevelsAreOrdered: true,
          default: false,
      },
@@ -13921,11 +13921,20 @@ index 0000000..1da2422
 +export function setEventIndexBoundsOverrideForTesting(override: Partial<EventIndexBounds> | null): void {
 +    overrideForTesting = override;
 +}
-diff --git a/apps/web/test/unit-tests/components/views/elements/SearchWarning-test.tsx b/apps/web/test/unit-tests/components/views/elements/SearchWarning-test.tsx
-index 6722bd0..86dea50 100644
---- a/apps/web/test/unit-tests/components/views/elements/SearchWarning-test.tsx
-+++ b/apps/web/test/unit-tests/components/views/elements/SearchWarning-test.tsx
-@@ -20,15 +20,38 @@ import { SearchScope } from "../../../../../src/Searching";
+diff --git a/apps/web/src/components/views/elements/SearchWarning.test.tsx b/apps/web/src/components/views/elements/SearchWarning.test.tsx
+index 6fa8152..addd7c0 100644
+--- a/apps/web/src/components/views/elements/SearchWarning.test.tsx
++++ b/apps/web/src/components/views/elements/SearchWarning.test.tsx
+@@ -9,7 +9,7 @@ Please see LICENSE files in the repository root for full details.
+ 
+ // @vitest-environment happy-dom
+ 
+-import { describe, it, expect, afterEach, beforeEach } from "vitest";
++import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
+ import { act, render } from "test-utils-rtl";
+ import React from "react";
+ import { type Room } from "matrix-js-sdk/src/matrix";
+@@ -23,15 +23,38 @@ import { SearchScope } from "../../../Searching";
  const SEARCHED_ROOM = "!searched:example.org";
  const OTHER_ROOM = "!other:example.org";
  const PARTIAL_WARNING = "Results may be incomplete because your search index is still being built.";
@@ -13934,7 +13943,7 @@ index 6722bd0..86dea50 100644
 +// SearchWarning's `loading` disjunct polls getStats() on a 1s interval while it is true (there is
 +// no event for hydration finishing, unlike changedCheckpoint) -- see SearchWarning.tsx's
 +// LOADING_POLL_MS. Fake timers let the tests below advance past that without a real 1s wait.
-+jest.useFakeTimers();
++vi.useFakeTimers();
  
  /**
   * A minimal fake EventIndex exposing only the surface that SearchWarning consumes:
@@ -13965,7 +13974,7 @@ index 6722bd0..86dea50 100644
      /**
       * @param crawling Rooms with an outstanding crawler checkpoint.
       * @param indexed Rooms the index holds events for. Defaults to `undefined`, meaning
-@@ -47,6 +70,30 @@ class FakeEventIndex {
+@@ -50,6 +73,30 @@ class FakeEventIndex {
          return this.indexed === undefined ? undefined : this.indexed.includes(roomId);
      }
  
@@ -13996,7 +14005,7 @@ index 6722bd0..86dea50 100644
      public on(event: string, listener: (...args: any[]) => void): void {
          if (!this.listeners.has(event)) this.listeners.set(event, new Set());
          this.listeners.get(event)!.add(listener);
-@@ -367,6 +414,361 @@ describe("<SearchWarning />", () => {
+@@ -370,6 +417,361 @@ describe("<SearchWarning />", () => {
  
              expect(container).toBeEmptyDOMElement();
          });
@@ -14073,7 +14082,7 @@ index 6722bd0..86dea50 100644
 +            // Hydration finishes. Nothing emits changedCheckpoint -- only the poll can notice.
 +            index.loading = false;
 +            await act(async () => {
-+                await jest.advanceTimersByTimeAsync(1000);
++                await vi.advanceTimersByTimeAsync(1000);
 +            });
 +
 +            expect(queryByText(PARTIAL_WARNING)).not.toBeInTheDocument();
@@ -14098,7 +14107,7 @@ index 6722bd0..86dea50 100644
 +
 +            // Nothing should be armed to poll: advancing time must not conjure the warning either.
 +            await act(async () => {
-+                await jest.advanceTimersByTimeAsync(5000);
++                await vi.advanceTimersByTimeAsync(5000);
 +            });
 +            expect(queryByText(PARTIAL_WARNING)).not.toBeInTheDocument();
 +        });
@@ -14116,7 +14125,7 @@ index 6722bd0..86dea50 100644
 +                    roomId={SEARCHED_ROOM}
 +                />,
 +            );
-+            // No unhandled rejection is asserted implicitly: jest fails the run on one. The rejection
++            // No unhandled rejection is asserted implicitly: vitest fails the run on one. The rejection
 +            // path takes one more microtask hop than the resolved one, so this settles twice.
 +            await settle();
 +            await settle();
@@ -14273,7 +14282,7 @@ index 6722bd0..86dea50 100644
 +                // docstring), so only the poll below can notice it.
 +                index.isSearchPartial = true;
 +                await act(async () => {
-+                    await jest.advanceTimersByTimeAsync(1000);
++                    await vi.advanceTimersByTimeAsync(1000);
 +                });
 +
 +                expect(queryByText(PARTIAL_WARNING)).toBeInTheDocument();
@@ -14297,7 +14306,7 @@ index 6722bd0..86dea50 100644
 +                // A search runs and finds nothing partial; the poll still fires (armed for every
 +                // Search-kind mount now), but has nothing new to report.
 +                await act(async () => {
-+                    await jest.advanceTimersByTimeAsync(1000);
++                    await vi.advanceTimersByTimeAsync(1000);
 +                });
 +
 +                expect(queryByText(PARTIAL_WARNING)).not.toBeInTheDocument();
@@ -14319,7 +14328,7 @@ index 6722bd0..86dea50 100644
 +
 +                index.isSearchPartial = true;
 +                await act(async () => {
-+                    await jest.advanceTimersByTimeAsync(1000);
++                    await vi.advanceTimersByTimeAsync(1000);
 +                });
 +
 +                expect(queryByText(PARTIAL_WARNING)).not.toBeInTheDocument();
@@ -14349,7 +14358,7 @@ index 6722bd0..86dea50 100644
 +
 +                index.isSearchPartial = true;
 +                await act(async () => {
-+                    await jest.advanceTimersByTimeAsync(10000);
++                    await vi.advanceTimersByTimeAsync(10000);
 +                });
 +
 +                expect(queryByText(PARTIAL_WARNING)).toBeInTheDocument();
@@ -14371,10 +14380,10 @@ index 7af3aa1..b3d4646 100644
                      { text: "Room List", link: "/room-list" },
                      { text: "Scrolling", link: "/scrolling" },
 diff --git a/docs/labs.md b/docs/labs.md
-index 7922700..ad0ca5b 100644
+index af21c90..d4c1751 100644
 --- a/docs/labs.md
 +++ b/docs/labs.md
-@@ -134,3 +134,17 @@ Note, this does not affect the existing `Link new device` flow using the same MS
+@@ -125,3 +125,17 @@ Note, this does not affect the existing `Link new device` flow using the same MS
  ## URL Preview Bundle (MSC4095) (`feature_msc4095_url_preview_bundle`)
  
  Attaches URL preview information generated by the homeserver on messages sent.

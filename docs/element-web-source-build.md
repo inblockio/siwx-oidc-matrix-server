@@ -28,8 +28,15 @@ This cannot be applied to a prebuilt image, so we build the source ourselves.
 
 ## Pinned tag
 
-- **Tag:** `v1.12.24` (set as `ARG ELEMENT_WEB_TAG` in `Dockerfile.element`).
-- Element Web v1.12.24 is a pnpm + nx monorepo (`pnpm@10.33.3`, Node >= 22.18).
+- **Tag:** `v1.12.29` (set as `ARG ELEMENT_WEB_TAG` in `Dockerfile.element`).
+- Element Web v1.12.29 is a pnpm + nx monorepo (`pnpm@11.23.0`, Node >= 22.18).
+- Bumped from v1.12.26 on 2026-09-25 for GHSA-9r5h-8m2x-w7q6 (URL-preview
+  sanitisation, fixed 1.12.27) and GHSA-wqmv-r2qj-2j9p (XSS in HTML export,
+  fixed 1.12.28). Two patches were forward-ported because upstream moved their
+  jest tests into vitest (`src/**/*.test.tsx`); see `patches/element-web/README.md`
+  entries 4 and 6. Since 1.12.29 most unit tests are vitest, and the jest
+  suite needs `content-type` added to `transformIgnorePatterns` to run locally
+  (matrix-js-sdk 42.4 pulls the ESM-only content-type 3.0.0).
   The builder uses `node:24-bullseye` to match upstream.
 - Bumped from v1.12.20 on 2026-07-31. v1.12.24 carries upstream PR #33997,
   "Fetch authenticated media through the session". The vendored patch was rebased
