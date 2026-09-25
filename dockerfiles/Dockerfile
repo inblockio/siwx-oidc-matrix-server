@@ -9,7 +9,16 @@
 # first-boot-only). Do NOT roll this image back without also restoring a
 # pre-migration homeserver.yaml: the old entrypoint will not re-create the
 # msc3861 block on an existing volume. Do not float :latest; bump deliberately.
-FROM matrixdotorg/synapse:v1.159.0
+#
+# Bumped to v1.161.0 (2026-09-25, latest stable, released 2026-09-15). Picks up
+# 1.160.0's rustls-webpki / pyo3 advisory updates (GHSA-82j2-j2ch-gfr8,
+# GHSA-36hh-v3qg-5jq4, GHSA-chgr-c6px-7xpp). The MSC4133 patch was forward-ported
+# (its header records the 403-before-404 ordering decision against upstream
+# #20172). DB rollback to v1.159.0 is schema-compatible (SCHEMA_VERSION 94 and
+# SCHEMA_COMPAT_VERSION 84 at both tags), but 1.161 queues three new background
+# updates (9408-9410); roll back only once they have finished, see
+# patches/synapse/README.md "Rollback".
+FROM matrixdotorg/synapse:v1.161.0
 # apt-get (not the apt CLI, which is documented as script-unstable) with
 # --no-install-recommends so this layer stays deterministic in shape. Debian
 # security-repo package versions are not pinned here — pinning wget to an

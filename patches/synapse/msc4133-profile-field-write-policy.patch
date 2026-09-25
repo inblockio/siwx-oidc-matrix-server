@@ -1,5 +1,48 @@
+MSC4133 custom profile field write policy (allow/deny list), for Synapse v1.161.0.
+
+Registry entry, rationale, evidence and retirement condition:
+patches/synapse/README.md, entry 1. Applied by dockerfiles/Dockerfile with
+`patch -p1 --forward --batch --fuzz=0` against the installed site-packages tree.
+Text above the first "diff --git" line is ignored by patch(1).
+
+Source: element-hq/synapse#19980 at head d4758f2d2 (still the head, still open,
+checked 2026-09-25), config/experimental.py + handlers/profile.py hunks only.
+
+Forward-ported from v1.159.0 to v1.161.0 on 2026-09-25. The experimental.py
+hunks and the delete_profile_field hunk are unchanged. Two profile.py hunks were
+re-anchored by hand because upstream changed the surrounding code:
+  - #20135 (d59856b9a): set_field now ends in an `else:` branch that wakes the
+    stream for users with no rooms, so the helper's leading context moved.
+  - #20172 (bd2182381): set_profile_field gained a user-existence lookup that
+    raises 404 M_NOT_FOUND for a user that does not exist, directly after the
+    ownership check where our guard sits.
+The guard's code and its two refusal messages are byte-identical to the PR.
+
+POLICY DECISION, 403 vs upstream's new 403/404 (2026-09-25):
+  1. ORDER: our guard runs BEFORE upstream's #20172 existence lookup. For a
+     non-admin, a listed field is refused 403 M_FORBIDDEN whatever the store
+     says, and the refusal costs no database read. Authorization precedes
+     resource lookup, the same order upstream itself uses (its ownership 403
+     also precedes the 404). The policy is a property of the FIELD, so its
+     answer must not depend on the state of the target user.
+  2. ADMINS: unchanged. The guard exempts by_admin, so siwx-oidc's minted admin
+     token (urn:synapse:admin:*) and the MAS provisioning API still write
+     io.inblock.did; for a user that does not exist they get upstream's 404
+     exactly as on unpatched 1.161.0, with no orphan profile row created.
+  3. STATUS CODE: we keep 403 M_FORBIDDEN for both PUT and DELETE. Upstream
+     #20173 (f94abb692) moved the refusals for enable_set_displayname /
+     enable_set_avatar_url from 400 to 403 with the spec's reasoning ("profile
+     modifications are disabled" is a 403 response of PUT
+     /profile/{userId}/{keyName}), which is the same code this guard always
+     returned. So our refusal is now consistent with upstream's own. Not
+     touched: upstream's ownership check in delete_profile_field still raises
+     400 for another user's profile; that precedes our guard and is upstream's
+     to fix.
+Pinned by patches/synapse/tests/test_msc4133_write_policy.py, which fails if
+the order is swapped (verified by mutation) or the patch is absent.
+
 diff --git a/synapse/config/experimental.py b/synapse/config/experimental.py
-index 6ad9f535179..4424b12720d 100644
+index 1c2f02132..6a2d6d748 100644
 --- a/synapse/config/experimental.py
 +++ b/synapse/config/experimental.py
 @@ -21,7 +21,7 @@
@@ -11,7 +54,7 @@ index 6ad9f535179..4424b12720d 100644
  
  import attr
  
-@@ -244,6 +244,34 @@ def read_config(
+@@ -247,6 +247,34 @@ class ExperimentalConfig(Config):
          # MSC4133: Custom profile fields
          self.msc4133_enabled: bool = experimental.get("msc4133_enabled", False)
  
@@ -47,11 +90,11 @@ index 6ad9f535179..4424b12720d 100644
          self.msc4143_enabled: bool = experimental.get("msc4143_enabled", False)
  
 diff --git a/synapse/handlers/profile.py b/synapse/handlers/profile.py
-index 5f2cec2366f..f33e2283048 100644
+index 112ac4c8c..596bfc5dd 100644
 --- a/synapse/handlers/profile.py
 +++ b/synapse/handlers/profile.py
-@@ -672,6 +672,26 @@ async def set_field(
-                     rooms=room_ids,
+@@ -689,6 +689,26 @@ class ProfileHandler:
+                     users=[target_user],
                  )
  
 +    def _is_profile_field_disallowed(self, field_name: str) -> bool:
@@ -77,7 +120,7 @@ index 5f2cec2366f..f33e2283048 100644
      async def set_profile_field(
          self,
          *,
-@@ -703,6 +723,13 @@ async def set_profile_field(
+@@ -720,6 +740,13 @@ class ProfileHandler:
          if not by_admin and target_user != requester.user:
              raise AuthError(403, "Cannot set another user's profile")
  
@@ -88,10 +131,10 @@ index 5f2cec2366f..f33e2283048 100644
 +                Codes.FORBIDDEN,
 +            )
 +
-         stream_id = await self.store.set_profile_field(
-             target_user,
-             field_name,
-@@ -786,6 +813,13 @@ async def delete_profile_field(
+         # Don't recreate a profile row for a user that does not exist at all;
+         # deactivated (e.g. erased) users do exist, so are allowed through.
+         if await self.store.get_user_by_id(target_user.to_string()) is None:
+@@ -813,6 +840,13 @@ class ProfileHandler:
          if not by_admin and target_user != requester.user:
              raise AuthError(400, "Cannot set another user's profile")
  

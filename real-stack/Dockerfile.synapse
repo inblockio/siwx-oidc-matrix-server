@@ -5,7 +5,8 @@
 # :latest silently jumped Synapse versions on rebuild and broke the config
 # schema once already (1.157.0 removed experimental_features.msc3861).
 # Upgrades are deliberate; keep this in lockstep with dockerfiles/Dockerfile.
-FROM matrixdotorg/synapse:v1.159.0
+# Bumped to v1.161.0 with it on 2026-09-25.
+FROM matrixdotorg/synapse:v1.161.0
 USER root
 RUN apt-get update && apt-get install -y wget curl && apt-get clean
 RUN wget -q https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/bin/yq && chmod +x /usr/bin/yq
