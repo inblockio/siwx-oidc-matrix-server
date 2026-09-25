@@ -4,22 +4,22 @@ Docker Compose deployment stack that runs a Synapse Matrix homeserver fronted by
 siwx-oidc (CAIP-122 OIDC provider) so agents and wallets can authenticate with
 EIP-191, Ed25519, or P-256 keys.
 
-> **Production state as of 2026-09-13**: prod runs **Synapse 1.159.0** (container
-> untouched since 2026-08-31), **Element Web 1.12.26** from
-> `element-web@sha256:162f82bf…` (`rev=7b96f8f`), and **siwx-oidc `548b543`**.
-> That element image carries the browser EventIndex with increments **A, B and C**
-> — non-blocking load, batched writes / O(1) stats / sorted vocabulary, and the
-> crawl window + room cap + resident and disk byte budgets + encrypted recency
-> manifest — all ahead of upstream PR #34718, gated by
+> **Production state as of 2026-09-25** (unchanged since 2026-09-14): prod runs
+> **Synapse 1.159.0** from `synapse@sha256:1258ee60…` (`rev=60b037b`), **Element
+> Web 1.12.26** from `element-web@sha256:5fab1bcb…` (`rev=6a85f71`, deployed
+> 2026-09-14), **LiveKit v1.12.0**, **lk-jwt-service 0.5.0**, **Redis 8.8.0**, and
+> **siwx-oidc `548b543`**. That element image carries the browser EventIndex with
+> increments **A, B, C, D-core and E**, all ahead of upstream PR #34718: the
+> non-blocking load; batched writes / O(1) stats / sorted vocabulary; the crawl
+> window + room cap + resident and disk byte budgets + encrypted recency
+> manifest; the chunked schema v3 (event ids out of the clear; v2 databases are
+> RESET once, not converted); and the cold-tier streamed scan that finds on-disk
+> content outside the 90-day resident window. It is gated by
 > `features.feature_web_event_index: true` in prod's bind-mounted config. It also
-> carries patches 7 and 8 (`show-attested-did`, `resolve-did-search`). Two
-> user-visible consequences of increment C: an existing browser index runs a
-> one-time background migration on first load (~10 s at 200k events, off the start
-> path), and events outside the 90-day hot window are not searchable until the
-> cold-scan increment, with the coverage date shown in the search warning.
-> Previous prod image, and the rollback target: `element-web@sha256:785ab46c…`
-> (`rev=f933e7b`). Promotion record, rollback digests and
-> the `--no-deps` rule that kept Synapse up:
+> carries patches 7 and 8 (`show-attested-did`, `resolve-did-search`). Rollback
+> targets, in order: `element-web@sha256:162f82bf…` (`rev=7b96f8f`, A+B+C), then
+> `element-web@sha256:785ab46c…` (`rev=f933e7b`). Promotion record and the
+> `--no-deps` rule that kept Synapse up:
 > `~/handovers/2026-09-12-element-web-eventindex/research/staging-dev-aquafire.md`
 > and `patches/element-web/README.md` entry 6. The older note below predates this in
 > places, see the `v1.12.24` and MSC3861 sections. Synapse 1.157 removed
@@ -30,6 +30,22 @@ EIP-191, Ed25519, or P-256 keys.
 > that directory** (four tracked files there are modified and uncommitted and carry
 > the live A/V hardening). Runbook, evidence and rollback:
 > `docs/superpowers/plans/2026-08-31-prod-cutover-siwx-oidc-0.7.0.md`.
+>
+> **Dev staging 2026-09-25** (dev-aquafire, `~/matrix-staging`): runs **Synapse
+> 1.161.0** `synapse@sha256:4b830a74…` (`rev=0db1740`, pinned via `.env`),
+> **Element Web 1.12.29** `element-web@sha256:6f399c36…` (`rev=0786800`, same
+> A+B+C+D-core+E patch content), **LiveKit v1.13.7**, **lk-jwt-service 0.7.0**
+> (healthcheck re-enabled) and **Redis 8.10.2**, the last four pinned LITERALLY in
+> the box's compose file. All of it is merged to `main` (PRs #9-#11), and
+> `docker-compose.dev-staging.yml` defaults to exactly these digests. **Prod
+> promotion of this set is PENDING** (Tim's call). The dev deploy timer is stopped
+> and pins by digest, so a `:main` push does not reach dev either.
+>
+> **Caddyfiles carry `rate_limit` blocks that NO running Caddy can parse**
+> (since 42dac7b). Neither box's Caddy has the caddy-ratelimit module; only the
+> CI-built `caddy-l4` image from 42dac7b onward does. Do NOT reload
+> `Caddyfile.dev-aquafire` or `Caddyfile.production` from this repo on a box
+> until a Caddy with the module runs there. See the banner at the top of each file.
 
 ## Build and deployment model
 
@@ -260,7 +276,7 @@ rejects it. Keep the slash in `Caddyfile.production`, `Caddyfile.local`, and
 **Element Web is built from source (not the prebuilt image).**
 `dockerfiles/Dockerfile.element` is a multi-stage build that clones
 `element-hq/element-web` at a pinned tag (`ARG ELEMENT_WEB_TAG`, currently
-`v1.12.29` on branch `chore/element-web-1.12.29`; the live images are still
+`v1.12.29` since 2026-09-25; dev-staging runs it, prod is still on
 `v1.12.26`), applies the vendored patches in `patches/element-web/`
 (`git apply --verbose`, fail-loud), runs `pnpm --filter element-web build`,
 then serves the bundle via `nginxinc/nginx-unprivileged` with the inblock.io

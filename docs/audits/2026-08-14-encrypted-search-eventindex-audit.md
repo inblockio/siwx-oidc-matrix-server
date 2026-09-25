@@ -1,5 +1,11 @@
 # Audit — Encrypted-room search (browser EventIndex)
 
+> **Superseded gate (note added 2026-09-25):** this audit describes the retired
+> `feature_inblock_encrypted_search` key and hostname allowlist. Since
+> 2026-09-13 the only gate is `features.feature_web_event_index` (true in
+> `config/element-config.json`, on both prod and dev-staging); nothing reads the
+> old key. See `patches/element-web/README.md` entry 6.
+
 Date: 2026-08-14
 Target: `dev.element.inblock.io`, then prod `element.inblock.io` after
 explicit 2026-08-15 go-ahead.

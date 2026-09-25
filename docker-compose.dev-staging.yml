@@ -48,9 +48,23 @@ services:
     # (element-web:sha-4a3d434 drifted from the bytes originally deployed
     # under that tag), so tag-only pinning is not sufficient — see
     # .env.dev-staging.example and docs/2026-07-30-dev-staging-dev-aquafire.md.
-    # Defaults track `:main` so a fresh checkout with no overrides still
-    # starts (same fallback behavior the old shared IMAGE_TAG had).
-    image: ${SYNAPSE_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/synapse:main}
+    # Defaults (2026-09-25) = the digests dev-staging runs and tested, so a
+    # fresh checkout reproduces the tested stack rather than whatever `:main`
+    # resolves to today. Synapse 1.161.0 = rev 0db1740 (branch
+    # chore/synapse-1.161, merged to main 2026-09-25). THE BOX pins this one via
+    # SYNAPSE_IMAGE_REF in its .env (same digest).
+    #
+    # !! THE BOX DOES NOT RUN THIS FILE VERBATIM (2026-09-25). Its compose pins
+    # redis, element-web, livekit and lk-jwt-service LITERALLY (no ${VAR}),
+    # because its .env is also matrix_synapse's env_file: editing .env would
+    # recreate Synapse on the next `up -d`. Its .env still carries STALE
+    # ELEMENT_IMAGE_REF (5fab1bcb..., 1.12.26) and LK_JWT_IMAGE_REF (0.6.0)
+    # values that the literal pins supersede. So before replacing the box's
+    # compose with this file, update those two .env values at an attended
+    # Synapse recreate, or this file's ${VAR} lookups will pick the stale
+    # .env values over the defaults below (and lk-jwt 0.6.0 would fail the
+    # healthcheck this file re-enables).
+    image: ${SYNAPSE_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/synapse@sha256:4b830a744c74a58dcfe0c72e94254300c1acd4cab9b68b93e9d81438b99b2b97}
     restart: unless-stopped
     expose:
       - "${MATRIX_PORT}"
@@ -78,16 +92,14 @@ services:
 
   redis:
     # REDIS_IMAGE_REF: same env-overridable digest-pin pattern as
-    # SYNAPSE_IMAGE_REF/ELEMENT_IMAGE_REF above. The DEFAULT here is
-    # production's current digest (conservative fallback for anyone standing
-    # up a fresh checkout without an explicit override) — but THIS BOX does
-    # NOT run that digest. dev-staging independently runs a NEWER redis
-    # (8.10.0, digest 077ba791...) than prod (8.8.0, digest aa049e68...)
-    # against its own AOF file, so /home/dev/matrix-staging/.env sets
-    # REDIS_IMAGE_REF explicitly to dev's own digest — otherwise the default
-    # below would downgrade this box's redis against a live AOF on the next
-    # `up -d`. See docker-compose.yml for the prod-side rationale.
-    image: ${REDIS_IMAGE_REF:-redis:latest@sha256:aa049e689e141a4358ad1d4562dc49c88a89fbab711fd8fcc33f684c80b26301}
+    # SYNAPSE_IMAGE_REF/ELEMENT_IMAGE_REF above. Default (2026-09-25) = what
+    # THIS BOX runs: redis 8.10.2 (Docker Official Image; index digest
+    # cross-checked against docker-library/repo-info). The box pins it
+    # LITERALLY in its compose and ALSO carries the same digest in .env. Prod
+    # runs an OLDER redis (8.8.0, aa049e68...) against its own AOF, so never
+    # copy this default to prod without a deliberate upgrade step; a
+    # downgrade of either box against a live AOF is a data-loss risk.
+    image: ${REDIS_IMAGE_REF:-redis:8.10.2@sha256:d5ac52db24d4e70566fe9944f22cf5bdc2bc739b05c0f426335161ea6c23f3b3}
     command: redis-server --appendonly yes
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -150,7 +162,10 @@ services:
 
   element-web:
     # See SYNAPSE_IMAGE_REF comment above — same split-var rationale.
-    image: ${ELEMENT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/element-web:main}
+    # Default (2026-09-25) = Element Web v1.12.29, rev 0786800 (A+B+C+D-core+E
+    # browser EventIndex, same patch content as 1.12.26), the digest this box
+    # runs and pins LITERALLY. Rollback: sha256:5fab1bcb... (1.12.26).
+    image: ${ELEMENT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/element-web@sha256:6f399c365f4268dffef53e8c54a1139a7615e6adf05c57a548a3a62ae7bccc95}
     restart: unless-stopped
     environment:
       MATRIX_BASE_URL: ${MATRIX_BASE_URL}
@@ -176,7 +191,9 @@ services:
   livekit:
     # Pinned: an unpinned :latest jumps SFU versions on any `docker compose pull`,
     # which can change call behavior unannounced. Bump deliberately.
-    image: livekit/livekit-server:v1.13.6
+    # 2026-09-25: v1.13.7, tag@digest (Docker Hub index digest), the version
+    # this box runs and pins LITERALLY. LIVEKIT_IMAGE_REF overrides.
+    image: ${LIVEKIT_IMAGE_REF:-livekit/livekit-server:v1.13.7@sha256:6fd3b7088874c4d119160dd688798dfec852bc014786d392caad15f6f63912a3}
     restart: unless-stopped
     command: --config /etc/livekit.yaml
     environment:
@@ -230,14 +247,14 @@ services:
 
   lk-jwt-service:
     # LK_JWT_IMAGE_REF: same env-overridable digest-pin pattern as
-    # REDIS_IMAGE_REF above. Prod and dev-staging were verified 2026-07-31 to
-    # run the IDENTICAL digest here (unlike redis), so the same default is
-    # safe for both boxes; set explicitly in dev's .env anyway for clarity/
-    # symmetry with REDIS_IMAGE_REF, not because the default would diverge.
-    # Tag is "0.5.0" (GHCR drops the "v" of the v0.5.0 release); same digest as
-    # the previous `latest` pin, just no longer a moving label. See
-    # docker-compose.yml.
-    image: ${LK_JWT_IMAGE_REF:-ghcr.io/element-hq/lk-jwt-service:0.6.0@sha256:822f0c03a3bdd924da92afc2e8ec59de5dda17af42d32e71e11f269c3517abf7}
+    # REDIS_IMAGE_REF above. Default (2026-09-25) = lk-jwt-service 0.7.0 (Rust
+    # rewrite; GHCR index digest), the version this box runs and pins
+    # LITERALLY. Its .env still says 0.6.0 (inert while the literal pin
+    # stands, see the SYNAPSE_IMAGE_REF note). Rollback: 0.6.0@sha256:822f0c03...
+    # AND restore `healthcheck: disable: true` below.
+    # 0.7.0 behaviour change (#222): only LIVEKIT_FULL_ACCESS_HOMESERVERS users
+    # and local users may publish; federated users get subscribe-only tokens.
+    image: ${LK_JWT_IMAGE_REF:-ghcr.io/element-hq/lk-jwt-service:0.7.0@sha256:e0c7cecfa74e2342a3e79d47e1d4ab4bd228fe05b1a4dc4ba7f807686b0c214b}
     restart: unless-stopped
     environment:
       LIVEKIT_URL: "wss://${MATRIX_HOST}/livekit/sfu"
@@ -255,20 +272,21 @@ services:
       # to production's docker-compose.yml 2026-07-31 (matching prod's
       # server-local edit content-for-content) — no longer a gap there.
       LIVEKIT_FULL_ACCESS_HOMESERVERS: "${MATRIX_HOST}"
-    # lk-jwt 0.6.0 ships an image-level HEALTHCHECK that is unconditionally
-    # broken: /lk-jwt-service-healthcheck builds its URL as
-    # "http://localhost:" + LIVEKIT_JWT_BIND, so our (and upstream's own)
-    # canonical ":8080" produces "http://localhost::8080/healthz" ->
-    # `invalid port "::8080" after host`, failing forever. Setting a bare
-    # "8080" fixes the helper but makes the SERVER exit 1 with
-    # `listen tcp: address 8080: missing port in address` — mutually
-    # exclusive, verified against the pinned digest on 2026-08-30. Left
-    # enabled it marks the container unhealthy and ci-deploy.sh's health
-    # gate fails EVERY converge, wedging dev-staging CD. Disabling restores
-    # the 0.5.0 behaviour this service was always documented to have
-    # ("no healthcheck by design"); probe /healthz externally instead.
+    # Healthcheck RE-ENABLED 2026-09-25 for 0.7.0 (matches the box). History:
+    # 0.6.0's image-level helper built "http://localhost:" + LIVEKIT_JWT_BIND,
+    # so the canonical ":8080" gave "localhost::8080" and failed forever
+    # (disabled 2026-08-30, else ci-deploy.sh's health gate wedged every
+    # converge). Fixed upstream in 0.7.0 (#215): the Rust helper maps ":8080"
+    # to [::]:8080 / 0.0.0.0:8080 and GETs /healthz. Verified against this
+    # digest on 2026-09-25 (isolated probe container: helper exit 0, Docker
+    # health=healthy). Declared explicitly rather than inherited so the cadence
+    # does not depend on image metadata.
     healthcheck:
-      disable: true
+      test: ["CMD", "/lk-jwt-service-healthcheck"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
     depends_on:
       matrix_synapse:
         condition: service_healthy

@@ -1,3 +1,22 @@
+# !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+# DO NOT APPLY THIS FILE TO A BOX YET (recorded 2026-09-25).
+#
+# Since 42dac7b this file carries `rate_limit` blocks (the edge limiter for the
+# public GET /resolve on the siwx vhost). `rate_limit` is NOT stock Caddy: it
+# needs the caddy-ratelimit module, which only the CI-built caddy-l4 image
+# from 42dac7b onward contains (ghcr.io/inblockio/siwx-oidc-matrix-server/
+# caddy-l4, dockerfiles/Dockerfile.caddy-l4). NEITHER running Caddy has it:
+# dev-aquafire runs `caddy-l4:2.11.4-l4v0.1.2` built on the box, prod runs
+# portal-caddy-1. A Caddy without the module REFUSES TO PARSE the file, so a
+# reload fails (at best) or a restart takes every vhost on the box down.
+#
+# Order of operations: first ship and run a Caddy image that has the module,
+# verify `caddy list-modules | grep rate_limit` inside the running container,
+# THEN reload with this file. Until then the live file on each box stays the
+# version without the limiter (dev: ~/caddy-proxy/Caddyfile.dev-aquafire).
+# Reload in place, never `mv` over the bind-mounted file (inode trap).
+# !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
 {
     # TURN-over-TLS SNI split (2026-08-03 prod promotion; see repo
     # docs/superpowers/plans/2026-08-03-turn-tls-edge-termination.md).
