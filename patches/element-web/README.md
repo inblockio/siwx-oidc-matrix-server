@@ -20,6 +20,13 @@ Rules of this registry:
    - **UPSTREAM-TRACKED** — a feature we are actively trying to get merged upstream.
      Also an interim carrier. The vendored patch and the upstream PR must be kept in
      sync; drifting them splits our deployment from what reviewers are reading.
+     **One sanctioned exception exists today** (Tim, 2026-09-13): entry 6's vendored
+     patch deliberately LEADS PR #34718 by the non-blocking-load work, because prod
+     needed that before upstream was ready to receive it. A deliberate lead is only
+     allowed when it is (a) recorded in the entry, (b) pinned to a named provenance
+     commit on a branch of our fork, and (c) carries a stated condition for closing
+     the gap. Unrecorded drift is still forbidden — that is the whole point of the
+     rule.
    - **POLICY** — deployment policy that is not upstreamable. The only permanent
      residents.
    Today exactly one entry is UPSTREAM-TRACKED: #6 `browser-eventindex`
@@ -92,13 +99,16 @@ re-litigated each time someone audits the registry.
 
 ## What runs on prod today
 
-**Entries 7 and 8 have NOT reached prod yet** (both added 2026-09-11; they ship when
-the element image is next promoted). For entries 1-6:
-
-**All six patches are built into the production image and all six are active on
-`element.inblock.io`.** Verified 2026-09-01 against the deployed artifact
-(`element-web@sha256:d7ba8b7b`, label `org.opencontainers.image.revision=60b037b`)
-and the config prod actually serves.
+**Updated 2026-09-13: all EIGHT patches are now live on `element.inblock.io`.**
+Entries 7 and 8 (added 2026-09-11) reached prod with this promotion, and entry 6
+is there in its **non-blocking labs-flag form**. Verified against the deployed
+artifact `element-web@sha256:785ab46c…`, label
+`org.opencontainers.image.revision=f933e7b`, and against the config prod
+actually serves (`https://element.inblock.io/config.json` →
+`features.feature_web_event_index: true`). Previous prod artifact, and the
+rollback target for this promotion: `element-web@sha256:d7ba8b7b…`, `rev=60b037b`.
+Synapse was deliberately **not** restarted (`up -d --no-deps element-web`); its
+container has been up since 2026-08-31.
 
 | # | Patch | Purpose | Active on prod |
 |---|---|---|---|
@@ -107,27 +117,30 @@ and the config prod actually serves.
 | 3 | `honest-qr-disabled-reason` | When "Show QR code" is blocked by **this session's own** crypto state, stop reporting it as the account provider not supporting device link. The stock string is simply false for us and hides the actual remedy. | yes, ungated |
 | 4 | `offer-verify-current-session` | `DeviceVerificationStatusCard` gave an unverified **current** session a card with no action and no reason, leaving the destructive identity reset as the only visible exit. | yes, ungated |
 | 5 | `auto-approve-check-code` | MSC4108 QR device-link check-code auto-approves once both digits are typed. The deliberate read-and-type is the security property; the extra confirm click is not. | yes, ungated |
-| 6 | `browser-eventindex` | A `BrowserEventIndexManager` implementing `BaseEventIndexManager` so E2EE room search works in hosted Element Web. Upstream PR #34718. | **yes, via explicit flag** |
+| 6 | `browser-eventindex` | A `BrowserEventIndexManager` implementing `BaseEventIndexManager` so E2EE room search works in hosted Element Web, with a **non-blocking** load so a large index cannot delay app start, bounded crawl/memory/disk budgets, a chunked encrypted store, and a streamed cold scan for what is on disk outside the resident window. Upstream PR #34718 plus increments A, B, C, D-core and E, which lead it. | **yes, via `features.feature_web_event_index: true`** (renamed on prod 2026-09-13) |
 
-Entry 6 is the only gated one, and the gate is easy to read backwards:
+Entry 6 is the only gated one. **Its gate is now the same everywhere**, which it
+was not before 2026-09-13:
 
 ```
-flag === false  -> off
-flag === true   -> ON, and this OVERRIDES the hostname check
-flag unset      -> on only for STAGING_HOSTS (dev.element.inblock.io, localhost, 127.0.0.1)
+feature_web_event_index === true   -> ON (config.json `features`, or per-device in Labs)
+feature_web_event_index === false  -> off
+feature_web_event_index unset      -> OFF. There is no hostname fallback any more.
 ```
 
-Prod serves `features.feature_inblock_encrypted_search: true`, so encrypted
-search is **on in production by explicit opt-in**. dev-staging leaves the flag
-unset and gets it from the `STAGING_HOSTS` fallback. Both are on, by different
-mechanisms. Any comment claiming this patch is "dev-staging only" or "gated off
-on the production hostname" describes only the unset-flag fallback and is wrong
-about prod as configured.
+Both `element.inblock.io` and `dev.element.inblock.io` set the key to `true` in
+their bind-mounted `config/element-config.json`, so both are ON by the same
+explicit mechanism. `feature_inblock_encrypted_search` is dead: nothing reads it,
+and it has been removed from prod's config.
 
-To turn it off in production, set the flag to `false` in prod's bind-mounted
-`config/element-config.json`. Removing the key is NOT equivalent: it falls
-through to the hostname check, which also yields off, but only by accident of
-prod's hostname not being in `STAGING_HOSTS`.
+**The history matters if you read older notes.** Until 2026-09-13 the two hosts
+were on by *different* mechanisms — prod by an explicit
+`feature_inblock_encrypted_search: true`, dev-staging by the patch's
+`STAGING_HOSTS` hostname fallback with no key set at all. Both the old key and
+the hostname allowlist are gone from the patch. So any comment claiming this
+feature is "dev-staging only", or "gated off on the production hostname",
+describes a gate that no longer exists and was already wrong about prod as
+configured.
 
 ## Which Dockerfile applies what
 
@@ -280,51 +293,379 @@ A tag bump must try every patch in this file's order.
 
 ### 6. `browser-eventindex.patch` — UPSTREAM-TRACKED (PR #34718 open; carry until merged)
 
-- **Applied by:** `dockerfiles/Dockerfile.element` (the only one).
+- **Applied by:** `dockerfiles/Dockerfile.element` (the only one), SIXTH.
 - **What:** a `BrowserEventIndexManager` implementing Element's
   `BaseEventIndexManager` so `WebPlatform.getEventIndexingManager()` is
   non-null and `supportsEventIndexing()` is true. The stock Search UX and
-  Security → Message search pane light up. Index is an in-page inverted
-  index (AND of tokens, prefix on every token ≥ 2 chars, accent fold,
-  mid-word substring fallback for queries ≥ 3 chars); at rest it is AES-GCM
-  in a dedicated IndexedDB (`inblock-ew-eventindex`). Indexed text is
-  message body + filename + caption, not media bytes. Empty results while
-  the crawler is still running show `room|search|still_indexing` in the
-  stock aux panel. The DEK is a non-extractable `CryptoKey` derived via
-  HKDF from the session pickle key (destroyed on logout). On by hostname
-  for `dev.element.inblock.io` / `localhost` / `127.0.0.1`. On prod via
-  bind-mounted `features.feature_inblock_encrypted_search: true` (set
-  `false` to force off without a rebuild).
+  Security → Message search pane light up. The query engine is an in-page
+  inverted index (AND of tokens, prefix on every token ≥ 2 chars, accent
+  fold, mid-word substring fallback for queries ≥ 3 chars); indexed text is
+  message body + filename + caption, never media bytes. At rest it is
+  AES-GCM records in a dedicated IndexedDB, **`element-eventindex`**, schema
+  **v2**. The DEK is a non-extractable `CryptoKey` derived with HKDF-SHA256
+  from the session pickle key and bound to user + device (destroyed on
+  logout); every record is AAD-bound to its own primary key, so a record
+  cannot be re-filed under another user or event id and still decrypt; and
+  **checkpoint records are named by an HMAC** under a separate HKDF subkey,
+  so no room id, token or crawl direction is on disk in the clear. The
+  v1 → v2 migration **resets** the index rather than converting it — v1
+  named checkpoints by a cleartext tuple and the HMAC key cannot be computed
+  for records written before it existed. ~1,000 lines of documentation ride
+  along, including a threat model in the manager's header that says exactly
+  what is still cleartext (event ids, hence *which rooms are indexed*), what
+  the checkpoint HMAC does and does not buy (equality and count still leak),
+  and that none of it defends against XSS in this origin.
+- **The gate is now an upstream-shaped labs flag, `feature_web_event_index`,
+  default OFF.** This REPLACES the old `feature_inblock_encrypted_search`
+  key and the `STAGING_HOSTS` hostname fallback; neither name exists in the
+  patch any more. Its levels are `CONFIG, DEVICE` (config prioritised), so
+  `features.feature_web_event_index: true` in `config.json` turns it on for
+  a whole deployment and a user can turn it on for one device under Labs.
+  The gate is enforced **inside the manager**, on every path that writes,
+  because `EventIndexPeg` reads `supportsEventIndexing()` once and caches
+  it: a manager handed back after the flag went off would otherwise keep
+  indexing and keep a database alive. `WebPlatform` deliberately keeps
+  returning an already-constructed manager whatever the setting now says,
+  because `Lifecycle.clearStorage()` wipes localStorage *before* it asks the
+  manager to delete the index; and on a session where the flag is off and no
+  manager was ever constructed it deletes a database left behind by a
+  previous one, at most once. A manager is only ever *constructed* while the
+  flag is on, so an untouched Element Web never opens the database at all.
+- **It no longer patches `RoomSearchAuxPanel.tsx`.** Earlier versions
+  rendered their own "still indexing" banner there and shipped a
+  `room|search|still_indexing` string. Upstream now renders an equivalent
+  warning from `SearchWarning.tsx` via `useIsIndexIncomplete`, and that
+  function **is present at v1.12.26**
+  (`apps/web/src/components/views/elements/SearchWarning.tsx:67`; it renders
+  `seshat|warning_kind_search_partial` for `WarningKind.Search` as a polite
+  live region) — re-verified against a pristine tag tree on 2026-09-12, and
+  `RoomSearchAuxPanel.tsx` at the tag is byte-identical to the PR branch's
+  copy. So the deletion is correct against what we build, not only against
+  `develop`; without that check the deployed build would have lost the
+  warning entirely. **Consequence for the artifact-grep table at the bottom
+  of this file:** the marker is now `element-eventindex`, the old
+  `inblock-ew-eventindex` and `still_indexing` markers will find nothing,
+  and the code is still emitted into `bundles/<hash>/init.js`, not
+  `bundle.js`.
 - **Why we maintain it:** every inblock room is E2EE; upstream Web has no
   EventIndex, so Search is N/A. Product client is hosted Element Web, not
   Desktop. A Seshat WASM port was evaluated and rejected (SQLCipher /
   Tantivy 0.12 / native threads / Neon).
 - **Evidence:** `docs/2026-08-14-HANDOVER-encrypted-search-browser-eventindex.md`;
   audit `docs/audits/2026-08-14-encrypted-search-eventindex-audit.md`
-  (staging UX1–UX8 + prod promotion 2026-08-15).
-- **1.12.26 forward-port (2026-08-30):** the only patch of the six that did not
-  apply at v1.12.26, and purely from context drift — NOT because upstream shipped
-  an EventIndex (rule 4 checked: upstream still has no browser EventIndex, so the
-  retirement condition is unmet). Upstream reformatted `<SearchWarning>` in
-  `RoomSearchAuxPanel.tsx` onto multiple lines with new `scope`/`roomId` props, and
-  added an `oxlint-disable-next-line` comment above `WebPlatform.VERSION`.
-  Regenerated against a v1.12.26 tree with patches 1–5 already applied (so the
-  `en_EN.json` context stays correct for last-in-order application). The
-  regenerated patch has byte-identical added/removed lines and an identical
-  numstat (6 / 2-1 / 383 / 938 / 9) to the previous version — a pure context
-  refresh with zero behavior change.
+  (staging UX1–UX8 + prod promotion 2026-08-15). Both predate the labs-flag
+  and schema-v2 rework and describe the hostname gate and the
+  `inblock-ew-eventindex` database; read them as the record of why the
+  feature exists, not of how it is gated today.
+- **Regenerated against the PR, 2026-09-12.** The PR had moved substantially
+  (labs gate, schema v2, checkpoint HMAC, teardown hardening, rewritten
+  tests, docs) while the vendored copy still carried the 2026-08 form, which
+  is exactly the drift rule 3 forbids. Rebuilt from the PR's true current
+  state — the feature commit plus its uncommitted working tree, diffed
+  against the `develop` commit the branch last merged, which is the
+  merge-base with upstream `develop` — then re-expressed against a v1.12.26
+  tree with patches 1–5 already applied, so the `en_EN.json` context stays
+  correct for sixth-in-order application. The added/removed lines are
+  **byte-identical** to the PR's own net diff; only context and hunk offsets
+  differ. Ten files at that point (up from five), `+4167/-1`, patch 4290 lines
+  (was 1412; the 2026-09-12 export was `+4142/-1` / 4265 lines, before the
+  2026-09-13 resync below). The one real base difference is `apps/web/src/settings/Settings.tsx`:
+  `develop` has dropped `feature_custom_themes` and `LabGroup.Themes`, which
+  v1.12.26 still has, three lines from our insertion point. Resolved by a
+  3-way apply against the PR's own pre-image blob, not by hand-editing hunk
+  headers; `en_EN.json` and `docs/labs.md` differ only by offset, and
+  `WebPlatform.ts`, `WebPlatform.test.ts`, `playwright/global.d.ts` and
+  `AUTHORS.rst` are identical at the tag and on `develop`.
+- **Re-synced to the pushed PR head `db54789c08`, 2026-09-13.** The 2026-09-12
+  export was taken from the PR checkout's *uncommitted working tree*; that work
+  was then committed and pushed as `2aeafdd443` + `db54789c08` on
+  `inblockio:feat/web-event-index`, and one file moved in between. Re-derived
+  from the pushed head (`git diff d06fc35ab2^2 db54789c08`, i.e. against the
+  `develop` commit the branch last merged) onto a pristine v1.12.26 tree with
+  patches 1-5 applied, exported with `git diff HEAD`. **Nine of the ten files
+  are byte-identical to the previous export**; the only change is
+  `apps/web/playwright/e2e/crypto/web-event-index.spec.ts`, 146 -> 171 added
+  lines. That file is a Playwright spec and is **not** part of the built
+  webapp, so the shipped artifact is unchanged by this resync; it is done
+  because rule 3 requires the vendored patch and the PR to stay in sync, not
+  because the deployment behaviour moved. The spec's substantive change: the
+  reload test now signs in through the UI (`logIntoElement`) instead of taking
+  the `user` fixture, because that fixture writes `mx_has_pickle_key: "false"`
+  and an index in a session with no pickle key is memory-only by design, so the
+  old form asserted persistence against a deliberately-disabled path; plus
+  `test.slow()` for the 30s `searchUntilFound` poll. Verified: all eight
+  patches still apply in Dockerfile order to a pristine v1.12.26 tree, and
+  `node --test scripts/browser-eventindex-invariants.mjs` is 12/12.
+- **NOW CARRIES THE NON-BLOCKING LOAD, AHEAD OF UPSTREAM (Tim's decision,
+  2026-09-13).** The vendored patch is no longer a mirror of the PR head. It is
+  regenerated from an integration branch on our fork that merges the PR head with
+  the non-blocking-load work, because prod could not ship with encrypted search
+  off and the blocking load was not acceptable on prod hardware. This is the
+  sanctioned exception named in rule 3 above; read that rule before "fixing" the
+  divergence.
+
+  - **Provenance commit: `27e660e434`** on
+    [`inblockio/element-web`](https://github.com/inblockio/element-web/tree/integration/web-event-index-prod-20260913),
+    branch **`integration/web-event-index-prod-20260913`** — a merge of
+    `feat/web-event-index` @ `500f348525` (the PR head plus its docs commit) and
+    `feat/web-event-index-nonblocking-load` @ `27e9537a8c`. The merge was clean
+    (docs vs src, no overlapping hunks). **That branch is NOT merged into
+    `feat/web-event-index`**: the PR's own line stays what upstream reviews, and
+    where the non-blocking work should land upstream is a separate open question.
+  - **What the non-blocking load changes.** `initEventIndex` no longer awaits a
+    full read of the persisted index before returning, so opening Element with a
+    large index no longer blocks app start — which was the binding constraint
+    recorded in the EventIndex bounded-memory ruling (memory
+    `event-index-bounded-memory-design`: ~0.18 ms/event of startup decryption,
+    not memory, is what hurts). Hydration now runs in the background behind a
+    `hydrating` flag, surfaced to callers as a new `IIndexStats.loading`;
+    `SearchWarning` polls it so the "results may be incomplete" notice appears
+    and, unlike the checkpoint signal, **clears itself** when hydration finishes;
+    reads are paged with a slice deadline and epoch-guarded teardown so a logout
+    mid-hydration cannot resurrect decrypted events into cleared maps. Six files
+    of the fifteen are new to the patch relative to the 2026-09-12 export:
+    `SearchWarning.tsx`, `SearchWarning-test.tsx`, `BaseEventIndexManager.ts`,
+    `docs/web-event-index.md`, `docs/.vitepress/config.ts`, and the enlarged
+    `en_EN.json` hunk. All three newly-touched upstream source/test files are
+    **byte-identical at `v1.12.26` and at the develop commit the PR branch last
+    merged**, so they apply at the tag with offset differences only.
+  - **Evidence it is safe to carry.** Adversarial review verdict **SHIP** at
+    `27e9537a8c`, all thirteen findings fixed and each fix re-verified as
+    load-bearing by isolated mutation:
+    `~/handovers/2026-09-12-element-web-eventindex/research/review-pr-a.md`;
+    proof numbers in the sibling `measurements-pr-a.md`. Re-run on the
+    integration branch itself before the patch was regenerated: **vitest
+    121/121** (`BrowserEventIndexManager.test.ts` + `WebPlatform.test.ts`),
+    **jest 37/37** across `SearchWarning-test.tsx`, `EventIndexPanel-test.tsx`
+    and `RoomSearchAuxPanel-test.tsx`, Playwright 3/3. Two residuals were
+    accepted as non-blocking: F9's fix has no test (mutant M16 survives), and
+    `useIsIndexIncomplete`'s last `await` sits outside its try/catch (latent
+    only — our `isRoomIndexed` is a pure Map read and cannot reject, but
+    Seshat's is a native call).
+  - **Patch size: fifteen files, `+6116/-32`, 6411 lines.** The added/removed
+    lines are byte-identical to `git diff 3028880631 27e660e434`, verified
+    per-file; only context and hunk offsets differ.
+  - **Bundle markers for this form** (the built code lands in
+    `bundles/<hash>/init.js`, never `bundle.js`). Present only in the
+    non-blocking build, and all four verified absent from the 2026-09-12
+    blocking build's served bundle: **`waitForHydration`** (1),
+    **`hydrationFailure`** (4), **`hydration failed`** (1), and the reworded log
+    string **`a stored checkpoint could not be decrypted`** (1). Also present,
+    from the feature itself: `feature_web_event_index` (3),
+    `element-eventindex-v1`, `element-eventindex-cpmac`,
+    `supportsEventIndexing` (4). Absent, as retired:
+    `feature_inblock_encrypted_search`, `inblock-ew-eventindex`.
+
+    > **Do NOT use `stored ciphertext could not be decrypted` as a negative
+    > marker.** An earlier revision of this entry named it as "absent in the
+    > non-blocking build" because the diff shows that line being deleted. It is
+    > **moved, not deleted** — `initEventIndex` now logs the reworded *"a stored
+    > checkpoint…"* variant while the original wording reappears verbatim inside
+    > `hydrate()`'s failure path, so the string is present in **both** builds
+    > and discriminates nothing. Caught by the live grep during the 2026-09-13
+    > promotion, before it was trusted. `BrowserEventIndexManager` is also
+    > useless as a marker: the class name is minified away, and greps for it
+    > return 0 on a perfectly good bundle.
+  - **Condition for closing the gap:** the non-blocking work lands on
+    `feat/web-event-index` (and so into #34718), or #34718 merges without it and
+    the work is re-filed as its own PR. Until one of those happens, every
+    regeneration of this patch must come from the integration branch, and the
+    tag-bump procedure in rule 4 must rebase that branch first, not the PR head.
+- **SECOND CARRY, 2026-09-13: the patch now carries increments A, B and C, all
+  ahead of upstream.** Same sanctioned-exception rule as the first carry (rule 3
+  above); this entry is the record it requires.
+
+  - **Provenance commit: `eee0f8a755`** on
+    [`inblockio/element-web`](https://github.com/inblockio/element-web/tree/integration/web-event-index-prod-20260913b),
+    branch **`integration/web-event-index-prod-20260913b`** — `feat/web-event-index`
+    @ `500f348525` merged with `feat/web-event-index-bounds` @ `af6fec256c`, which
+    is the top of the A -> B -> C stack and already contains A and B. Supersedes
+    the first carry's provenance `27e660e434`. Still **not** merged into
+    `feat/web-event-index`; the PR's own line stays what upstream reviews.
+  - **A** (carried since the first pass): non-blocking `initEventIndex`, so a
+    large index cannot block app start.
+  - **B:** batched writes, `getStats()` made O(1), a sorted vocabulary searched by
+    binary search instead of scanned, and a per-record folded-text memo.
+  - **C:** a crawl window and room cap behind a small `shouldCrawl` hook added to
+    the **shared** `apps/web/src/indexing/EventIndex.ts`; a hot-window byte budget
+    whose eviction **never deletes disk rows**; a disk budget; an encrypted
+    recency manifest in `meta` with a self-healing migration pass for databases
+    written before it existed; `navigator.storage.persist()`; and the "Search
+    covers messages newer than {date}" line.
+  - **Two things operators need to know**, because users will see both:
+    1. **Existing browser databases run a one-time background migration pass on
+       first load** — about **10 s at 200k events**, and deliberately **off the
+       start path**, so the app opens normally while it runs. It is self-healing:
+       a database that predates the recency manifest gets one built rather than
+       being wiped.
+    2. **Events outside the hot window are not searchable** until the cold-scan
+       increment lands. This is a real, deliberate reduction in what search
+       reaches, not a bug: the bound is what keeps memory and disk finite. The UI
+       is honest about it — the search warning states the coverage date
+       (`seshat|warning_kind_search_windowed`, "Search covers messages newer than
+       %(date)s"), and `docs/labs.md` states the window (90 days) and the room cap
+       (100 desktop / 20 on memory-constrained devices).
+  - **Evidence:** reviews **SHIP** after several rounds —
+    `~/handovers/2026-09-12-element-web-eventindex/research/review-pr-b.md` and
+    `review-pr-c.md` (C took five passes; final SHIP at `af6fec256c`), proofs in
+    `measurements-pr-b.md` and `measurements-pr-c.md`. Gates re-run on the
+    integration branch itself: **vitest 183/183** (`BrowserEventIndexManager`,
+    `WebPlatform`, `eventIndexBounds`, `EventIndex`), **jest 44/44**
+    (`SearchWarning`, `EventIndexPanel`, `RoomSearchAuxPanel`), `tsc --noEmit`
+    **0 errors in project sources** (3 pre-existing inside
+    `node_modules/matrix-js-sdk`), `oxlint` clean, `oxfmt --check` clean,
+    `lint:knip` clean, and `pnpm run i18n` regenerating to **zero git diff**.
+  - **Patch size: nineteen files, `+10476/-37`, 10892 lines** (was fifteen,
+    `+6116/-32`). Added/removed lines byte-identical per file to
+    `git diff 3028880631 eee0f8a755`.
+  - **One merge conflict, in `docs/labs.md`**, resolved by keeping **both** sides:
+    the docs commit's recency-window and CJK paragraph, then C's concrete numbers,
+    then the link to `web-event-index.md`. General-to-specific, re-read as a whole
+    so the section does not say the same thing twice.
+  - **New base-drift risk, checked and clear.** C is the first increment to touch
+    the shared `apps/web/src/indexing/EventIndex.ts`, and that file is **not**
+    byte-identical at `v1.12.26` and at the develop commit the PR branch last
+    merged: develop added two `await`s in front of `addRoomCheckpoint`
+    (`:262`, `:296`) after the tag. The 3-way apply resolved against the PR's own
+    pre-image, and the result was checked line by line: the applied tree still has
+    v1.12.26's **unawaited** calls and the only delta is our `shouldCrawl` work
+    (+47/-3). Upstream's fix did **not** leak in. Re-check this at every tag bump:
+    a patch that silently imports unrelated develop changes is the failure mode
+    here, and it is invisible unless you look.
+  - **Bundle markers for this form**, on top of the A markers below:
+    **`shouldCrawl`**, **`runManifestMigration`**, **`manifestCeilingBytes`**, and
+    the i18n key **`warning_kind_search_windowed`**. All four are absent from the
+    first-carry build (`@sha256:785ab46c…`), so they are what tells the two apart.
+- **THIRD CARRY, 2026-09-14: the patch now carries increments A, B, C, D-core and
+  E, all ahead of upstream.** Same sanctioned-exception rule as the first two
+  carries (rule 3 above); this entry is the record it requires.
+
+  - **Provenance commit: `7280a73f90`** on
+    [`inblockio/element-web`](https://github.com/inblockio/element-web/tree/integration/web-event-index-prod-20260914),
+    branch **`integration/web-event-index-prod-20260914`** — `feat/web-event-index`
+    @ `5ae9fdf3dd` (the PR head: review fixes plus the refreshed design doc) merged
+    with `feat/web-event-index-cold-tier-core` @ `c61dba1135`, which is the top of
+    the A -> B -> C -> D-core -> E stack. Supersedes the second carry's provenance
+    `eee0f8a755`. Still **not** merged into `feat/web-event-index`; the PR's own
+    line stays what upstream reviews.
+  - **D-core:** IndexedDB schema **v3** — events are stored as binary AES-GCM
+    **chunks** rather than one record per event, so event ids are no longer in the
+    clear on disk, hydration reads each chunk once, and the budget heap orders by
+    chunk `maxTs`. The online v2 -> v3 conversion was deliberately **dropped**
+    (it stays on `feat/web-event-index-chunks` for reference).
+  - **E:** a **cold tier** — content that is on disk but outside the resident
+    (hot) window is found by a streamed **newest-first scan**, walked one chunk at
+    a time inside a scan **session** held behind an opaque `next_batch` token
+    (bounded at four live sessions; an unknown token yields an empty page), with a
+    **1 s budget per page** (`COLD_SCAN_BUDGET_MS`) so a miss can never hang the
+    UI; the scan is cancelled when a new query arrives. The coverage date in the
+    search warning is sourced from the **oldest indexed** event rather than the
+    oldest resident one. Item 0 of E is the tier fix: `navigator.deviceMemory` is
+    Chromium-only, so **Firefox and Safari desktop users used to fall to the small
+    tier**; absent `deviceMemory` on a non-mobile UA (decided with
+    `navigator.maxTouchPoints`, which also keeps iPadOS on the constrained tier)
+    now means **desktop**.
+  - **What operators and users will see, and it is the thing to announce:**
+    1. **Every existing browser database is RESET once on first load.** Schema v2
+       is not converted to v3 — it is dropped and re-crawled, bounded by C's crawl
+       window and room cap, exactly as the first enablement was (Tim's original
+       ruling; the window is what makes it affordable). Nothing is lost, the
+       homeserver is the source of truth. **Visibly:** search coverage restarts
+       from the crawl window, and the coverage date in the search warning
+       ("Search covers messages newer than …") **moves forward** at the reset and
+       then **back** again as the crawler refills the window.
+    2. **Older messages beyond the hot window are searchable again.** Since the
+       second carry, content outside the resident window was on disk but not
+       reachable; E reaches it with the streamed newest-first scan described
+       above. A query that has to go to disk costs seconds, not milliseconds
+       (measured ~3.1 s over 200k events in 4 pages, ~7.7 s over 500k in 8), which
+       is why the per-page budget exists and why the warning says the result set
+       may be partial.
+    3. **Firefox and Safari on the desktop get the desktop tier** rather than the
+       49k-event small tier they were getting from the missing `deviceMemory`.
+  - **Evidence:** reviews **SHIP** —
+    `~/handovers/2026-09-12-element-web-eventindex/research/review-pr-d.md` (four
+    sections, D-core SHIP at `2c04b3b562`) and `review-pr-e.md` (four sections,
+    E-core SHIP at `c61dba1135`, both HIGH findings of the previous round verified
+    fixed in both directions), proofs in `measurements-pr-d.md` and
+    `measurements-pr-e.md`. Gates re-run **on the integration branch itself**:
+    **vitest 294/294** (`BrowserEventIndexManager`, `WebPlatform`,
+    `eventIndexBounds`, `ElectronPlatform`, `PWAPlatform`, `EventIndex`), **jest
+    48/48** across `SearchWarning`, `EventIndexPanel` and `RoomSearchAuxPanel`
+    (5 snapshots), `tsc --noEmit` **0 errors in project sources** (the 3
+    pre-existing ones are inside `node_modules/matrix-js-sdk`), `oxlint` clean,
+    `oxfmt --check` clean, `lint:knip` clean, `pnpm run i18n` regenerating to
+    **zero git diff**.
+  - **Patch size: nineteen files, `+14883/-39`, 15304 lines** (was nineteen,
+    `+10476/-37`). Added/removed lines byte-identical per file to
+    `git diff 3028880631 7280a73f90`, verified for all nineteen.
+  - **One merge conflict, in `docs/labs.md`** again, and for the same reason: the
+    docs refresh reworded the labs entry while C and E each added a sentence to
+    it. Resolved by keeping the refreshed wording, then C's window/room-cap
+    sentence extended with E's cold-scan sentence, then D-core's reset sentence,
+    then the link to `web-event-index.md`; the whole section was re-read
+    afterwards, and the refreshed "recency window" sentence was adjusted to say
+    the crawler stops at the window, because with E on board "old messages are out
+    of reach" is no longer true of everything on disk. `docs/web-event-index.md`
+    exists only on the PR side and came through untouched.
+  - **Base-drift re-check (the `indexing/EventIndex.ts` hazard from the second
+    carry) is clean again:** the applied tree still has v1.12.26's **unawaited**
+    `addRoomCheckpoint` calls at `:294` and `:328`, and the only delta is our
+    `shouldCrawl` work (`+47/-3`). All nineteen files applied cleanly with
+    `git apply --3way`; all eight patches apply in Dockerfile order to a pristine
+    `v1.12.26` tree; `node --test scripts/browser-eventindex-invariants.mjs` is
+    **12/12**.
+  - **Bundle markers for this form, counted on the served
+    `bundles/<hash>/init.js` with the second-carry build (`@sha256:162f82bf…`,
+    `bundles/616d93df8ad1b8214909/init.js`) as the control** — not predicted from
+    the source, because what survives minification is not obvious and this file
+    has been wrong about a marker before:
+
+    | marker | this build | second-carry control | what it proves |
+    |---|---|---|---|
+    | `chunkId` | 27 | **0** | D-core chunk store |
+    | `"chunks"` | 17 | **0** | D-core object store name |
+    | `ColdScanSession` | 3 | **0** | E scan session |
+    | `searchPartial` | 8 | **0** | E partial-result signal |
+    | `coldTouched` | 3 | **0** | E cold tier touched |
+    | `isSearchPartial` | 1 | **0** | E signal reaching the UI |
+    | `maxTouchPoints` | 2 | **0** | E item 0, the Firefox/Safari tier fix |
+    | `shouldCrawl` | 2 | 2 | C, still carried |
+    | `manifestCeilingBytes` | 2 | 2 | C, still carried |
+    | `waitForHydration` / `hydrationFailure` | 1 / 4 | 1 / 4 | A, still carried |
+    | `feature_web_event_index` / `element-eventindex` | 3 / 3 | 3 / 3 | the gate and the database |
+    | `runManifestMigration` | **0** | 2 | see below |
+    | `COLD_SCAN_BUDGET_MS`, `migrateToV3` | 0 | 0 | useless as markers |
+    | `feature_inblock_encrypted_search`, `inblock-ew-eventindex`, `still_indexing` | 0 | 0 | retired |
+
+    Two things in that table are worth remembering rather than re-deriving.
+    **`runManifestMigration` going from 2 to 0 is correct, not a regression:** the
+    v3 reset replaced the manifest-migration pass it named, so its absence is a
+    *positive* discriminator for D-core. And **`COLD_SCAN_BUDGET_MS` and
+    `migrateToV3` read 0 in a perfectly good build** — a module-level const and a
+    module-level function both get mangled, exactly like `BrowserEventIndexManager`
+    before them. Do not grep for them and conclude the increment is missing.
+    The interface name `ColdScanSession` nevertheless reads 3, because it survives
+    inside *method and field* names the minifier leaves alone —
+    `coldScanSessions` (the session `Map`) and `pageColdScanSession` — not as the
+    type itself, which TypeScript erased. Property names, method names, store
+    names and string literals are the reliable class of marker here.
 - **Upstream status: FILED AND ACTIVELY TRACKED — we are trying to get this
   merged.** [element-hq/element-web#34718](https://github.com/element-hq/element-web/pull/34718)
   "Add a browser EventIndex so encrypted-room search works on the web"
   (`inblockio:feat/web-event-index` → `element-hq:develop`, author
-  FantasticoFox, opened 2026-08-15, 10 files, +1734/-1). Fixes
+  FantasticoFox, opened 2026-08-15). Fixes
   [element-meta#3294](https://github.com/element-hq/element-meta/issues/3294).
-  Labelled `T-Enhancement` + `Z-Community-PR`.
+  Labelled `T-Enhancement` + `Z-Community-PR`. The shape of the current
+  revision is a direct answer to reviewer-facing objections: an ordinary
+  labs flag instead of a deployment-specific config key and a hostname
+  allowlist, an upstream-neutral database name, and the gate enforced where
+  it cannot be bypassed.
 
-  This is the **one patch in this registry with a live upstream merge path**, so
-  unlike the other POLICY entries it is an interim carrier, not a permanent
-  resident. Keep the vendored patch and the PR in sync: a change to one that is
-  not mirrored in the other splits our deployment from what upstream is
+  This is the **one patch in this registry with a live upstream merge path**,
+  so unlike the POLICY entries it is an interim carrier, not a permanent
+  resident. Keep the vendored patch and the PR in sync: a change to one that
+  is not mirrored in the other splits our deployment from what upstream is
   reviewing.
 
   Still NOT a Seshat port — the interface is upstream's, the store is ours. Do
@@ -334,7 +675,7 @@ A tag bump must try every patch in this file's order.
   **Status as of 2026-08-31:** mergeable, CI green (6/6 check-runs + CLA), but
   **zero reviews submitted**. GitHub reports `mergeable_state: unstable`, which
   for a community PR usually means workflows awaiting maintainer approval to
-  run. Last activity: Tim rebased and force-pushed CI fixes 2026-08-30 21:18Z.
+  run.
 
   **Open reviewer-side question worth chasing:** on 2026-08-28 the maintainer
   (t3chguy) reported "I don't see any messages whatsoever" with a screenshot
@@ -345,15 +686,56 @@ A tag bump must try every patch in this file's order.
   they cannot evaluate a *search* feature — so unblocking the federation issue
   may be on the critical path to this merge. Unproven link; check it before
   assuming.
+- **DEPLOYMENT ACTION DISCHARGED, 2026-09-13.** This entry previously carried a
+  "DEPLOYMENT ACTION OUTSTANDING" warning: the patch had stopped reading
+  `features.feature_inblock_encrypted_search` while prod's bind-mounted config
+  still set only that key, so promoting the image without renaming the key would
+  have shipped encrypted search **off on prod**. Both halves have now landed
+  together. Prod's `/home/deploy/matrix/stack/config/element-config.json` was
+  rewritten **in place, inode 559991 preserved** (a single-file bind mount
+  follows the inode), a one-line diff renaming the key to
+  `feature_web_event_index: true`, and the element container was switched in the
+  same window. Verified on the served artifact, not just on disk:
+  `https://element.inblock.io/config.json` reports the new key and no old one.
+  To turn the feature off now, set that key to `false` or remove it — with the
+  hostname fallback gone, removing it means off by design rather than off by
+  accident.
+- **Order:** applied SIXTH. Its `en_EN.json` hunk was generated against the
+  tree with entries 1–5 applied; entry 7's `en_EN.json` hunk absorbs the two
+  lines this one now adds in the `labs` section (it lands at offset +1,
+  cleanly). Verified 2026-09-12 by applying all eight in Dockerfile order to
+  a pristine v1.12.26 tree.
 - **Retirement:** when #34718 (or an upstream equivalent) merges and ships in a
   tag we deploy, PROVIDED it still meets I1–I8 (ciphertext at rest,
   session-bound key, logout wipe) — verify those against the merged form, since
   review may change the store. Also retires if product stops requiring
   hosted-Web search.
-- **Coverage:** Element-tree vitest in the patch
-  (`BrowserEventIndexManager.test.ts`); repo
-  `scripts/browser-eventindex-invariants.mjs`;
-  `~/siwx-oidc/e2e/element/ew-encrypted-search.spec.mjs`. Default
+- **Coverage:** the patch now carries its own Playwright leg,
+  `apps/web/playwright/e2e/crypto/web-event-index.spec.ts` (3 tests under
+  `labsFlags: ["feature_web_event_index"]`, driving the **real** room-info
+  search box rather than calling the manager: a message sent through the
+  composer into an encrypted room is found with one line of context either
+  side and nothing further out; a term that was never sent reports "No
+  results", asserted only after the index is proven live so the test cannot
+  pass against an index that never started; and an indexed message is still
+  found after a full page reload, i.e. rebuilt from the encrypted records).
+  Element-tree vitest `BrowserEventIndexManager.test.ts` — 75 cases across 8
+  suites including the labs gate and **two 5,000-event scale suites**
+  (`SCALE_EVENT_COUNT = 5000` over four rooms, in-memory and persisted) —
+  plus 8 new `WebPlatform.test.ts` cases pinning `getEventIndexingManager()`
+  (never constructs while off, same instance once on, keeps handing one back
+  after the flag is gone so logout can delete, one-shot cleanup of an
+  orphaned database). Repo `scripts/browser-eventindex-invariants.mjs`
+  re-states the crypto and search algorithms independently of the Element
+  tree; it was written against the old HKDF info string and is updated here,
+  but it does NOT yet cover the checkpoint HMAC or the v1 → v2 reset — a
+  known gap, and the reason it is a supplement to the vitest rather than the
+  proof. The siwx-oidc leg rule 2 asks for,
+  `e2e/element/ew-encrypted-search.spec.mjs`, exists only on the unmerged
+  branch `feat/ew-encrypted-search-eventindex` and is NOT on that repo's
+  checked-out tree; the in-patch Playwright spec now covers the same user
+  journey against upstream's own harness, so the honest statement is that
+  the behaviour is covered and the siwx-oidc leg is still unlanded. Default
   `enableEventIndexing` stays upstream's `true` (same as Desktop).
 
 ---
@@ -553,6 +935,14 @@ distinctive string in the running `matrix-staging-element-web-1` webroot:
 | 4 | `offer-verify-current-session` | `verify_blocked_current_session_unverified` | 3 |
 | 5 | `auto-approve-check-code` | `open_approval_page` | 5 |
 | 6 | `browser-eventindex` | `inblock-ew-eventindex` | 2 |
+
+**Row 6's marker is stale for anything built after 2026-09-12.** The regenerated
+patch renames the database, so the marker to grep is now `element-eventindex`
+(and `feature_web_event_index` for the gate). `inblock-ew-eventindex`,
+`feature_inblock_encrypted_search` and `still_indexing` will find nothing in a
+build made from the current patch, and finding them instead proves the image is
+an OLD one. The row above is left as the record of what was checked on the
+artifact that is still serving prod.
 
 **Trap for whoever repeats this:** the EventIndex code is emitted into
 `bundles/<hash>/init.js`, **not** `bundle.js`. Grepping only `bundle.js` returns zero

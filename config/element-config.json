@@ -28,7 +28,7 @@
     "feature_video_rooms": true,
     "feature_element_call_video_rooms": true,
     "feature_custom_themes": true,
-    "feature_inblock_encrypted_search": true
+    "feature_web_event_index": true
   },
   "setting_defaults": {
     "custom_themes": [

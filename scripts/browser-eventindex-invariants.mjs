@@ -12,7 +12,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const HKDF_INFO = "inblock-ew-eventindex-v1";
+// Must match EVENTINDEX_HKDF_INFO in BrowserEventIndexManager.ts. Renamed from
+// "inblock-ew-eventindex-v1" when the patch was regenerated against upstream PR
+// #34718 (2026-09-12). NOTE: these invariants do not yet cover the checkpoint-key
+// HMAC (EVENTINDEX_CPMAC_HKDF_INFO) or the v1 -> v2 schema reset that patch added.
+const HKDF_INFO = "element-eventindex-v1";
 
 function foldText(text) {
     return text

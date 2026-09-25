@@ -4,9 +4,25 @@ Docker Compose deployment stack that runs a Synapse Matrix homeserver fronted by
 siwx-oidc (CAIP-122 OIDC provider) so agents and wallets can authenticate with
 EIP-191, Ed25519, or P-256 keys.
 
-> **Production state as of 2026-08-31** (this file predates it in places, see the
-> `v1.12.24` and MSC3861 sections below): prod runs **Synapse 1.159.0**, **Element
-> Web 1.12.26**, and **siwx-oidc `548b543`**. Synapse 1.157 removed
+> **Production state as of 2026-09-13**: prod runs **Synapse 1.159.0** (container
+> untouched since 2026-08-31), **Element Web 1.12.26** from
+> `element-web@sha256:162f82bf…` (`rev=7b96f8f`), and **siwx-oidc `548b543`**.
+> That element image carries the browser EventIndex with increments **A, B and C**
+> — non-blocking load, batched writes / O(1) stats / sorted vocabulary, and the
+> crawl window + room cap + resident and disk byte budgets + encrypted recency
+> manifest — all ahead of upstream PR #34718, gated by
+> `features.feature_web_event_index: true` in prod's bind-mounted config. It also
+> carries patches 7 and 8 (`show-attested-did`, `resolve-did-search`). Two
+> user-visible consequences of increment C: an existing browser index runs a
+> one-time background migration on first load (~10 s at 200k events, off the start
+> path), and events outside the 90-day hot window are not searchable until the
+> cold-scan increment, with the coverage date shown in the search warning.
+> Previous prod image, and the rollback target: `element-web@sha256:785ab46c…`
+> (`rev=f933e7b`). Promotion record, rollback digests and
+> the `--no-deps` rule that kept Synapse up:
+> `~/handovers/2026-09-12-element-web-eventindex/research/staging-dev-aquafire.md`
+> and `patches/element-web/README.md` entry 6. The older note below predates this in
+> places, see the `v1.12.24` and MSC3861 sections. Synapse 1.157 removed
 > `experimental_features.msc3861`; prod has been migrated to the stable
 > `matrix_authentication_service` block, written on every boot by
 > `entrypoints/matrix_server.sh:apply_mas_config()`. **Prod deploys by editing an
@@ -252,8 +268,11 @@ overlay + existing entrypoint (no entrypoint change; a
 **Canonical patch/feature list:** `patches/element-web/README.md` (what / why /
 retirement). There is ONE Dockerfile and it applies all six patches; the old
 `dev`-applies-six / `main`-applies-three split ended when `dev` was merged into
-`main` on 2026-09-01. POLICY patches include forced first-device 4S recovery and
-the browser EventIndex (hosted E2EE search). v1.12.26 is a pnpm + nx monorepo needing
+`main` on 2026-09-01. POLICY patches include forced first-device 4S recovery.
+The browser EventIndex (hosted E2EE search) is NOT policy: it is the one
+UPSTREAM-TRACKED entry (element-web PR #34718), it is gated by the labs flag
+`feature_web_event_index` (default off) since the patch was regenerated on
+2026-09-12, and it retires when that PR merges. v1.12.26 is a pnpm + nx monorepo needing
 Node >=22.18; the builder uses `node:24-bullseye`. To bump Element, update
 `ELEMENT_WEB_TAG` and refresh every listed patch per
 `docs/element-web-source-build.md`. No separate fork is vendored (the source is

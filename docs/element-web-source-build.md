@@ -18,7 +18,11 @@ The two load-bearing POLICY patches on both `dev` and `main` today:
 - `force-first-device-recovery.patch` — recoverable identity (4S) mandatory on
   first login (`MatrixChat.tsx`).
 - `browser-eventindex.patch` — hosted E2EE search via Element's EventIndex
-  hook (prod: `features.feature_inblock_encrypted_search`).
+  hook, behind the labs flag `features.feature_web_event_index` (default off;
+  the old `feature_inblock_encrypted_search` key and the hostname fallback were
+  dropped when the patch was regenerated against upstream PR #34718 on
+  2026-09-12). It is UPSTREAM-TRACKED, not POLICY: it retires when #34718
+  merges.
 
 This cannot be applied to a prebuilt image, so we build the source ourselves.
 

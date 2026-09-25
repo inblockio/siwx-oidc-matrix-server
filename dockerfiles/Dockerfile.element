@@ -37,9 +37,9 @@ RUN git clone --depth 1 --branch "${ELEMENT_WEB_TAG}" \
 #  - offer-verify-current-session: UPSTREAM dead end. An unverified session was
 #    shown a card that offered no action and no reason, leaving the DESTRUCTIVE
 #    identity reset as the only visible exit.
-#  - browser-eventindex:           OUR policy (staging). Implements the stock
-#    EventIndex hook so E2EE search works in hosted Element Web. Gated off on
-#    the production hostname.
+#  - browser-eventindex:           UPSTREAM-TRACKED (element-web PR #34718).
+#    Implements the stock EventIndex hook so E2EE search works in hosted
+#    Element Web, behind the labs flag feature_web_event_index (default OFF).
 #
 # Order matters only for en_EN.json, which five of them touch in different
 # places; applied in this order every hunk lands (verified against a pristine
@@ -62,12 +62,38 @@ COPY patches/element-web/auto-approve-check-code.patch /tmp/ew-checkcode.patch
 RUN git apply --verbose /tmp/ew-checkcode.patch
 
 # Encrypted-room search for hosted Element Web. Implements BaseEventIndexManager
-# so supportsEventIndexing() is true. NOT dev-staging-only: the hostname check
-# (STAGING_HOSTS) is only the fallback when features.feature_inblock_encrypted_search
-# is UNSET. An explicit `true` overrides it, and prod sets exactly that, so this
-# is LIVE on element.inblock.io (verified 2026-09-01 against the served
-# config.json). Independent of the other patches (new files + WebPlatform.ts).
-# See patches/element-web/README.md, "What runs on prod today".
+# so supportsEventIndexing() is true. Gated by the ordinary labs flag
+# feature_web_event_index, which DEFAULTS TO OFF: set
+# features.feature_web_event_index = true in config.json to turn it on for a
+# deployment, or a user turns it on for one device under Labs. The old
+# feature_inblock_encrypted_search key and the STAGING_HOSTS hostname fallback
+# are gone (regenerated against upstream PR #34718, 2026-09-12). The repo
+# config carries the new key; prod's bind-mounted config must be renamed too.
+#
+# Since 2026-09-13 this patch carries increments that are AHEAD of PR #34718
+# (Tim's decision). As of 2026-09-14 there are FIVE: A, the non-blocking
+# initEventIndex, so a large index cannot block app start; B, batched writes /
+# O(1) getStats / sorted vocabulary / folded-text memo; C, the crawl window and
+# room cap (a shouldCrawl hook in the SHARED indexing/EventIndex.ts), the
+# resident and disk byte budgets, the encrypted recency manifest with its
+# self-healing migration pass, and navigator.storage.persist(); D-core, the
+# chunked schema v3 (binary AES-GCM chunks, event ids out of the clear) whose
+# v2 databases are RESET once rather than converted; and E, the cold-tier
+# streamed scan that finds on-disk content outside the resident window, plus the
+# Firefox/Safari desktop-tier fix. It is therefore regenerated from the
+# provenance commit 7280a73f90 on inblockio/element-web branch
+# integration/web-event-index-prod-20260914, NOT from the PR head. Do not
+# "resync to the PR" without reading entry 6 -- that would silently revert all
+# five on prod.
+#
+# Touches Settings.tsx, en_EN.json, docs/labs.md, SearchWarning.tsx,
+# BaseEventIndexManager.ts, indexing/EventIndex.ts and their tests as well as the
+# new files, so it is neither independent of the en_EN.json ordering above nor
+# confined to files only this feature owns. indexing/EventIndex.ts in particular
+# differs between v1.12.26 and upstream develop, so a tag bump must re-check that
+# the 3-way apply has not imported unrelated develop changes -- entry 6 says what
+# to look for.
+# See patches/element-web/README.md, entry 6.
 COPY patches/element-web/browser-eventindex.patch /tmp/ew-eventindex.patch
 RUN git apply --verbose /tmp/ew-eventindex.patch
 
