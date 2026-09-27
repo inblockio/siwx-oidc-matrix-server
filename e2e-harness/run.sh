@@ -279,6 +279,20 @@ log "  artifacts: $ART_DIR"
 log "  KEEP_STACK=$KEEP_STACK  E2E_STRICT_SKIPS=$E2E_STRICT_SKIPS"
 log "=============================================================="
 
+# -----------------------------------------------------------------------------
+# Images: resolve (derived from source unless overridden) and build if missing,
+# BEFORE touching the stack, so a missing image is one clear message (or a
+# build) rather than an opaque `podman run` failure halfway through up.sh.
+# Exported, so the up.sh started by ensure_stack uses the very same refs.
+# See e2e-harness/images.sh.
+# -----------------------------------------------------------------------------
+# shellcheck source=images.sh
+. "$HARNESS_DIR/images.sh"
+if ! e2eh_ensure_images; then
+  log "[run] FATAL: harness images unavailable (see above)."
+  exit 1
+fi
+
 if ! ensure_stack; then
   log "[run] FATAL: stack not healthy; aborting."
   # Capture container logs so the failure is diagnosable.
@@ -301,7 +315,10 @@ fi
 # Rule: the siwx-oidc image must not be OLDER than the HEAD commit of the
 # siwx-oidc checkout under test. Older => it cannot contain that code.
 # -----------------------------------------------------------------------------
-SIWX_OIDC_IMAGE_REF="${SIWX_OIDC_IMAGE_REF:-localhost/siwx-oidc:e2eh-5f47a9b}"
+# SIWX_OIDC_IMAGE_REF was resolved above by images.sh: by default
+# localhost/siwx-oidc:e2eh-<HEAD of the siwx-oidc checkout>, built from that
+# commit, so this guard should now only ever trip on an override or a stack
+# left running from an earlier bring-up.
 IMAGE_PROVENANCE="unknown"
 
 assert_image_not_stale() {
@@ -370,6 +387,27 @@ if ! assert_image_not_stale "$SIWX_OIDC_DIR_FOR_RUN" "$SIWX_OIDC_IMAGE_REF"; the
   log "[run] FATAL: refusing to record an artifact against an unverifiable image."
   exit 1
 fi
+
+# Same running-vs-configured check for Synapse. The harness Synapse carries the
+# MSC4133 write-policy patch the did_field checks depend on; a stack left up
+# from an unpatched image would fail them for a reason unrelated to the code.
+SYNAPSE_PROVENANCE="$SYNAPSE_IMAGE_REF"
+syn_want="$(podman image inspect "$SYNAPSE_IMAGE_REF" --format '{{.Id}}' 2>/dev/null || true)"
+syn_have="$(podman inspect siwx-e2eh-synapse --format '{{.Image}}' 2>/dev/null || true)"
+if [ -n "$syn_have" ] && [ -n "$syn_want" ] && [ "$syn_have" != "$syn_want" ]; then
+  log "[run] RUNNING SYNAPSE DOES NOT MATCH THE CONFIGURED IMAGE."
+  log "[run]   configured ref    : $SYNAPSE_IMAGE_REF -> ${syn_want:0:12}"
+  log "[run]   siwx-e2eh-synapse : running ${syn_have:0:12}"
+  log "[run] Recreate the stack:  e2e-harness/down.sh && e2e-harness/up.sh"
+  SYNAPSE_PROVENANCE="MISMATCH: ref=$SYNAPSE_IMAGE_REF(${syn_want:0:12}) running=${syn_have:0:12}"
+  if [ "${E2E_STRICT_SKIPS:-1}" = "1" ]; then
+    log "[run] FATAL: refusing to record an artifact against an unverifiable image."
+    exit 1
+  fi
+elif [ -n "$syn_have" ]; then
+  SYNAPSE_PROVENANCE="$SYNAPSE_IMAGE_REF [running container matches: ${syn_have:0:12}]"
+fi
+log "[run] synapse image    : $SYNAPSE_PROVENANCE"
 
 # Per-check accounting (parallel arrays; bash 4 assoc would also work but keep
 # it portable/ordered).
@@ -543,6 +581,7 @@ jq -n \
   --arg rev_siwx_oidc "$REV_SIWX" \
   --arg rev_connector "$REV_CONNECTOR" \
   --arg image_siwx_oidc "$IMAGE_PROVENANCE" \
+  --arg image_synapse "$SYNAPSE_PROVENANCE" \
   --arg strict_skips "$E2E_STRICT_SKIPS" \
   --argjson total "${#RESULT_IDS[@]}" \
   --argjson passed "$PASS_N" \
@@ -552,7 +591,7 @@ jq -n \
   --argjson checks "[$CHECK_JSON]" \
   '{run_id:$run_id, tier:$tier, overall:$overall,
     under_test:{harness:$rev_harness, siwx_oidc:$rev_siwx_oidc, connector:$rev_connector,
-                siwx_oidc_image:$image_siwx_oidc},
+                siwx_oidc_image:$image_siwx_oidc, synapse_image:$image_synapse},
     settings:{strict_skips:$strict_skips},
     counts:{total:$total, pass:$passed, fail:$failed, known_flagged:$known_flagged,
             harness_error:$harness_error},

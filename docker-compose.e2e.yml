@@ -30,8 +30,10 @@ services:
       - siwx-e2eh-net
 
   siwx-e2eh-oidc:
-    # Reuse the proven alpine static-musl image == siwx-oidc main@3f40485.
-    image: localhost/siwx-oidc:local-grace
+    # Derived + built on demand by e2e-harness/images.sh:
+    #   localhost/siwx-oidc:e2eh-<short HEAD of ../siwx-oidc>
+    # Export the resolved refs first:  eval "$(e2e-harness/images.sh env)"
+    image: ${SIWX_OIDC_IMAGE_REF:?run e2e-harness/images.sh build, then export its refs (images.sh env)}
     container_name: siwx-e2eh-oidc
     restart: unless-stopped
     depends_on:
@@ -59,9 +61,11 @@ services:
       - siwx-e2eh-net
 
   siwx-e2eh-synapse:
-    # Reuse the proven MSC3861 local Synapse image (real-stack/Dockerfile.synapse
-    # + synapse_entrypoint.sh). FRESH volume so the harness boots clean.
-    image: localhost/siwx-real-synapse:local
+    # dockerfiles/Dockerfile (the deployed Synapse: pinned version, MSC4133
+    # write-policy patch, entrypoints/matrix_server.sh), built by
+    # e2e-harness/images.sh as localhost/siwx-e2eh-synapse:<vX.Y.Z>-<inputs hash>.
+    # FRESH volume so the harness boots clean.
+    image: ${SYNAPSE_IMAGE_REF:?run e2e-harness/images.sh build, then export its refs (images.sh env)}
     container_name: siwx-e2eh-synapse
     restart: unless-stopped
     depends_on:

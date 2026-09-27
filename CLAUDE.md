@@ -328,6 +328,13 @@ docker compose exec matrix_synapse \
 docker compose restart matrix_synapse
 ```
 
+## Local E2E harness
+
+`e2e-harness/run.sh smoke|full` runs the hermetic `siwx-e2eh-*` podman stack
+against the siwx-oidc and connector suites. Its siwx-oidc and Synapse images are
+derived from source and built on demand by `e2e-harness/images.sh` (test-only,
+never deployed). See `e2e-harness/README.md`.
+
 ## Renaming a live homeserver.yaml key (existing deployments)
 
 If `token_endpoint_auth_method` was written by an older entrypoint, rename it in place:

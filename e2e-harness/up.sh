@@ -19,27 +19,20 @@ NET="siwx-e2eh-net"
 # Same env-overridable digest pin as docker-compose.yml / docker-compose.e2e.yml.
 LK_JWT_IMAGE_REF="${LK_JWT_IMAGE_REF:-ghcr.io/element-hq/lk-jwt-service:0.6.0@sha256:822f0c03a3bdd924da92afc2e8ec59de5dda17af42d32e71e11f269c3517abf7}"
 
-# Env-overridable image refs, same convention as LK_JWT_IMAGE_REF above. The
-# defaults are exactly what the harness has always run, so an unset environment
-# behaves identically. Overriding lets a version-bump branch validate a candidate
-# image WITHOUT clobbering the shared localhost/* tags the siwx-real-* stack uses:
+# siwx-oidc + Synapse image refs. Both are DERIVED from source and built on
+# demand by e2e-harness/images.sh (see its header for the scheme and why the
+# old hand-built defaults, `siwx-oidc:e2eh-5f47a9b` / `siwx-real-synapse:local`,
+# were replaced). Overrides keep working exactly as before, e.g. to validate a
+# candidate image without touching the shared tags:
 #   SYNAPSE_IMAGE_REF=localhost/siwx-real-synapse:mas e2e-harness/up.sh
-SYNAPSE_IMAGE_REF="${SYNAPSE_IMAGE_REF:-localhost/siwx-real-synapse:local}"
-# ---------------------------------------------------------------------------
-# 2026-08-30: this default WAS `localhost/siwx-oidc:local-grace`, a hand-built
-# tag named after the long-finished refresh-token-grace work. By the time it was
-# found it was FIVE WEEKS OLD (built 2026-07-25), so every "green" harness run
-# in between had validated a five-week-old siwx-oidc binary while claiming to
-# exercise current code — including runs used to judge the Task 2 admin-token
-# mint and the Task 3 synapse_client port, neither of which was in that image.
-#
-# This is the SAME defect class as the stale OIDC_E2EH_DIR default and the
-# missing zero-tests guard: the harness testing something other than what it
-# says it tests. Fixing the default alone would just rot again, so run.sh now
-# ASSERTS that the image is not older than the siwx-oidc commit under test.
-# Rebuild with:  podman build -t localhost/siwx-oidc:e2eh-$(git rev-parse --short HEAD) .
-# ---------------------------------------------------------------------------
-SIWX_OIDC_IMAGE_REF="${SIWX_OIDC_IMAGE_REF:-localhost/siwx-oidc:e2eh-5f47a9b}"
+#   SIWX_OIDC_IMAGE_REF=localhost/siwx-oidc:t3-final   e2e-harness/up.sh
+# Resolved (and built if missing) BEFORE any running container is removed, so a
+# missing image can never leave you with a half-torn-down stack.
+# shellcheck source=images.sh
+. "${REPO_ROOT}/e2e-harness/images.sh"
+e2eh_ensure_images || { echo "[up] FATAL: harness images unavailable (see above)." >&2; exit 1; }
+echo "[up] siwx-oidc image: ${SIWX_OIDC_IMAGE_REF}"
+echo "[up] synapse image  : ${SYNAPSE_IMAGE_REF}"
 LIVEKIT_IMAGE_REF="${LIVEKIT_IMAGE_REF:-livekit/livekit-server:v1.13.6}"
 
 FRESH=0

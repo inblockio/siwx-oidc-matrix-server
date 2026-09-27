@@ -34,7 +34,11 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-PATCHED_IMAGE="${PATCHED_IMAGE:-localhost/siwx-real-synapse:local}"
+# Default PATCHED image = the e2e harness's Synapse (dockerfiles/Dockerfile,
+# resolved and built on demand by e2e-harness/images.sh, below). It used to be
+# the hand-built `siwx-real-synapse:local` tag, which was deleted in an image
+# cleanup on 2026-09-25 and could not be reproduced from its name.
+PATCHED_IMAGE="${PATCHED_IMAGE:-}"
 STOCK_IMAGE="${STOCK_IMAGE:-localhost/siwx-real-synapse:mas159}"
 
 while [ $# -gt 0 ]; do
@@ -47,6 +51,15 @@ while [ $# -gt 0 ]; do
 done
 
 RT="$(command -v podman || command -v docker)" || { echo "need podman or docker" >&2; exit 2; }
+
+if [ -z "${PATCHED_IMAGE}" ]; then
+  # shellcheck source=../e2e-harness/images.sh
+  . "${REPO_ROOT}/e2e-harness/images.sh"
+  SIWX_OIDC_IMAGE_REF="${SIWX_OIDC_IMAGE_REF:-unused}"   # only the Synapse image is needed here
+  e2eh_resolve_images || exit 2
+  e2eh_ensure_one synapse "${SYNAPSE_IMAGE_REF}" "${E2EH_SYNAPSE_IS_DEFAULT}" e2eh_build_synapse SYNAPSE_IMAGE_REF || exit 2
+  PATCHED_IMAGE="${SYNAPSE_IMAGE_REF}"
+fi
 
 # NOT /tmp. On the box this was written on /tmp is a RAM-backed tmpfs, and a
 # scratch dir holding container-generated config there is charged to memory and
