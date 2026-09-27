@@ -62,7 +62,14 @@ services:
     # dockerfiles/Dockerfile.caddy-l4 . && ` this file's image temporarily
     # set to `caddy-l4:local`). Once the CI tag below has actually been
     # published and pulled once, replace any local override with this ref.
-    image: ghcr.io/inblockio/siwx-oidc-matrix-server/caddy-l4:main
+    #
+    # 2026-09-27: pinned by digest to the main 0a58e7e build (Caddy v2.11.4 + caddy-l4
+    # v0.1.2 + caddy-ratelimit 5625512), which the /resolve rate_limit zones in
+    # Caddyfile.dev-aquafire REQUIRE. Same digest runs as portal-caddy-1 on prod.
+    # Rollback on dev-aquafire: the local build caddy-l4:2.11.4-l4v0.1.2
+    # (sha256:1ceb2c43...), which lacks rate_limit, so restore the pre-ratelimit
+    # Caddyfile FIRST.
+    image: ghcr.io/inblockio/siwx-oidc-matrix-server/caddy-l4@sha256:1c9825f346b1d45a001c9a7a8d7cf082403da8a0875a3a33064f0372203fabae
     # Explicit, stable name so ops/rollback commands (and `docker exec ...
     # caddy reload`) do not depend on the compose-generated suffix. Mirrors
     # the `aqua_proxy` / `aqua_acme` naming of the stack it replaces.
