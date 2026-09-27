@@ -939,7 +939,8 @@ A tag bump must try every patch in this file's order.
      would take the modern one).
   4. **When no resolver answers** (none discovered, CORS refusal, the edge limiter's 429,
      503/5xx, a 4 s budget, a malformed body, or an answer naming a different server)
-     the hand-copied formula runs exactly as before, over federation for a pinned peer.
+     the hand-copied formula runs as before, over federation for a pinned peer, now
+     LEGACY-first to match the provider's grandfathering order.
      That is what keeps cross-server search working with no browser-to-peer traffic.
   **Every candidate, from either path, is accepted only if its `io.inblock.did` read
   through our homeserver matches.** A lying resolver or a drifted formula yields no
@@ -959,15 +960,15 @@ A tag bump must try every patch in this file's order.
 - **Order:** applied AFTER entry 7 and depends on it. It moves `DID_PROFILE_FIELD` out of
   `useAttestedDid.ts` into `utils/didLocalpart.ts` and rewrites that line into a
   re-export, so dropping 7 or swapping the two fails the build.
-- **Coverage:** `didLocalpart.test.ts` ships inside the patch (37 vitest cases): the
+- **Coverage:** `didLocalpart.test.ts` ships inside the patch (38 vitest cases): the
   pinned vectors plus the 6 embedded golden vectors, the pkh/key case rules, shape,
   no-DID-leak, the legacy shape, the `looksLikeDid` boundary, `parseDidQuery`, and the
-  resolver path (advertised endpoint, issuer fallback, "no account" is final, a lying
+  resolver path (advertised endpoint, issuer fallback, legacy-first formula fallback matching the provider, "no account" is final, a lying
   resolver is rejected without a formula second guess, fallback on 429/503/malformed/
   wrong-server/no-OAuth/hung resolver, discovery caching, remote default-off with zero
   browser requests, remote discovery chain, no remote issuer guess, remote wrong-server
   answer). Verified against v1.12.29 with all eight patches applied in Dockerfile order:
-  71/71 across the new file plus `useProfileInfo`, `InviteDialog` and the Spotlight
+  78/78 across the new file plus `useProfileInfo`, `InviteDialog` and the Spotlight
   suites; `tsc --noEmit` adds no errors; `pnpm --filter element-web build` succeeds. No
   `e2e/element/` leg yet: like entry 7 it needs a lab account with a published DID.
 

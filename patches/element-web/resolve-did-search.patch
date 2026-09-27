@@ -162,10 +162,10 @@ index d0cfd4a..90c1458 100644
                  });
 diff --git a/apps/web/src/utils/didLocalpart.test.ts b/apps/web/src/utils/didLocalpart.test.ts
 new file mode 100644
-index 0000000..d2ea0c6
+index 0000000..bf8dd3f
 --- /dev/null
 +++ b/apps/web/src/utils/didLocalpart.test.ts
-@@ -0,0 +1,442 @@
+@@ -0,0 +1,453 @@
 +/**
 +Copyright 2026 inblock.io
 +
@@ -487,6 +487,17 @@ index 0000000..d2ea0c6
 +            await expect(resolveDidToUserId(client, KEY_UPPER, { fetchFn })).resolves.toBe(`@${modern}:${OWN}`);
 +        });
 +
++        it("falls back LEGACY-first, the provider's grandfathering order, when both shapes publish", async () => {
++            const client = mockClient({
++                fields: {
++                    [`@${modern}:${OWN}`]: published(KEY_UPPER),
++                    [`@${legacy}:${OWN}`]: published(KEY_UPPER),
++                },
++            });
++            const fetchFn = mockFetch({ [`${ISSUER}resolve`]: { status: 429, body: {} } });
++            await expect(resolveDidToUserId(client, KEY_UPPER, { fetchFn })).resolves.toBe(`@${legacy}:${OWN}`);
++        });
++
 +        it("falls back to the formula when the homeserver has no OAuth metadata at all", async () => {
 +            const client = mockClient({
 +                authMetadata: new Error("legacy auth"),
@@ -610,10 +621,10 @@ index 0000000..d2ea0c6
 +});
 diff --git a/apps/web/src/utils/didLocalpart.ts b/apps/web/src/utils/didLocalpart.ts
 new file mode 100644
-index 0000000..48b9911
+index 0000000..245e27f
 --- /dev/null
 +++ b/apps/web/src/utils/didLocalpart.ts
-@@ -0,0 +1,490 @@
+@@ -0,0 +1,495 @@
 +/**
 +Copyright 2026 inblock.io
 +
@@ -1000,8 +1011,8 @@ index 0000000..48b9911
 + * 2. **The hand-copied formula, when it does not.** No resolver, CORS refusal,
 + *    a 429 from the edge limiter, a 5xx, a timeout (see
 + *    {@link RESOLVER_BUDGET_MS}) or a malformed answer all land here: both
-+ *    candidate localparts are derived locally and tried on `serverName`, modern
-+ *    first. This is the path that reaches any federated server running this
++ *    candidate localparts are derived locally and tried on `serverName`, legacy
++ *    first (the provider's own grandfathering order). This is the path that reaches any federated server running this
 + *    stack without the searcher's browser ever talking to it, because Synapse
 + *    proxies the profile read over federation (`on_profile_query`).
 + *
@@ -1075,7 +1086,12 @@ index 0000000..48b9911
 +            candidates = [answer.userId];
 +            break;
 +        case "unavailable":
-+            candidates = [...new Set([await localpartForDid(did), legacyLocalpartForDid(did)])].map(
++            // LEGACY FIRST, the order siwx-oidc's `localpart::resolve_identity`
++            // uses: an identity with a legacy account signs in to THAT account,
++            // so when both shapes publish the DID (the D4 split-brain), the
++            // legacy one is the canonical answer and the fallback must agree
++            // with the resolver it stands in for.
++            candidates = [...new Set([legacyLocalpartForDid(did), await localpartForDid(did)])].map(
 +                (localpart) => `@${localpart}:${serverName}`,
 +            );
 +            break;
