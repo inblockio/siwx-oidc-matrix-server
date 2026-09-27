@@ -919,21 +919,57 @@ A tag bump must try every patch in this file's order.
   `@4pkgegvyqk1xk48d:dev.matrix.inblock.io` → the published `{did, proof}`.
 - **Upstream status:** not upstreamable as-is, for the same reason as entry 7 —
   `io.inblock.did` and the localpart derivation are both ours.
-- **Retirement:** the `io.inblock.did` contract is retired, OR siwx-oidc grows a
-  server-side resolver endpoint (`GET /resolve?did=…`) that this can call instead of
-  mirroring the derivation, which would delete the mirror and its drift risk entirely.
-  **That is the preferred end state**; the mirror exists because no such endpoint does yet.
+- **Resolver first, formula as fallback (2026-09-27, branch `feat/did-search-resolve-plus-federation`).**
+  The lookup now asks the provider's own `GET /resolve` (siwx-oidc c5ed83b) before it
+  derives anything. Order, per searched server:
+  1. **Own homeserver:** the resolver is found in our own `auth_metadata` under
+     `io.inblock.resolve_endpoint` (siwx-oidc branch `feat/advertise-resolve-endpoint`
+     adds it; Synapse forwards unknown issuer-metadata keys, `extra="allow"`), else
+     `{issuer}/resolve`. The issuer guess is allowed for our own server only.
+  2. **Pinned remote homeserver:** only when `config.json` sets
+     `"io.inblock.did_search": {"remote_resolvers": true}` (default OFF). Discovery is
+     the peer's `.well-known/matrix/client` -> `base_url` -> `auth_metadata` ->
+     advertised key, never a guess. Off by default because it is the only step where the
+     searcher's BROWSER contacts another organisation (their IP + the searched DID go to
+     the peer), and it needs the peer's edge to admit our origin in CORS.
+  3. **When a resolver answers, its answer is final:** "account X" means only X is
+     checked; "no account" means no result. It applies the real derivation and the real
+     grandfathering rule (legacy first), so it cannot drift and it names the canonical
+     account in the split-brain case where both shapes publish the DID (the formula alone
+     would take the modern one).
+  4. **When no resolver answers** (none discovered, CORS refusal, the edge limiter's 429,
+     503/5xx, a 4 s budget, a malformed body, or an answer naming a different server)
+     the hand-copied formula runs exactly as before, over federation for a pinned peer.
+     That is what keeps cross-server search working with no browser-to-peer traffic.
+  **Every candidate, from either path, is accepted only if its `io.inblock.did` read
+  through our homeserver matches.** A lying resolver or a drifted formula yields no
+  result, never the wrong user.
+- **Why the formula copy stays:** it is the only path to a federated server whose
+  resolver we cannot or should not call from the browser, and the fallback when our own
+  resolver is rate-limited or down. Its drift is now checked end to end: siwx-oidc's
+  `tests/fixtures/localpart-vectors.json` is proven equal to `mxid.rs` by
+  `tests/localpart_vectors.rs` (siwx-oidc), the patch's test embeds that file verbatim
+  and asserts `didLocalpart.ts` reproduces it, and `scripts/check-did-localpart-vectors.sh`
+  proves the embedded copy is byte-identical to the fixture.
+- **Retirement:** the `io.inblock.did` contract is retired. (The previous retirement
+  condition, "siwx-oidc grows `/resolve`", is met, and the answer was to put the resolver
+  in front, not to delete the formula: deleting it would drop DID search on federated
+  servers, because our `/resolve` answers only for its own homeserver and has no way to
+  reach a peer's.)
 - **Order:** applied AFTER entry 7 and depends on it. It moves `DID_PROFILE_FIELD` out of
   `useAttestedDid.ts` into `utils/didLocalpart.ts` and rewrites that line into a
   re-export, so dropping 7 or swapping the two fails the build.
-- **Coverage:** `didLocalpart.test.ts` ships inside the patch (14 vitest cases: the pinned
-  vectors, the pkh/key case rules, shape, no-DID-leak, the legacy shape, the
-  `looksLikeDid` boundary, and `parseDidQuery` — bare vs pinned, a `did:pkh` whose own id
-  carries colons, a port, malformed/empty servers, and the two-`@` case that must not
-  smuggle a server through). Verified locally against v1.12.26 with all eight patches
-  applied: 42/42 across the new file plus the existing `useProfileInfo` and `InviteDialog`
-  suites, plus a live round trip on dev for the bare, `@own-server` and `@remote` forms. No `e2e/element/` leg yet — like entry 7 it needs a lab account with a published
-  DID, and the two legs should be written together.
+- **Coverage:** `didLocalpart.test.ts` ships inside the patch (37 vitest cases): the
+  pinned vectors plus the 6 embedded golden vectors, the pkh/key case rules, shape,
+  no-DID-leak, the legacy shape, the `looksLikeDid` boundary, `parseDidQuery`, and the
+  resolver path (advertised endpoint, issuer fallback, "no account" is final, a lying
+  resolver is rejected without a formula second guess, fallback on 429/503/malformed/
+  wrong-server/no-OAuth/hung resolver, discovery caching, remote default-off with zero
+  browser requests, remote discovery chain, no remote issuer guess, remote wrong-server
+  answer). Verified against v1.12.29 with all eight patches applied in Dockerfile order:
+  71/71 across the new file plus `useProfileInfo`, `InviteDialog` and the Spotlight
+  suites; `tsc --noEmit` adds no errors; `pnpm --filter element-web build` succeeds. No
+  `e2e/element/` leg yet: like entry 7 it needs a lab account with a published DID.
 
 ## Runtime-stage deltas (not `.patch` files, still upstream deviations)
 
