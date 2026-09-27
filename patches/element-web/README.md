@@ -886,22 +886,72 @@ A tag bump must try every patch in this file's order.
   Synapse's `on_profile_query` returns custom profile fields over federation, so our
   homeserver proxies the read. A 10s bound wraps the whole resolution, because a pinned
   peer that is slow or down would otherwise stall the search box.
-- **What a pinned-server match proves — read this before trusting one.** What makes
-  `io.inblock.did` trustworthy is that the homeserver hosting it refuses a write to it
-  from its own subject, which is `patches/synapse/`'s write-ACL backport. That holds for
-  our own server by construction and for a peer **exactly when the peer runs this stack**
-  (ruling, Tim, 2026-09-11: a peer that publishes our field is running our provider, and
-  in practice therefore our whole stack). A peer that does not is free to let its users
-  write any DID into their own profile, so a pinned-server result is only as good as that
-  server. This patch reads the field; it does NOT verify the ES256 proof beside it, which
-  is what would make a result self-supporting rather than server-supporting. The verifier
-  already exists (`siwx-oidc-auth`'s `fetch_and_verify_did`) — porting it into the client
-  is the upgrade path if a peer outside the stack ever has to be trusted, and nothing here
-  should be read as already having done it.
-- **Deliberate limits:** only accounts that have published the field are findable — an
-  account that has not signed in since publication started is not findable, and becomes
-  findable by itself with no migration, because siwx-oidc re-asserts the field on every
-  sign-in. The derivation is also our provider's, so a homeserver running this build with
+- **What a match proves: the proof is verified in the browser (2026-09-28).** The
+  field alone is only as good as the homeserver's write ACL (`patches/synapse/`), which
+  holds for our own server by construction and for a peer only when it runs this stack.
+  So, per Tim's decision of 2026-09-28, Element now verifies the ES256 compact JWS in
+  the field's `proof` member itself (`src/utils/didProof.ts`, a port of
+  `siwx-oidc-auth`'s `verify_did_assertion`; wire contract in siwx-oidc
+  `src/did_assertion.rs`):
+  - header `alg` must be ES256, no `crit`, a `kid` present; checked before any key is
+    fetched, so `none`/HS* downgrades never reach a key;
+  - `sub` must be the searched DID and `mxid` must be byte-equal to the candidate MXID.
+    The `mxid` check is the replay guard: a genuine proof copied into another profile
+    fails here;
+  - `iss` is PINNED to the issuer the candidate MXID's OWN homeserver advertises in its
+    `/_matrix/client/v1/auth_metadata` (ours via the client; a peer's via its
+    `.well-known/matrix/client` -> `base_url`). Keys are never looked up from the
+    token's own `iss`;
+  - keys come from that issuer's discovery `jwks_uri` (same origin as the issuer),
+    selected by `kid`, no fallback. siwx-oidc's `/jwk` lists retired keys
+    (`oidc::jwks`), so proofs minted before the 2026-09-27 prod key rotation still
+    verify. An unknown `kid` forces one JWKS refresh before it counts as a failure;
+  - the signature is raw r||s, 64 bytes, verified with WebCrypto over the RECEIVED
+    signing input;
+  - discovery and JWKS are cached per issuer (10 min, failures not cached), and those
+    requests carry only server names and issuer URLs, never the searched DID, with
+    `credentials: "omit"` and no referrer.
+
+  Outcomes, as rendered (a marker beside the MXID in the invite dialog and Spotlight,
+  never in the display name, which the found user controls):
+
+  | Outcome | When | Shown? |
+  |---|---|---|
+  | VERIFIED | every check passed | yes, "DID verified" |
+  | UNVERIFIED (unchecked) | proof present and the network-free checks passed, but discovery or JWKS unreachable (CORS, network, 4 s budget, malformed document) | yes, "DID unverified: signing key unreachable" |
+  | UNVERIFIED (unpublished) | OUR OWN homeserver's `/resolve` named the account, but it has no signed DID yet (field absent, or no `proof`) | yes, "DID unverified: not yet published" |
+  | REJECTED | proof present and fails any check: malformed, bad signature, `sub`/`mxid`/`iss` mismatch, unknown `kid` on a reachable JWKS | no |
+  | no proof, formula or remote hit | field without `proof`, or no field, on anything but an own-server `/resolve` hit | no |
+
+  The unverified-unpublished row is Tim's decision 1 (2026-09-28) and applies to
+  own-server resolver hits ONLY: the formula is a guess and a remote resolver is another
+  organisation's word, so neither names an account on its own. The published `did`
+  member must still match the searched DID in every row, so a lying resolver still
+  gets no result.
+
+  **Honest limit, read before trusting a VERIFIED remote result:** the signature
+  proves that the issuer the candidate's homeserver advertises attested the binding.
+  It removes the dependency on that server's profile ACL; it does NOT protect against
+  a malicious remote OPERATOR, who controls both the homeserver and the issuer it
+  advertises and can sign any DID-to-MXID binding it likes. Only a signature by the
+  DID's own key would close that, and the wire format carries none. Likewise an
+  attacker who can make the keys unreachable gets at most "unverified", never
+  "verified", which is why the two markers must stay visibly distinct.
+
+  **Browser traffic this adds:** verifying a REMOTE candidate fetches that peer's
+  `.well-known/matrix/client`, `auth_metadata`, discovery document and JWKS from the
+  searcher's browser (the peer learns the searcher's IP and that someone looked up one
+  of its users shortly before, but not which DID). The remote RESOLVER (which would
+  receive the DID) stays off by default (Tim's decision 2). For this to verify rather
+  than show "unverified", the peer's `/jwk` and discovery must admit the searcher's
+  origin in CORS; for our own issuer on prod that is branch `feat/public-jwks-cors`
+  (ACAO `*` on those two paths only; today prod already admits `element.inblock.io`,
+  so our own users verify on our own Element either way).
+- **Deliberate limits:** on a federated server (or when our own resolver cannot answer)
+  only accounts that have published a signed field are findable; an account that has
+  not signed in since publication started becomes findable by itself with no migration,
+  because siwx-oidc re-asserts the field on every sign-in. On our own server such an
+  account IS found through `/resolve`, marked "not yet published" (see the table above). The derivation is also our provider's, so a homeserver running this build with
   a different identity provider will not place its users where this computes. Typing a DID
   and pressing enter in the invite dialog does not convert it to a target
   (`convertFilter` is synchronous and resolution is not); the resolved suggestion must be
@@ -943,8 +993,8 @@ A tag bump must try every patch in this file's order.
      LEGACY-first to match the provider's grandfathering order.
      That is what keeps cross-server search working with no browser-to-peer traffic.
   **Every candidate, from either path, is accepted only if its `io.inblock.did` read
-  through our homeserver matches.** A lying resolver or a drifted formula yields no
-  result, never the wrong user.
+  through our homeserver matches**, and then its proof is verified as described above.
+  A lying resolver or a drifted formula yields no result, never the wrong user.
 - **Why the formula copy stays:** it is the only path to a federated server whose
   resolver we cannot or should not call from the browser, and the fallback when our own
   resolver is rate-limited or down. Its drift is now checked end to end: siwx-oidc's
@@ -960,16 +1010,29 @@ A tag bump must try every patch in this file's order.
 - **Order:** applied AFTER entry 7 and depends on it. It moves `DID_PROFILE_FIELD` out of
   `useAttestedDid.ts` into `utils/didLocalpart.ts` and rewrites that line into a
   re-export, so dropping 7 or swapping the two fails the build.
-- **Coverage:** `didLocalpart.test.ts` ships inside the patch (38 vitest cases): the
+- **Coverage:** `didLocalpart.test.ts` ships inside the patch (60 vitest cases): the
   pinned vectors plus the 6 embedded golden vectors, the pkh/key case rules, shape,
-  no-DID-leak, the legacy shape, the `looksLikeDid` boundary, `parseDidQuery`, and the
-  resolver path (advertised endpoint, issuer fallback, legacy-first formula fallback matching the provider, "no account" is final, a lying
-  resolver is rejected without a formula second guess, fallback on 429/503/malformed/
-  wrong-server/no-OAuth/hung resolver, discovery caching, remote default-off with zero
-  browser requests, remote discovery chain, no remote issuer guess, remote wrong-server
-  answer). Verified against v1.12.29 with all eight patches applied in Dockerfile order:
-  78/78 across the new file plus `useProfileInfo`, `InviteDialog` and the Spotlight
-  suites; `tsc --noEmit` adds no errors; `pnpm --filter element-web build` succeeds. No
+  no-DID-leak, the legacy shape, the `looksLikeDid` boundary, `parseDidQuery`, the
+  resolver path (advertised endpoint, issuer fallback, legacy-first formula fallback
+  matching the provider, "no account" is final, a lying resolver is rejected without a
+  formula second guess, fallback on 429/503/malformed/wrong-server/no-OAuth/hung
+  resolver, discovery caching, remote resolver default-off, remote discovery chain, no
+  remote issuer guess, remote wrong-server answer), and 22 proof-verification cases on
+  keys generated inside the test (no real server's key material): verified by the live
+  key, by a RETIRED key, on the formula path and for a remote user; rejected for a
+  replayed proof (valid JWS, wrong `mxid`), wrong `iss` with the attacker issuer never
+  fetched, our issuer signing for a remote user, another `iss` under the pinned key,
+  unknown `kid` (after one refresh), bad signature, wrong `sub`, `alg` none/HS256 and
+  `crit` (before any key fetch); unverified for a CORS-refused JWKS and an unreachable
+  remote discovery; own-server `/resolve` hit unpublished or proof-less -> unverified;
+  formula and remote-resolver hits without a proof hidden; per-issuer caching. Plus
+  `DMRoomTile.test.tsx` (4: the three markers, and none for a display name that
+  imitates one) and 2 `useProfileInfo` cases for the marker's data path. Mutation-
+  checked: disabling the `mxid`, `sub`, `iss`, `alg`, signature, pinning, `kid` refresh,
+  own-only or published-`did` check each fails at least one case. Verified against
+  v1.12.29 with all eight patches applied in Dockerfile order: 97/97 across
+  `didLocalpart`, `useProfileInfo`, `InviteDialog` and `DMRoomTile`; `tsc --noEmit` adds
+  no errors; oxlint/oxfmt clean; `pnpm --filter element-web build` succeeds. No
   `e2e/element/` leg yet: like entry 7 it needs a lab account with a published DID.
 
 ## Runtime-stage deltas (not `.patch` files, still upstream deviations)
