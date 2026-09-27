@@ -212,7 +212,27 @@ matrix.inblock.io {
 siwx-oidc.inblock.io {
     encode zstd gzip
 
-    header Access-Control-Allow-Origin "https://element.inblock.io"
+    # PUBLIC KEY MATERIAL is readable from any origin; everything else on
+    # this vhost stays pinned to https://element.inblock.io.
+    #
+    # /jwk and the OIDC discovery document are public by definition (they
+    # carry the issuer's verification keys, live AND retired, and the URLs
+    # to find them), hold nothing about any user, and take no credentials.
+    # A browser needs them to verify the ES256 proof in a user's
+    # `io.inblock.did` profile field, and that includes Element Web
+    # deployments on OTHER origins verifying one of our users over
+    # federation. Every other path (/resolve, /authorize, /token, account
+    # pages, ...) keeps the element-only ACAO (Tim, 2026-09-28: /resolve
+    # CORS unchanged).
+    #
+    # The two matchers are mutually exclusive on purpose, so exactly one
+    # ACAO is ever set whatever order Caddy sorts these `header`
+    # directives in. Upstream's own ACAO is stripped by `header_down` in
+    # the reverse_proxy below, so the browser never sees two.
+    @public_keys path /jwk /.well-known/openid-configuration
+    @not_public_keys not path /jwk /.well-known/openid-configuration
+    header @public_keys Access-Control-Allow-Origin "*"
+    header @not_public_keys Access-Control-Allow-Origin "https://element.inblock.io"
     header Access-Control-Allow-Methods "GET, POST, OPTIONS"
     header Access-Control-Allow-Headers "Content-Type, Authorization"
 
