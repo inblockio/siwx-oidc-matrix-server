@@ -1,36 +1,57 @@
 ---
-description: Promote a Matrix user to server admin by their DID (e.g. /set-admin did:pkh:eip155:1:0x...)
+description: Promote a Matrix user to server admin by their DID or MXID (e.g. /set-admin did:pkh:eip155:1:0x... or /set-admin @localpart:host)
 allowed-tools: Bash, Read
 ---
 
-Promote the Matrix user identified by the DID `$ARGUMENTS` to server admin.
+Promote the Matrix user identified by `$ARGUMENTS` (a DID, or an MXID) to server admin.
+
+**Never derive the MXID from the DID (2026-09-27).** siwx-oidc gives every NEW DID an opaque
+localpart (16 base36 chars, e.g. `@1vo8g4vofiha69ua:host`) and keeps pre-2026-09 accounts on their
+legacy `did-...` localpart, so only the server knows which applies.
 
 Follow these steps exactly:
 
-## 1. Validate DID format
+## 1. Validate the argument
 
-The DID must match `did:pkh:eip155:<chainId>:0x<40 hex chars>`. Reject anything else immediately with a clear error — do NOT proceed.
+An MXID (`@localpart:host`), or a DID: `did:pkh:eip155:<chainId>:0x<40 hex chars>` or
+`did:key:z<base58btc>`. Reject anything else immediately with a clear error — do NOT proceed.
 
 ```bash
-DID="$ARGUMENTS"
-if ! echo "$DID" | grep -qE '^did:[a-z]+:[a-z0-9]+:[a-z0-9]+:0x[0-9a-fA-F]{40}$'; then
-  echo "ERROR: '$DID' is not a valid DID (expected did:pkh:eip155:<chainId>:0x<address>)"
+ARG="$ARGUMENTS"
+if ! echo "$ARG" | grep -qE '^(@[a-z0-9._=/+-]+:[A-Za-z0-9.:-]+|did:[a-z]+:[a-z0-9]+:[a-z0-9]+:0x[0-9a-fA-F]{40}|did:key:z[1-9A-HJ-NP-Za-km-z]+)$'; then
+  echo "ERROR: '$ARG' is neither an MXID nor a valid did:pkh / did:key"
   exit 1
 fi
 ```
 
-## 2. Derive localpart and read MATRIX_HOST from .env
+## 2. Resolve the MXID (MXID verbatim; a DID via siwx-oidc /resolve)
 
 ```bash
-LOCALPART=$(echo "$DID" | tr ':' '-' | tr '[:upper:]' '[:lower:]')
-
 MATRIX_HOST=$(grep '^MATRIX_HOST=' .env 2>/dev/null | head -1 | cut -d= -f2 | tr -d "\"' ")
+SIWX=$(grep '^SIWEOIDC_BASE_URL=' .env 2>/dev/null | head -1 | cut -d= -f2 | tr -d "\"' ")
 if [ -z "$MATRIX_HOST" ]; then
   echo "ERROR: MATRIX_HOST not found in .env — run from the project root directory"
   exit 1
 fi
 
-MATRIX_USER="@${LOCALPART}:${MATRIX_HOST}"
+case "$ARG" in
+  @*) MATRIX_USER="$ARG" ;;
+  *)
+    # The public lookup applies siwx-oidc's own grandfathering rule.
+    ANSWER=$(curl -s -m 20 -G --data-urlencode "did=$ARG" "${SIWX%/}/resolve" -w '\n%{http_code}')
+    CODE=$(printf '%s' "$ANSWER" | tail -n1); BODY=$(printf '%s' "$ANSWER" | sed '$d')
+    if [ "$CODE" = "200" ]; then
+      MATRIX_USER=$(printf '%s' "$BODY" | sed -n 's/.*"mxid":"\(@[^"]*\)".*/\1/p')
+    else
+      # /resolve unavailable (404 = siwx-oidc older than c5ed83b). The ONLY safe fallback is
+      # the grandfathered legacy account, and step 3 promotes it only if it already EXISTS
+      # (siwx-oidc checks legacy first, so an existing legacy account is the DID's account).
+      echo "WARN: ${SIWX}/resolve answered HTTP $CODE; trying the grandfathered legacy account only"
+      MATRIX_USER="@$(echo "$ARG" | tr ':' '-' | tr '[:upper:]' '[:lower:]'):${MATRIX_HOST}"
+    fi
+    ;;
+esac
+[ -n "$MATRIX_USER" ] || { echo "ERROR: could not resolve an MXID for $ARG"; exit 1; }
 echo "Target user: $MATRIX_USER"
 ```
 

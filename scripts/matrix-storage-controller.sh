@@ -428,7 +428,48 @@ prune_local() {
   log "local: delete window=$(fmt_window "$w") keep_profiles=true http=$code resp=$body"
 }
 
-admin_user_id() { printf '@%s:%s' "$(printf '%s' "$1" | tr ':' '-' | tr 'A-Z' 'a-z')" "$2"; }
+# The admin's MXID, RESOLVED and never derived (2026-09-27): siwx-oidc gives every NEW DID an
+# opaque localpart (16 base36 chars) and keeps pre-2026-09 accounts on their legacy `did-...`
+# one, so `tr ':' '-'` addresses the wrong (or no) account for a new admin DID. Order:
+#   1. MATRIX_ADMIN_MXID from .env, verbatim.
+#   2. siwx-oidc GET /resolve?did= (server-side grandfathering), only when exists=true.
+#   3. Only when /resolve cannot answer (404 = siwx-oidc older than c5ed83b, 5xx, no response):
+#      the legacy-shaped account IF Synapse says it exists. siwx-oidc checks legacy first, so
+#      an existing legacy account is by construction the DID's account (an existence check,
+#      not a guess).
+# Anything else fails loudly: the notice is not sent (and so retried next tick).
+ADMIN_UID=""
+resolve_admin_uid() {
+  local out code body mxid legacy
+  [ -n "$ADMIN_UID" ] && return 0
+  if [ -n "${ADMIN_MXID:-}" ]; then ADMIN_UID="$ADMIN_MXID"; return 0; fi
+  set +e
+  out="$(in_synapse '
+      curl -s -w "\n__HTTP__%{http_code}" -G --connect-timeout "$CT" --max-time "$MT" \
+        --data-urlencode "did=$DID" "$OIDC_URL/resolve"
+    ' -e OIDC_URL="$OIDC_INTERNAL_URL" -e DID="$ADMIN_DID" \
+      -e CT="$HTTP_CONNECT_TIMEOUT" -e MT="$ADMIN_MAX_TIME")"
+  set -e
+  code="$(http_of "$out")"; body="$(body_of "$out")"
+  if [ "$code" = "200" ]; then
+    mxid="$(printf '%s' "$body" | sed -n 's/.*"mxid":"\(@[^"]*\)".*/\1/p')"
+    if [ -n "$mxid" ] && printf '%s' "$body" | grep -q '"exists":true'; then
+      ADMIN_UID="$mxid"; log "admin MXID resolved via siwx-oidc /resolve: $ADMIN_UID"; return 0
+    fi
+    log_err "siwx-oidc /resolve: $ADMIN_DID has no account yet ($body); it must sign in once. Or set MATRIX_ADMIN_MXID"
+    return 1
+  fi
+  legacy="@$(printf '%s' "$ADMIN_DID" | tr ':' '-' | tr 'A-Z' 'a-z'):$MATRIX_HOST"
+  ensure_admin_token
+  out="$(synapse_call GET "/_synapse/admin/v2/users/$legacy")"
+  if [ "$(http_of "$out")" = "200" ]; then
+    ADMIN_UID="$legacy"
+    log "admin MXID: siwx-oidc /resolve unavailable (http=${code:-none}); using the EXISTING grandfathered legacy account $ADMIN_UID"
+    return 0
+  fi
+  log_err "cannot resolve the admin MXID for $ADMIN_DID: siwx-oidc /resolve http=${code:-none} and no legacy account exists. Not guessing; set MATRIX_ADMIN_MXID in $STACK_DIR/.env"
+  return 1
+}
 # Backslashes first, then quotes, so the round-trip is correct. Raw newlines /
 # CR / tabs are illegal inside a JSON string (RFC 8259) and would be rejected by
 # Synapse, so they are folded to spaces BEFORE escaping.
@@ -438,7 +479,7 @@ json_escape() { printf '%s' "$1" | tr '\n\r\t' '   ' | sed -e 's/\\/\\\\/g' -e '
 # than silently dropping an alert.
 send_notice() {
   local body="$1" uid esc payload out code resp
-  if [ -z "${ADMIN_DID:-}" ]; then
+  if [ -z "${ADMIN_DID:-}" ] && [ -z "${ADMIN_MXID:-}" ]; then
     if [ "$ALERTS_OPTIONAL" = "1" ]; then
       log "MATRIX_ADMIN_DID unset and ALERTS_OPTIONAL=1 — alerting is deliberately off; dropping: $body"
       return 0
@@ -447,7 +488,8 @@ send_notice() {
     log_err "set MATRIX_ADMIN_DID, or set ALERTS_OPTIONAL=1 to run retention without alerting on purpose"
     return 1
   fi
-  uid="$(json_escape "$(admin_user_id "$ADMIN_DID" "$MATRIX_HOST")")"
+  resolve_admin_uid || { log_err "notice NOT sent (admin MXID unresolved): $body"; return 1; }
+  uid="$(json_escape "$ADMIN_UID")"
   esc="$(json_escape "$body")"
   payload="{\"user_id\":\"$uid\",\"content\":{\"msgtype\":\"m.text\",\"body\":\"$esc\"}}"
   if [ "$DRY_RUN" = "1" ]; then log "DRY_RUN notice -> $uid: $body"; return 0; fi
@@ -490,6 +532,7 @@ load_env() {
   MATRIX_HOST="$(env_get MATRIX_HOST)"
   MATRIX_PORT="$(env_get MATRIX_PORT)"; MATRIX_PORT="${MATRIX_PORT:-8080}"
   ADMIN_DID="$(env_get MATRIX_ADMIN_DID)"
+  ADMIN_MXID="$(env_get MATRIX_ADMIN_MXID)"
   local oidc_port; oidc_port="$(env_get SIWEOIDC_PORT)"
   OIDC_INTERNAL_URL="${OIDC_INTERNAL_URL:-http://${OIDC_SERVICE}:${oidc_port:-8081}}"
   [ -n "$MAS_SECRET" ] || { log_fatal "MAS_SHARED_SECRET empty in $STACK_DIR/.env"; log_unprotected; exit 1; }

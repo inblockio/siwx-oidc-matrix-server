@@ -432,31 +432,82 @@ else
   echo "WARNING: /data/homeserver.yaml still missing after setup — skipping MatrixRTC config re-assert." >&2
 fi
 
-# Promote admin user if MATRIX_ADMIN_DID is set (idempotent, runs every boot).
-# The user must have completed at least one OIDC login before this takes effect.
-if [ -n "${MATRIX_ADMIN_DID}" ]; then
-  # Validate format before use — reject anything that isn't a well-formed DID.
-  if ! echo "${MATRIX_ADMIN_DID}" | grep -qE '^did:[a-z]+:[a-z0-9]+:[a-z0-9]+:0x[0-9a-fA-F]{40}$'; then
+# Promote admin user if MATRIX_ADMIN_DID (or MATRIX_ADMIN_MXID) is set (idempotent, runs every
+# boot). The user must have completed at least one OIDC login before this takes effect.
+#
+# The admin's MXID is RESOLVED, never derived (2026-09-27): siwx-oidc gives every NEW DID an
+# opaque localpart (16 base36 chars) and keeps pre-2026-09 accounts on their legacy
+# `did-...` localpart, so `tr ':' '-'` names the wrong account for a new admin DID. siwx-oidc's
+# /resolve cannot be asked from here (it probes THIS Synapse, which is not running yet), so the
+# lookup reads the database, in the same order as siwx-oidc's own grandfathering rule:
+#   1. MATRIX_ADMIN_MXID, when set: used verbatim (the explicit, preferred form).
+#   2. The legacy-shaped account, ONLY if it exists: siwx-oidc checks legacy first, so an
+#      existing legacy account is by construction the DID's account (an existence check, not
+#      a guess; a missing one is never promoted into being).
+#   3. The account whose `io.inblock.did` profile field (written by siwx-oidc, write-protected)
+#      binds the DID.
+# Nothing found = deferred with a message; never a guessed MXID.
+if [ -n "${MATRIX_ADMIN_DID:-}" ] || [ -n "${MATRIX_ADMIN_MXID:-}" ]; then
+  ADMIN_OK=1
+  if [ -n "${MATRIX_ADMIN_MXID:-}" ]; then
+    if ! echo "${MATRIX_ADMIN_MXID}" | grep -qE '^@[a-z0-9._=/+-]+:[A-Za-z0-9.:-]+$'; then
+      echo "WARNING: MATRIX_ADMIN_MXID='${MATRIX_ADMIN_MXID}' is not a well-formed Matrix ID — skipping admin promotion."
+      ADMIN_OK=0
+    fi
+  elif ! echo "${MATRIX_ADMIN_DID:-}" | grep -qE '^(did:[a-z]+:[a-z0-9]+:[a-z0-9]+:0x[0-9a-fA-F]{40}|did:key:z[1-9A-HJ-NP-Za-km-z]+)$'; then
+    # Validate format before use — reject anything that isn't a well-formed DID.
     echo "WARNING: MATRIX_ADMIN_DID='${MATRIX_ADMIN_DID}' has invalid format — skipping admin promotion."
-  else
-    ADMIN_LOCALPART=$(echo "${MATRIX_ADMIN_DID}" | tr ':' '-' | tr '[:upper:]' '[:lower:]')
-    ADMIN_USER="@${ADMIN_LOCALPART}:${MATRIX_HOST}"
+    ADMIN_OK=0
+  fi
+  if [ "$ADMIN_OK" = "1" ]; then
     # Values are passed as env vars; the Python source is a literal heredoc (single-quoted
     # terminator = no shell expansion inside). Nothing is interpolated into Python code.
-    ADMIN_USER="${ADMIN_USER}" python3 << 'PYEOF'
-import sqlite3, sys, os
+    ADMIN_DID="${MATRIX_ADMIN_DID:-}" ADMIN_MXID="${MATRIX_ADMIN_MXID:-}" ADMIN_HOST="${MATRIX_HOST}" python3 << 'PYEOF'
+import sqlite3, os
 
-user = os.environ['ADMIN_USER']   # never comes from shell interpolation into source
+did = os.environ.get('ADMIN_DID', '')        # never comes from shell interpolation into source
+explicit = os.environ.get('ADMIN_MXID', '')
+host = os.environ['ADMIN_HOST']
+FIELD = '$."io.inblock.did".did'
 
 try:
     conn = sqlite3.connect('/data/homeserver.db')
     c = conn.cursor()
-    c.execute('UPDATE users SET admin=1 WHERE name=?', (user,))
-    if c.rowcount:
-        print(f'Admin promoted: {user}')
+    user, how = None, ''
+    if explicit:
+        user, how = explicit, 'MATRIX_ADMIN_MXID'
     else:
-        print(f'Admin promotion deferred: {user} not found (user must log in first)')
-    conn.commit()
+        legacy = '@' + did.replace(':', '-').lower() + ':' + host
+        if c.execute('SELECT 1 FROM users WHERE name=?', (legacy,)).fetchone():
+            user, how = legacy, 'grandfathered legacy account'
+        else:
+            # did:pkh is canonicalised case-insensitively (siwx-oidc mxid::canonicalize);
+            # did:key is case-sensitive (base58btc) and must match byte-for-byte.
+            if did.startswith('did:pkh:'):
+                q = f"SELECT full_user_id FROM profiles WHERE lower(json_extract(fields, '{FIELD}')) = lower(?)"
+            else:
+                q = f"SELECT full_user_id FROM profiles WHERE json_extract(fields, '{FIELD}') = ?"
+            try:
+                rows = [r[0] for r in c.execute(q, (did,)).fetchall()]
+            except sqlite3.OperationalError as e:   # pre-MSC4133 schema: no `fields` column
+                rows = []
+                print(f'Admin promotion: profile-field lookup unavailable ({e})')
+            if len(rows) == 1:
+                user, how = rows[0], 'io.inblock.did profile binding'
+            elif len(rows) > 1:
+                print(f'Admin promotion SKIPPED: {len(rows)} accounts claim {did} ({rows}); '
+                      'set MATRIX_ADMIN_MXID explicitly')
+    if user is None:
+        if not explicit:
+            print(f'Admin promotion deferred: no account resolves for {did} yet '
+                  '(it must sign in first; the MXID is never guessed)')
+    else:
+        c.execute('UPDATE users SET admin=1 WHERE name=?', (user,))
+        if c.rowcount:
+            print(f'Admin promoted: {user} (via {how})')
+        else:
+            print(f'Admin promotion deferred: {user} not found (user must log in first)')
+        conn.commit()
     conn.close()
 except Exception as e:
     print(f'Admin promotion error: {e}')

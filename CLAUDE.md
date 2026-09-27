@@ -222,18 +222,24 @@ Two mechanisms are provided:
 
 ### `/set-admin` skill (manual, one-shot)
 ```bash
-/set-admin did:pkh:eip155:1:0xYourAddress
+/set-admin did:pkh:eip155:1:0xYourAddress      # or an MXID: /set-admin @localpart:host
 ```
-Reads `MATRIX_HOST` from `.env`, derives the Matrix localpart, and promotes via SQLite.
+Resolves the MXID (verbatim, or via siwx-oidc `/resolve`; never derived, since new DIDs get
+opaque localparts) and promotes via SQLite.
 The user must have logged in at least once. No restart required.
 
 ### `MATRIX_ADMIN_DID` env var (automatic, every boot)
 Set in `.env` or pass to `start-matrix.sh`. The entrypoint runs an idempotent promotion
-on every container start. Silently defers if the user hasn't logged in yet.
+on every container start. Silently defers if the user hasn't logged in yet. The MXID is
+resolved, never derived (2026-09-27, opaque localparts for new DIDs): `MATRIX_ADMIN_MXID`
+verbatim if set, else the legacy-shaped account only if it EXISTS, else the account whose
+`io.inblock.did` profile field binds the DID (read from the DB: siwx-oidc `/resolve` cannot
+be asked while Synapse itself is still starting). `scripts/matrix-storage-controller.sh`
+resolves its notice recipient the same way, via `/resolve` at runtime.
 
 **Security note for both mechanisms**: values are passed to Python via environment variables
 and read with `os.environ` — never interpolated into Python source code. Input is validated
-against `^did:[a-z]+:[a-z0-9]+:[a-z0-9]+:0x[0-9a-fA-F]{40}$` before use.
+against a did:pkh / did:key / MXID shape before use.
 
 ## Element Web client
 
