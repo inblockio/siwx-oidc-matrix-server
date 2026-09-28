@@ -960,7 +960,7 @@ A tag bump must try every patch in this file's order.
   refresh poisons the map. `/versions` does not require auth, and media support is a
   server property, so the anonymous retry is exact.
 - **Evidence (2026-09-28, dev, headless Chromium, harness
-  `~/.cache/ew-swver-repro/repro.mjs`):** SW console
+  `scripts/element-sw-media-repro.mjs`):** SW console
   `/versions response ...: {"errcode":"M_UNKNOWN_TOKEN","error":"Token is not active"}`
   then `serverSupportMap update ...: {"supportsAuthedMedia":false,...}` then
   `media/v3/download ... 404`, image still broken after a room re-open and a normal
@@ -979,8 +979,16 @@ A tag bump must try every patch in this file's order.
   filing policy above.
 - **Retirement:** a tag bump where upstream checks `response.ok` (or otherwise stops
   caching a failed `/versions`). The patch then fails to apply: check, and drop it.
-- **Coverage:** the harness above (`live` mode with `LIVE_STOP_SW=1`, `reopen` with
-  `TOKEN_DELAY_MS=4000`); not yet a spec in the siwx-oidc Element suite.
+- **Verified on dev (rev 740f227, `element-web@sha256:17b878c1…`):** live window 6/6
+  (SW logs `returned 401 with a token; retrying without one` then
+  `supportsAuthedMedia:true`, and `retrying media request with a refreshed access
+  token`; image renders first time), delayed-refresh reopen 6/6 and fast reopen 10/10
+  clean, 0 legacy 404s in every run. Regressions clean: fresh login, normal reopen, hard
+  reload (guard B re-attaches), logged-out page (no canary probe),
+  `element-deploy-audit.sh` 21 PASS / 0 FAIL.
+- **Coverage:** `scripts/element-sw-media-repro.mjs` (`live` with `LIVE_STOP_SW=1
+  LIVE_TRIGGER_S=300.8`, `reopen` with `TOKEN_DELAY_MS=4000`); each run needs a real
+  300 s token expiry. Not yet a spec in the siwx-oidc Element suite.
 
 ## Runtime-stage deltas (not `.patch` files, still upstream deviations)
 
