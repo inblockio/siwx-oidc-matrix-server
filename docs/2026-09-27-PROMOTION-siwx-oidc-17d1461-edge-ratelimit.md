@@ -184,3 +184,15 @@ siwx-oidc is the cheap follow-up.
 - Soak at +1 h / +24 h: e2e 13/13, fleet count, siwx-oidc log levels, `caddy_rate_limit_declined_requests_total`.
 - Converting `portal-caddy-1` into a compose file is still open (see repo
   `docs/deployment-recovery-reference.md`).
+
+## 9. Early soak check (+2 h, 2026-09-27 23:20 UTC)
+
+- siwx-oidc: Up (healthy) since 21:10:13Z, 0 restarts, image sha256:7610f878 (rev 17d1461) matches .env.
+- /jwk: single kid c8551128d18f71ff. /resolve for the new Scribe DID: exists:true, attested:true.
+- Logs since promotion: siwx-oidc 7,908 lines, all INFO, 0 WARN/ERROR, HTTP 200/201/303 only. Synapse 0 ERROR,
+  0 OIDC or introspection warnings (700 WARNING, baseline 635 in the same window the day before).
+- e2e `prod-siwxpromo-soak-20260928`: 13/13.
+- Fleet: 21/21 up, 0 restarts, 29 to 30 refresh grants each, 0 x 401. Scribe active, 0 restarts. Crash-loop
+  watcher quiet (phase ok, 2 ignored one-probe blips).
+- Open: rate-limit metric not reachable (admin :2019/metrics returned nothing). The +24 h check is still due
+  around 2026-09-28 21:17 UTC.
