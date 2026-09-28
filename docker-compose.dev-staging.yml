@@ -129,6 +129,12 @@ services:
       SIWEOIDC_PORT: ${SIWEOIDC_PORT}
       SIWEOIDC_BASE_URL: ${SIWEOIDC_BASE_URL}
       SIWEOIDC_SIGNING_KEY_PEM: ${SIWEOIDC_SIGNING_KEY_PEM}
+      # PUBLIC halves of retired signing keys, published in the JWKS so io.inblock.did
+      # proofs minted before a rotation stay verifiable. Must be NON-EMPTY when listed:
+      # an empty value is a startup panic. Rotated 2026-09-27 (old kid 01797b65f97f018b).
+      # Deliberately NOT in docker-compose.yml (prod): prod retired its old key without
+      # listing it (it had published no proofs, and the key was exposed).
+      SIWEOIDC_RETIRED_SIGNING_KEYS_PEM: ${SIWEOIDC_RETIRED_SIGNING_KEYS_PEM}
       SIWEOIDC_MAS_SHARED_SECRET: ${MAS_SHARED_SECRET}
       SIWEOIDC_SYNAPSE_ENDPOINT: http://matrix_synapse:${MATRIX_PORT}
       SIWEOIDC_REQUIRE_SECRET: "false"
