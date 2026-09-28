@@ -1,8 +1,8 @@
 <!--
-Draft for element-hq/element-web. Prepared 2026-09-28. Not opened.
+Draft for element-hq/element-web. Prepared 2026-09-28.
 Head: the fork's fix/sw-versions-not-cached-on-error (3 commits on develop 3af3cbec98, head 4ea5f83813)
 Base: element-hq/element-web:develop
-Replace #<ISSUE> once the issue is filed.
+Opened 2026-09-28 as element-hq/element-web#35242 (issue #35241).
 CLA: signed as FantasticoFox (license/cla is green on #34718, same author email).
 -->
 
@@ -12,7 +12,7 @@ Fix media failing to load when the service worker's /versions check fails
 
 # Description
 
-Fixes #<ISSUE>
+Fixes #35241
 
 The service worker caches, for two hours, whether the homeserver supports authenticated
 media, based on one `GET /_matrix/client/versions`. It parsed that response without a

@@ -1,6 +1,6 @@
 <!--
 Draft for element-hq/element-web, "Bug report for the Element web app" template.
-Prepared 2026-09-28. Not filed. When filing, copy the title and the sections below
+Prepared 2026-09-28. Filed 2026-09-28 as element-hq/element-web#35241 (mechanism paragraphs moved directly after step 3 when filing). When filing, copy the title and the sections below
 into the template's fields.
 -->
 

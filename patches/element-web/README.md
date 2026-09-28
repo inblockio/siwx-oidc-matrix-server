@@ -31,8 +31,9 @@ Rules of this registry:
      residents.
    Today exactly one entry is UPSTREAM-TRACKED: #6 `browser-eventindex`
    ([element-web#34718](https://github.com/element-hq/element-web/pull/34718)).
-   Entry 9 stays an UPSTREAM DEFECT, but its fix is being filed (see the policy
-   exception below) and its vendored patch is byte-for-byte the prepared PR diff,
+   Entry 9 stays an UPSTREAM DEFECT, but its fix is filed as
+   [element-web#35242](https://github.com/element-hq/element-web/pull/35242) (see the
+   policy exception below) and its vendored patch is byte-for-byte the prepared PR diff,
    so the same no-drift discipline applies to it.
 4. **Tag-bump procedure** (do this for every `ELEMENT_WEB_TAG` change):
    ```bash
@@ -73,7 +74,7 @@ filing is worth repeating.
 | FAILURE | Closed unmerged, explicitly rejected, **or** no maintainer engagement for 3 months. |
 | AMBIGUOUS | Maintainers want a substantially different implementation. Engagement works but costs more than one PR's worth; re-decide, do not auto-file. |
 
-**Exception (Tim, 2026-09-28): entry 9 is filed now.** This policy gates only entries
+**Exception (Tim, 2026-09-28): entry 9 is filed now** (issue #35241, PR #35242). This policy gates only entries
 2, 3 and 4 on #34718; entry 9 (`sw-versions-no-cache-on-error`) is a defect that breaks
 all media for users on servers that enforce authenticated media, and filing it was
 ordered explicitly. Entry 10 is not covered by this exception (see its entry).
@@ -1019,9 +1020,12 @@ A tag bump must try every patch in this file's order.
   (`docs/superpowers/plans/2026-07-31-sw-hardening-handover.md`, "File upstream (a)")
   and was not acted on then.
 - **Upstream status:** Filing ordered by Tim 2026-09-28, explicit exception: the
-  2026-09-01 filing policy gates only entries 2/3/4 on #34718. Issue: <TBD>. PR: <TBD>.
-  Branch prepared (not opened): inblockio/element-web
-  `fix/sw-versions-not-cached-on-error`, drafts in
+  2026-09-01 filing policy gates only entries 2/3/4 on #34718. Issue:
+  [element-web#35241](https://github.com/element-hq/element-web/issues/35241) (filed
+  2026-09-28). PR:
+  [element-web#35242](https://github.com/element-hq/element-web/pull/35242) (opened
+  2026-09-28, head inblockio/element-web `fix/sw-versions-not-cached-on-error` at
+  `4ea5f83813`, no force-push from here on). Drafts as filed in
   `docs/upstream/2026-09-28-element-sw-versions/`. The open maintainer PR #34955 (hughns)
   adds `serviceworker/index.test.ts` with a fetch mock that lacks `ok`; our tests live in
   `serverSupport.test.ts` to avoid the file conflict, and we rebase onto #34955 (and move
