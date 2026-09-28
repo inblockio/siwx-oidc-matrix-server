@@ -54,7 +54,14 @@
  *     the visibilitychange handling below); it does not re-probe mid-life.
  *     A wedge appearing later heals on next navigation, where the
  *     per-build sw.js stamp (Dockerfile.element) also evicts it after any
- *     deploy.
+ *     deploy. Since 2026-09-28 the canary waits until the app is SYNCING,
+ *     so its probe normally does not reach the SW with a stale (expired, not
+ *     yet refreshed) access token; if the app is not SYNCING within 120 s the
+ *     canary warns and runs anyway. See the gate comment at whenSessionSynced.
+ *     The 8000 ms timer is coupled to sw.js: a probe that 401s makes the SW
+ *     wait up to 5000 ms (wall clock) for a refreshed token before it settles
+ *     (patches/element-web/sw-media-401-token-retry.patch, registry entry 10),
+ *     so that bound must stay well under this timer. Change them together.
  */
 (function () {
     "use strict";
@@ -141,149 +148,212 @@
 
     // (E) SW liveness canary
     window.addEventListener("load", function () {
+        // Gate (2026-09-28 RCA): the probe is a SW-intercepted media fetch, so the
+        // first one on a fresh SW instance makes the SW read the STORED access
+        // token and call /versions with it. On a tab opened after the 300 s OIDC
+        // access token expired, that token is dead until the app's first
+        // 401-triggered refresh, /versions answers 401, and the stock sw.js cached
+        // that as "no authenticated media" -> every media request went legacy and
+        // 404'd for the life of the SW instance. Prod forensics: all three
+        // observed bursts were started by THIS probe, before the app's refresh;
+        // the app's own media fetches came only after it. sw.js now refuses to
+        // cache a failed probe (patches/element-web/sw-versions-no-cache-on-error
+        // .patch), but the canary should not send stale-token traffic either. So
+        // wait until the app has completed a network sync ("SYNCING": a /sync
+        // round-trip succeeded with a valid, persisted token).
+        //
+        // If the app is not SYNCING within 120 s (logged out, offline, a broken
+        // session, or a SW so stuck that it delays /sync), warn and run the canary
+        // anyway. That is safe now: sw.js never caches a failed /versions probe,
+        // and a probe that 401s settles within sw.js's 5 s refresh wait, under
+        // the 8 s timer below. Every request from a controlled page, /sync
+        // included, generates a SW fetch event; the handler returns without
+        // respondWith() for anything but media downloads/thumbnails, so the wedge
+        // E detects (a respondWith() that never settles) leaves /sync alone and
+        // the gate opens normally. A SW whose whole thread is stuck delays /sync
+        // too; the deadline is what keeps the gate from hiding that case.
+        //
+        // Hidden tabs: browsers throttle timers there, so the 1 s poll may run
+        // late; the deadline is wall-clock, so it still expires, and a late 8 s
+        // timer can only make a timeout (and a heal) less likely, never more.
+        // When the deadline expires while the tab is hidden, the canary waits
+        // for the tab to become visible, as on first load.
+        function whenVisible(cb) {
+            if (!document.hidden) {
+                cb();
+                return;
+            }
+            document.addEventListener("visibilitychange", function onSwCanaryVisible() {
+                if (document.hidden) return;
+                document.removeEventListener("visibilitychange", onSwCanaryVisible);
+                cb();
+            });
+        }
+
+        function whenSessionSynced(cb) {
+            var deadline = Date.now() + 120000;
+            (function poll() {
+                try {
+                    var peg = window.mxMatrixClientPeg;
+                    var cli = peg && typeof peg.get === "function" ? peg.get() : null;
+                    if (cli && typeof cli.getSyncState === "function" && cli.getSyncState() === "SYNCING") {
+                        cb();
+                        return;
+                    }
+                } catch (e) {
+                    return; // A guard must never break the app.
+                }
+                if (Date.now() > deadline) {
+                    console.warn("sw-boot: app not SYNCING after 120 s; running the SW liveness canary anyway");
+                    whenVisible(cb);
+                    return;
+                }
+                setTimeout(poll, 1000);
+            })();
+        }
+
         function armSwCanary() {
             setTimeout(function () {
-                try {
-                    if (!navigator.serviceWorker.controller) return; // uncontrolled page: (B) handles this case
-                    if (sessionStorage.getItem("io.inblock.swCanaryReloaded")) return; // already healed this tab
-
-                    // Probe the HOMESERVER origin, not element's own origin: the SW's
-                    // fetch handler matches by pathname regardless of origin, so this
-                    // exercises its real rewrite path (IndexedDB token lookup + authed
-                    // /_matrix/client/v1/media fetch — the actual wedge-prone code) end
-                    // to end. A same-origin probe instead 404s at element-web's own
-                    // nginx on every load (an nginx error-log line) and trips the SW's
-                    // rewrite-error console.error on every load, without ever reaching
-                    // the SW's real network path — exactly the noise chased during the
-                    // incident. Missing localStorage means a logged-out page: nothing
-                    // to protect, and returning early avoids garbage requests.
-                    // Note: an mx_hs_url carrying a path prefix (or a
-                    // malformed value) builds a probe pathname the SW does
-                    // not intercept, so the probe settles fast through the
-                    // network and the canary silently reports "alive" —
-                    // fail-open by design (upstream's SW would not intercept
-                    // that deployment's real media URLs either, so there is
-                    // no wedge class to detect there).
-                    var hs = localStorage.getItem("mx_hs_url");
-                    var uid = localStorage.getItem("mx_user_id");
-                    if (!hs || !uid) return;
-
-                    // Local server name only (never a foreign/made-up one): a fake
-                    // server name would trigger a federation lookup that could itself
-                    // outlast the timer, and would defeat the "attributable local 404"
-                    // property below.
-                    var serverName = uid.split(":").slice(1).join(":");
-                    if (!serverName) return;
-
-                    // "swprobe" is a deliberately recognizable, nonexistent media id: the
-                    // resulting Synapse 404 shows up in logs as attributable to this
-                    // canary on the local server name, not confused with a real user's
-                    // failed media fetch, and never a federation lookup.
-                    var probeUrl =
-                        hs.replace(/\/+$/, "") +
-                        "/_matrix/media/v3/thumbnail/" +
-                        serverName +
-                        "/swprobe?width=1&height=1";
-
-                    var probe = fetch(probeUrl, { cache: "no-store" }).then(
-                        function () {
-                            return "settled"; // fulfilled (incl. a 404): SW handled the request
-                        },
-                        function () {
-                            return "settled"; // rejected (e.g. offline): SW still handled it
-                        },
-                    );
-
-                    // Differential controls: paths the SW's fetch handler does NOT
-                    // respondWith (it only matches /_matrix/media/v3/download|thumbnail
-                    // pathnames), so they always settle through the normal network even
-                    // under a wedged SW. Two of them, because the probe spans two
-                    // origins: the element-origin control proves the origin sw.js must
-                    // be re-fetched from after a heal is reachable (unregistering on a
-                    // bad network can recreate the original incident of no SW ->
-                    // tokenless media 404s), and the homeserver-origin control proves
-                    // the probe's own network path is alive (a slow-but-up Synapse
-                    // must not read as a wedge). The ?swcanary=1 marker keeps these
-                    // distinguishable from the app's own fetches in logs; each is one
-                    // extra request per page load per tab.
-                    var elementControlSettled = false;
-                    fetch("/version?swcanary=1", { cache: "no-store" }).then(
-                        function () {
-                            elementControlSettled = true;
-                        },
-                        function () {
-                            elementControlSettled = true;
-                        },
-                    );
-                    var hsControlSettled = false;
-                    fetch(hs.replace(/\/+$/, "") + "/_matrix/client/versions?swcanary=1", {
-                        cache: "no-store",
-                    }).then(
-                        function () {
-                            hsControlSettled = true;
-                        },
-                        function () {
-                            hsControlSettled = true;
-                        },
-                    );
-
-                    // No AbortController: aborting the fetch would settle its own promise
-                    // and mask a genuinely wedged respondWith() as "alive". A plain timer
-                    // promise racing the real fetch can't be fooled that way.
-                    var timer = new Promise(function (resolve) {
-                        setTimeout(function () {
-                            resolve("timeout");
-                        }, 8000);
-                    });
-
-                    Promise.race([probe, timer]).then(function (outcome) {
-                        if (outcome !== "timeout") return; // fetch settled first: SW is alive, nothing to do
-                        // Either network path stalled: don't unregister on a bad
-                        // network — every ambiguous case fails toward not healing.
-                        if (!elementControlSettled || !hsControlSettled) return;
-
-                        // The one-shot guarantee must never depend on an unverified
-                        // write: if the sentinel can't be provably persisted (private
-                        // mode, quota), skip the heal entirely rather than risk a
-                        // reload loop.
-                        try {
-                            sessionStorage.setItem("io.inblock.swCanaryReloaded", "1");
-                            if (sessionStorage.getItem("io.inblock.swCanaryReloaded") !== "1") return;
-                        } catch (e) {
-                            return;
-                        }
-
-                        console.warn("sw-boot: SW liveness probe hung; unregistering wedged service worker");
-                        navigator.serviceWorker
-                            .getRegistration()
-                            .then(function (reg) {
-                                return reg ? reg.unregister() : null;
-                            })
-                            .then(function () {
-                                location.reload();
-                            })
-                            .catch(function () {
-                                location.reload(); // reload regardless: the sentinel guarantees one-shot
-                            });
-                    });
-                } catch (e) {
-                    // A guard must never break the app.
-                }
+                whenSessionSynced(runSwCanary);
             }, 3000);
+        }
+
+        function runSwCanary() {
+            try {
+                if (!navigator.serviceWorker.controller) return; // uncontrolled page: (B) handles this case
+                if (sessionStorage.getItem("io.inblock.swCanaryReloaded")) return; // already healed this tab
+
+                // Probe the HOMESERVER origin, not element's own origin: the SW's
+                // fetch handler matches by pathname regardless of origin, so this
+                // exercises its real rewrite path (IndexedDB token lookup + authed
+                // /_matrix/client/v1/media fetch — the actual wedge-prone code) end
+                // to end. A same-origin probe instead 404s at element-web's own
+                // nginx on every load (an nginx error-log line) and trips the SW's
+                // rewrite-error console.error on every load, without ever reaching
+                // the SW's real network path — exactly the noise chased during the
+                // incident. Missing localStorage means a logged-out page: nothing
+                // to protect, and returning early avoids garbage requests.
+                // Note: an mx_hs_url carrying a path prefix (or a
+                // malformed value) builds a probe pathname the SW does
+                // not intercept, so the probe settles fast through the
+                // network and the canary silently reports "alive" —
+                // fail-open by design (upstream's SW would not intercept
+                // that deployment's real media URLs either, so there is
+                // no wedge class to detect there).
+                var hs = localStorage.getItem("mx_hs_url");
+                var uid = localStorage.getItem("mx_user_id");
+                if (!hs || !uid) return;
+
+                // Local server name only (never a foreign/made-up one): a fake
+                // server name would trigger a federation lookup that could itself
+                // outlast the timer, and would defeat the "attributable local 404"
+                // property below.
+                var serverName = uid.split(":").slice(1).join(":");
+                if (!serverName) return;
+
+                // "swprobe" is a deliberately recognizable, nonexistent media id: the
+                // resulting Synapse 404 shows up in logs as attributable to this
+                // canary on the local server name, not confused with a real user's
+                // failed media fetch, and never a federation lookup.
+                var probeUrl =
+                    hs.replace(/\/+$/, "") +
+                    "/_matrix/media/v3/thumbnail/" +
+                    serverName +
+                    "/swprobe?width=1&height=1";
+
+                var probe = fetch(probeUrl, { cache: "no-store" }).then(
+                    function () {
+                        return "settled"; // fulfilled (incl. a 404): SW handled the request
+                    },
+                    function () {
+                        return "settled"; // rejected (e.g. offline): SW still handled it
+                    },
+                );
+
+                // Differential controls: paths the SW's fetch handler does NOT
+                // respondWith (it only matches /_matrix/media/v3/download|thumbnail
+                // pathnames), so they always settle through the normal network even
+                // under a wedged SW. Two of them, because the probe spans two
+                // origins: the element-origin control proves the origin sw.js must
+                // be re-fetched from after a heal is reachable (unregistering on a
+                // bad network can recreate the original incident of no SW ->
+                // tokenless media 404s), and the homeserver-origin control proves
+                // the probe's own network path is alive (a slow-but-up Synapse
+                // must not read as a wedge). The ?swcanary=1 marker keeps these
+                // distinguishable from the app's own fetches in logs; each is one
+                // extra request per page load per tab.
+                var elementControlSettled = false;
+                fetch("/version?swcanary=1", { cache: "no-store" }).then(
+                    function () {
+                        elementControlSettled = true;
+                    },
+                    function () {
+                        elementControlSettled = true;
+                    },
+                );
+                var hsControlSettled = false;
+                fetch(hs.replace(/\/+$/, "") + "/_matrix/client/versions?swcanary=1", {
+                    cache: "no-store",
+                }).then(
+                    function () {
+                        hsControlSettled = true;
+                    },
+                    function () {
+                        hsControlSettled = true;
+                    },
+                );
+
+                // No AbortController: aborting the fetch would settle its own promise
+                // and mask a genuinely wedged respondWith() as "alive". A plain timer
+                // promise racing the real fetch can't be fooled that way.
+                // 8000 ms is coupled to sw.js's media-401 refresh wait (5000 ms wall
+                // clock, registry entry 10): a probe sent with a rejected token
+                // settles only after that wait, so it must stay well under this.
+                var timer = new Promise(function (resolve) {
+                    setTimeout(function () {
+                        resolve("timeout");
+                    }, 8000);
+                });
+
+                Promise.race([probe, timer]).then(function (outcome) {
+                    if (outcome !== "timeout") return; // fetch settled first: SW is alive, nothing to do
+                    // Either network path stalled: don't unregister on a bad
+                    // network — every ambiguous case fails toward not healing.
+                    if (!elementControlSettled || !hsControlSettled) return;
+
+                    // The one-shot guarantee must never depend on an unverified
+                    // write: if the sentinel can't be provably persisted (private
+                    // mode, quota), skip the heal entirely rather than risk a
+                    // reload loop.
+                    try {
+                        sessionStorage.setItem("io.inblock.swCanaryReloaded", "1");
+                        if (sessionStorage.getItem("io.inblock.swCanaryReloaded") !== "1") return;
+                    } catch (e) {
+                        return;
+                    }
+
+                    console.warn("sw-boot: SW liveness probe hung; unregistering wedged service worker");
+                    navigator.serviceWorker
+                        .getRegistration()
+                        .then(function (reg) {
+                            return reg ? reg.unregister() : null;
+                        })
+                        .then(function () {
+                            location.reload();
+                        })
+                        .catch(function () {
+                            location.reload(); // reload regardless: the sentinel guarantees one-shot
+                        });
+                });
+            } catch (e) {
+                // A guard must never break the app.
+            }
         }
 
         // Browsers throttle background-tab timers; don't arm the delay on a
         // hidden tab. Wait for the first visibilitychange to visible instead
         // (removing the listener once it fires). The canary still runs at
         // most once per page load either way.
-        if (document.hidden) {
-            document.addEventListener("visibilitychange", function onSwCanaryVisible() {
-                if (document.hidden) return;
-                document.removeEventListener("visibilitychange", onSwCanaryVisible);
-                armSwCanary();
-            });
-        } else {
-            armSwCanary();
-        }
+        whenVisible(armSwCanary);
     });
 })();
