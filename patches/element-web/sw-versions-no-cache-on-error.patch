@@ -75,14 +75,14 @@ index 8c522ede59..0b0a90f7ed 100644
          return undefined; // no headers/config to specify
 diff --git a/apps/web/src/serviceworker/serverSupport.test.ts b/apps/web/src/serviceworker/serverSupport.test.ts
 new file mode 100644
-index 0000000000..3400c5769c
+index 0000000000..8ec1bff3a5
 --- /dev/null
 +++ b/apps/web/src/serviceworker/serverSupport.test.ts
 @@ -0,0 +1,240 @@
 +/*
-+Copyright 2026 Element Creations Ltd.
++Copyright 2026 inblock.io
 +
-+SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
 +Please see LICENSE files in the repository root for full details.
 +*/
 +

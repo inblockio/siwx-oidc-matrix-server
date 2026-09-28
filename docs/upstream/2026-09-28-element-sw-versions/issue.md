@@ -34,12 +34,16 @@ The easiest way to get an error response is an expired access token:
    `enable_authenticated_media: true`, the default since 1.120) and short-lived access
    tokens. With next-generation auth (MAS, MSC3861) access tokens live 5 minutes by
    default.
-2. Sign in to Element Web, open a room with images, then leave the tab idle in a
-   text-only room for more than 5 minutes, long enough for the access token to expire
-   and for the browser to stop the idle service worker (Chromium does this after about
-   30 seconds without events; DevTools, Application, Service workers, "Stop" does the
-   same).
+2. Sign in to Element Web, open a room with images, then switch to a text-only room and wait
+   until the access token has just expired. The window is short: it closes when the app's next
+   request (normally the next /sync, at most about 30 seconds later) gets a 401 and refreshes the
+   token. Inside that window, stop the service worker (DevTools, Application, Service workers,
+   "Stop"; Chromium also stops an idle worker after about 30 seconds without events).
 3. Open a room with an image that has not been displayed yet in this tab.
+
+A way that does not depend on token timing: make `GET /_matrix/client/versions` return an error
+for a moment (for example a 502 from the reverse proxy), stop the service worker, open a room
+with an image not yet displayed, then restore the endpoint. Images stay broken afterwards.
 
 The first media request starts a fresh service worker instance with an empty cache. It
 reads the stored access token, which has expired but has not been refreshed yet (the
@@ -72,11 +76,11 @@ Images stay broken after re-opening the room and after a normal reload, because 
 same service worker instance (and its cache) serves the reloaded page. They come back
 only when the browser stops the service worker again, or after two hours.
 
-We see this in production on a server whose access tokens live 5 minutes, and
-reproduced it on a staging deployment of Element Web 1.12.29 in headless Chromium: 1/1
-runs in each of two configurations for the idle-tab steps above, and every run of an
-automated test that answers the service worker's authenticated `/versions` request with
-a 401, or one `/versions` check with a 503.
+We reproduced this with stock Element Web 1.12.29 on a staging deployment with 5-minute access
+tokens, in headless Chromium, by stopping the service worker a few seconds after the access token
+expired and opening a room with an unseen image. An automated browser test that answers the
+service worker's authenticated `/versions` request with a 401, or one `/versions` check with a
+503, fails the same way against the stock service worker.
 
 There is a second, smaller symptom in the same window: the one media request sent with
 the expired token gets a 401 even when `/versions` is fine, and that image stays blank
@@ -92,7 +96,7 @@ Linux (also expected on any OS: the code path is browser independent)
 
 # Browser information
 
-Chromium 14x (Playwright headless) and Chrome desktop
+Chromium (Playwright headless); the logic is not browser-specific.
 
 # URL for webapp
 

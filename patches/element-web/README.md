@@ -970,9 +970,11 @@ A tag bump must try every patch in this file's order.
   if either is missing).
 - **Byte-for-byte the upstream PR diff.** The patch is `git diff upstream/develop` of
   branch `fix/sw-versions-not-cached-on-error` on inblockio/element-web (three commits:
-  (b), (a), (c)), applied to v1.12.29; the only difference between the two trees in this
-  file is the unrelated `ACCESS_TOKEN_IV` -> `ACCESS_TOKEN_NAME` rename (#35077), which
-  no hunk touches. Keep them identical: a change here is a change to the PR, and the
+  (b), (a), (c); head 4ea5f83813 after the 2026-09-28 header fix), byte-identical apart
+  from the `index` line of `index.ts`, which carries the v1.12.29 blob ids so that entry
+  10's `index` line chains from it. Applied to v1.12.29, the only difference between
+  the two trees in this file is the unrelated `ACCESS_TOKEN_IV` -> `ACCESS_TOKEN_NAME`
+  rename (#35077), which no hunk touches. Keep them identical: a change here is a change to the PR, and the
   reverse.
 - **Why:** stock sw.js does `await (await fetch(versions, auth)).json()` with no status
   check and caches `supportsAuthedMedia = versions?.versions?.includes("v1.11")` for 2 h.
@@ -1034,12 +1036,21 @@ A tag bump must try every patch in this file's order.
   room opened during the outage both render). Plus the vitest file in the patch, and the
   harness below.
 - **Verified on dev (rev 3a3dae8, `element-web@sha256:9db9df51…`, 2026-09-28):** served
-  `sw.js` carries all three entry 9/10 markers. Playwright leg **3/3 runs green** (SW-1,
-  SW-2, SW-3 each pass in every run). The same leg against the **stock v1.12.29 sw.js**
-  (from `docker.io/vectorim/element-web:v1.12.29`, served through the spec's
-  pass-through proxy) **fails every leg**: SW-1 and SW-2 with the exact poisoning
+  `sw.js` carries all three entry 9/10 markers. Playwright leg (siwx-oidc 207f4b8,
+  re-run 2026-09-28 evening) **3/3 runs green** (SW-1, SW-2, SW-3 each pass in every
+  run; `~/.cache/ew-sw-pw-final/run{1,2,3}-patched.log`). The same leg against the
+  **stock v1.12.29 sw.js** (from `docker.io/vectorim/element-web:v1.12.29`, served
+  through the spec's pass-through proxy via `EW_SW_OVERRIDE`) **fails every leg (1 stock
+  run per leg)**: SW-1 in a full run (serial mode then skips SW-2/SW-3;
+  `run2-stock.log`), SW-2 and SW-3 each alone with `-g` (`run-stock-SW-2.log`,
+  `run-stock-SW-3.log`). SW-1 and SW-2 fail with the exact poisoning
   (`serverSupportMap update ...: {"supportsAuthedMedia":false}`), SW-3 with a blank
-  image. Harness: live window (`live`, `LIVE_STOP_SW=1 LIVE_TRIGGER_S=300.8`) **3/3 shim
+  image. Override verified in each stock run: the stock file carries none of the three
+  markers, the proxy served it 4x, and the SW console lacks `not caching server support`.
+  The 6 accounts these runs created and the 8 from earlier runs (14 in total, each
+  verified as the creator of its own `sw-media-auth text` room) were deactivated with
+  `erase: false` (`~/.cache/ew-sw-pw-final/deactivate.log`, `check-after.log`).
+  Harness: live window (`live`, `LIVE_STOP_SW=1 LIVE_TRIGGER_S=300.8`) **3/3 shim
   and 3/3 noshim** clean, every one logging `retrying without one` and `retrying media
   request with a refreshed access token`, image rendered first time; fast reopen **3/3**
   clean. `element-deploy-audit.sh`: 21 PASS, 1 WARN, 0 FAIL. The harness's network
@@ -1084,8 +1095,8 @@ A tag bump must try every patch in this file's order.
   (the image's own media request is answered 401 while one page `whoami` 401 makes the
   app refresh) passes on the patched build and fails on stock sw.js. The auditor's
   scratch suite (`~/.cache/ew-audit-applycheck/audit.test.ts`) against this revision:
-  8/8, revoked token returns the 401 after 5004 ms, silent tab after 4704 ms with 0
-  leaked listeners, 20 concurrent 401s cost 30 postMessages in total (was one poll loop
+  8/8, revoked token returns the 401 after about 5.0 s, silent tab after about 4.7 s with
+  0 leaked listeners, 20 concurrent 401s cost 30 postMessages in total (was one poll loop
   per request).
 - **Upstream status:** UPSTREAM DEFECT, **not filed**, and not covered by the 2026-09-28
   filing exception. Recommended as a separate issue later. Polling from the SW is our

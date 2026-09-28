@@ -23,8 +23,8 @@
 // guard (E). Reopening a profile <30 s after its last close hits Element's own
 // session lock ("open in another window"): leave a gap.
 //
-// Reproduction (pre-fix, dev 2026-09-28): live + LIVE_STOP_SW=1 poisoned 2/2 in both
-// arms; reopen + TOKEN_DELAY_MS=4000 poisoned 2/2 shim, 0/2 noE, 0/2 noshim.
+// Reproduction (pre-fix, dev 2026-09-28): live + LIVE_STOP_SW=1 poisoned 1/1 per arm (2 runs);
+// reopen + TOKEN_DELAY_MS=4000 poisoned 2/2 shim, 0/2 noE, 0/2 noshim.
 //
 // PASS CRITERIA. The network instrument (requestfinished + req.serviceWorker()) MISSES
 // the first requests of a cold service worker: Playwright attaches to a freshly started

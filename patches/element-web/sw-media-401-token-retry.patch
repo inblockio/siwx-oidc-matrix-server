@@ -127,14 +127,14 @@ index 0b0a90f7ed..f4eaabdf2f 100644
          // which postMessage reply is for our active request.
 diff --git a/apps/web/src/serviceworker/mediaTokenRetry.test.ts b/apps/web/src/serviceworker/mediaTokenRetry.test.ts
 new file mode 100644
-index 0000000000..845d406523
+index 0000000000..7edfa79ee7
 --- /dev/null
 +++ b/apps/web/src/serviceworker/mediaTokenRetry.test.ts
 @@ -0,0 +1,200 @@
 +/*
-+Copyright 2026 Element Creations Ltd.
++Copyright 2026 inblock.io
 +
-+SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
 +Please see LICENSE files in the repository root for full details.
 +*/
 +
