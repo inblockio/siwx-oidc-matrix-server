@@ -25,6 +25,25 @@
 //
 // Reproduction (pre-fix, dev 2026-09-28): live + LIVE_STOP_SW=1 poisoned 2/2 in both
 // arms; reopen + TOKEN_DELAY_MS=4000 poisoned 2/2 shim, 0/2 noE, 0/2 noshim.
+//
+// PASS CRITERIA. The network instrument (requestfinished + req.serviceWorker()) MISSES
+// the first requests of a cold service worker: Playwright attaches to a freshly started
+// SW asynchronously, so its opening /versions probe and first media fetches can happen
+// before any event is delivered. VERSIONS/MEDIA counts are therefore supporting
+// evidence only, and "0 legacy 404s" alone never proves a clean run. A run passes on
+// the SW's own console (swAnonRetry / swMediaRetry markers, and no
+// `"supportsAuthedMedia":false` update) plus the image render state (imgsFirstLoaded).
+// A live run that cannot hold its target token age exits non-zero and records nothing.
+//
+// CREDENTIALS AND CLEANUP. Each profileDir is a real Chromium profile holding a live
+// session of a throwaway did:pkh account: an OIDC refresh token and the encrypted access
+// token in IndexedDB, the pickle key, and the Matrix device. Treat profiles as secrets:
+// keep them under ~/.cache (never /tmp, never a repo), never attach them to a report,
+// and delete them when done (`rm -rf <profiles root>`). Each profile's meta.json records
+// the account's userId; list them BEFORE deleting the profiles, then deactivate exactly
+// those accounts through the dev admin path (never a real user). Result JSON files carry
+// no token values (Bearer values are redacted, /token bodies reduced to status and
+// expires_in).
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -198,7 +217,6 @@ if (mode === "hard") {
     // text-only room, then open a room whose image has not been rendered yet.
     if (!meta.roomId) throw new Error("no meta; run setup first");
     ctx.on("serviceworker", () => out("SW (re)started"));
-    const cli = () => page.evaluate(() => !!window.mxMatrixClientPeg?.get());
     await page.goto(ELEMENT_URL, { waitUntil: "domcontentloaded" });
     await page.locator(".mx_MatrixChat").waitFor({ timeout: 90_000 });
     // Make sure a fresh token was issued in THIS session (known t0), and park in a text room.
@@ -213,13 +231,34 @@ if (mode === "hard") {
     // Wait for the first refresh in-session (token age known exactly from then).
     while (!lastTok() && Date.now() - waitStart < 400_000) await page.waitForTimeout(1000);
     tok = lastTok();
-    const tokWall = Date.now() - (parseFloat(ts()) - parseFloat(tok.t)) * 1000;
+    if (!tok) {
+        out("ABORT: no in-session token refresh within 400 s; no result recorded");
+        await ctx.close();
+        process.exit(3);
+    }
     const trigger = Number(process.env.LIVE_TRIGGER_S || 303);
-    out(`in-session token at t=${tok.t}; waiting until age ${trigger}s, idle in text room; SWs alive=${ctx.serviceWorkers().length}`);
-    const refreshesBefore = results.token.length;
-    while (Date.now() - tokWall < trigger * 1000) {
-        await page.waitForTimeout(1000);
-        if (results.token.length !== refreshesBefore) { out("token refreshed proactively during idle; resetting target"); break; }
+    // The scenario needs the stored token to be exactly `trigger` seconds old when the
+    // image room opens. A refresh during the wait invalidates that: re-target on the new
+    // token (bounded), and never fall through to the trigger with a fresh token, which
+    // would record a clean run that tested nothing.
+    for (let retargets = 0; ; retargets++) {
+        const tokWall = Date.now() - (parseFloat(ts()) - parseFloat(tok.t)) * 1000;
+        out(`in-session token at t=${tok.t}; waiting until age ${trigger}s, idle in text room; SWs alive=${ctx.serviceWorkers().length}`);
+        const refreshesBefore = results.token.length;
+        while (Date.now() - tokWall < trigger * 1000 && results.token.length === refreshesBefore) {
+            await page.waitForTimeout(1000);
+        }
+        if (results.token.length === refreshesBefore) {
+            results.liveTokenAgeS = (Date.now() - tokWall) / 1000;
+            break;
+        }
+        if (retargets >= 2) {
+            out("ABORT: token kept refreshing during the idle wait; no result recorded");
+            await ctx.close();
+            process.exit(3);
+        }
+        tok = lastTok();
+        out("token refreshed during idle; re-targeting on the new token");
     }
     if (process.env.LIVE_STOP_SW === "1") {
         const cdp = await ctx.newCDPSession(page);
@@ -227,7 +266,7 @@ if (mode === "hard") {
         await cdp.send("ServiceWorker.stopAllWorkers");
         out("stopped SW via CDP (== browser idle termination)");
     }
-    out(`token age now ${((Date.now() - tokWall) / 1000).toFixed(1)}s; opening image room`);
+    out(`token age now ${results.liveTokenAgeS.toFixed(1)}s; opening image room`);
     await page.evaluate((rid) => (window.location.hash = `#/room/${rid}`), meta.roomId);
     await page.waitForTimeout(15000);
     results.imagesFirst = await imageState();
@@ -329,7 +368,11 @@ const pageMediaFail = results.media.filter((m) => !m.fromSW && m.status !== 200)
 const authedOk = results.media.filter((m) => m.kind === "AUTHED" && m.status === 200 && !/swprobe/.test(m.p)).length;
 const v401 = results.versions.filter((v) => v.status === 401 && v.fromSW).length;
 const poisoned = results.swConsole.some((l) => /serverSupportMap update.*"supportsAuthedMedia":false/.test(l));
-const summary = { mode, label, arm, profile: path.basename(profileDir), swVersions401: v401, swPoisonedLog: poisoned, legacy404, pageMediaFail, authedOk, imgsFirstLoaded: (results.imagesFirst||[]).filter(i=>i.loaded).length + "/" + (results.imagesFirst||[]).length, imgsReloadLoaded: (results.imagesAfterReload||[]).filter(i=>i.loaded).length + "/" + (results.imagesAfterReload||[]).length, tokenRefreshes: results.token.length };
+const swAnonRetry = results.swConsole.some((l) => /retrying without one/.test(l));
+const swMediaRetry = results.swConsole.some((l) => /retrying media request with a refreshed access token/.test(l));
+const firstImgs = results.imagesFirst || [];
+const pass = !poisoned && firstImgs.length > 0 && firstImgs.every((i) => i.loaded);
+const summary = { mode, label, arm, profile: path.basename(profileDir), pass, swAnonRetry, swMediaRetry, swVersions401: v401, swPoisonedLog: poisoned, legacy404, pageMediaFail, authedOk, imgsFirstLoaded: (results.imagesFirst||[]).filter(i=>i.loaded).length + "/" + (results.imagesFirst||[]).length, imgsReloadLoaded: (results.imagesAfterReload||[]).filter(i=>i.loaded).length + "/" + (results.imagesAfterReload||[]).length, tokenRefreshes: results.token.length };
 out(`SUMMARY ${JSON.stringify(summary)}`);
 fs.writeFileSync(path.join(profileDir, `${label}-${Date.now()}.json`), JSON.stringify({ summary, results, log }, null, 1));
 await ctx.close();
