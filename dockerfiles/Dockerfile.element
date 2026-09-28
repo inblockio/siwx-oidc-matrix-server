@@ -123,6 +123,20 @@ RUN git apply --verbose /tmp/ew-attested-did.patch
 COPY patches/element-web/resolve-did-search.patch /tmp/ew-did-search.patch
 RUN git apply --verbose /tmp/ew-did-search.patch
 
+# Service worker: never cache a failed /_matrix/client/versions probe
+# (2026-09-28 media-404 RCA). Stock sw.js parses the /versions body without a
+# status check, so a 401 for an expired access token (read from IndexedDB
+# before the app's first 401-triggered refresh; our OIDC tokens live 300 s)
+# was cached as "no authenticated media" for 2 h, and every media request of
+# that SW instance went to the legacy endpoints, which our Synapse 404s. The
+# patch retries /versions without the token, never caches a non-ok or
+# malformed answer, and shares one in-flight probe between concurrent media
+# requests. UPSTREAM DEFECT, touches only apps/web/src/serviceworker/index.ts,
+# so its position in this list is free. Marker in the built /app/sw.js:
+# "not caching server support". See patches/element-web/README.md, entry 9.
+COPY patches/element-web/sw-versions-no-cache-on-error.patch /tmp/ew-sw-versions.patch
+RUN git apply --verbose /tmp/ew-sw-versions.patch
+
 # Install exactly what the lockfile pins.
 RUN corepack enable && pnpm install --frozen-lockfile
 

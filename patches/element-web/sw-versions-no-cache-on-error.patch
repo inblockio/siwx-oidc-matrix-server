@@ -1,0 +1,59 @@
+diff --git a/apps/web/src/serviceworker/index.ts b/apps/web/src/serviceworker/index.ts
+index 8c522ed..3e4b62c 100644
+--- a/apps/web/src/serviceworker/index.ts
++++ b/apps/web/src/serviceworker/index.ts
+@@ -96,18 +96,51 @@ global.addEventListener("fetch", (event: FetchEvent) => {
+     );
+ });
+ 
++// One in-flight `/versions` probe per server, shared by concurrent media requests (a room full of thumbnails
++// would otherwise fire one `/versions` call each while the cache is cold).
++const serverSupportProbes: { [serverUrl: string]: Promise<void> | undefined } = {};
++
+ async function tryUpdateServerSupportMap(clientApiUrl: string, accessToken?: string): Promise<void> {
+     // only update if we don't know about it, or if the data is stale
+     if (serverSupportMap[clientApiUrl]?.cacheExpiryTimeMs > new Date().getTime()) {
+         return; // up to date
+     }
+ 
+-    const config = fetchConfigForToken(accessToken);
+-    const versions = await (await fetch(`${clientApiUrl}/_matrix/client/versions`, config)).json();
++    if (!serverSupportProbes[clientApiUrl]) {
++        serverSupportProbes[clientApiUrl] = probeServerSupport(clientApiUrl, accessToken).finally(() => {
++            serverSupportProbes[clientApiUrl] = undefined;
++        });
++    }
++    return serverSupportProbes[clientApiUrl];
++}
++
++async function probeServerSupport(clientApiUrl: string, accessToken?: string): Promise<void> {
++    const versionsUrl = `${clientApiUrl}/_matrix/client/versions`;
++    let response = await fetch(versionsUrl, fetchConfigForToken(accessToken));
++    if (!response.ok && accessToken) {
++        // `/versions` does not require authentication (the token only unlocks per-user unstable features), and
++        // authenticated-media support is a property of the server, not of the user. A token the server rejects
++        // (typically an expired OIDC access token read from storage before the app has refreshed it) must not make
++        // us conclude the server lacks authenticated media, so ask again anonymously.
++        console.warn(
++            `[ServiceWorker] /versions for '${clientApiUrl}' returned ${response.status} with a token; retrying without one`,
++        );
++        response = await fetch(versionsUrl);
++    }
++
++    const versions = response.ok ? await response.json() : undefined;
++    if (!Array.isArray(versions?.versions)) {
++        // Never cache a failed probe: an error body has no `versions`, which would read as "no authenticated media"
++        // and send every media request to the legacy endpoints (404 on servers that enforce authenticated media)
++        // for the whole cache lifetime. Throwing leaves the map empty so the next media request probes again.
++        throw new Error(
++            `SW: /versions for '${clientApiUrl}' unusable (HTTP ${response.status}); not caching server support`,
++        );
++    }
+     console.log(`[ServiceWorker] /versions response for '${clientApiUrl}': ${JSON.stringify(versions)}`);
+ 
+     serverSupportMap[clientApiUrl] = {
+-        supportsAuthedMedia: Boolean(versions?.versions?.includes("v1.11")),
++        supportsAuthedMedia: versions.versions.includes("v1.11"),
+         cacheExpiryTimeMs: new Date().getTime() + 2 * 60 * 60 * 1000, // 2 hours from now
+     };
+     console.log(

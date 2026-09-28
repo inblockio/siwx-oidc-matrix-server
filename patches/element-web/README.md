@@ -144,8 +144,10 @@ configured.
 
 ## Which Dockerfile applies what
 
-**One Dockerfile, all eight patches.** `dockerfiles/Dockerfile.element` on `main`
-applies every numbered patch below, in this file's order. Entries 7
+**One Dockerfile, all nine patches.** `dockerfiles/Dockerfile.element` on `main`
+applies every numbered patch below, in this file's order. Entry 9
+(`sw-versions-no-cache-on-error`, 2026-09-28) touches only the service worker and is
+not yet on prod. Entries 7
 (`show-attested-did`) and 8 (`resolve-did-search`) were added 2026-09-11 and are
 the newest; entries 1-6 are the set the paragraphs below describe. **8 depends on
 7** and must stay after it — see its Order note.
@@ -935,13 +937,52 @@ A tag bump must try every patch in this file's order.
   suites, plus a live round trip on dev for the bare, `@own-server` and `@remote` forms. No `e2e/element/` leg yet — like entry 7 it needs a lab account with a published
   DID, and the two legs should be written together.
 
+### 9. `sw-versions-no-cache-on-error.patch` — UPSTREAM DEFECT (carry until fixed)
+
+- **What:** in `apps/web/src/serviceworker/index.ts`, `tryUpdateServerSupportMap` now
+  (a) retries `GET /_matrix/client/versions` **without** the `Authorization` header when
+  the authenticated call is not `ok`, (b) never caches a non-`ok` or malformed answer
+  (no `versions` array): it throws, the caller's existing catch serves that one request
+  as before, and the next media request probes again, and (c) shares one in-flight
+  probe per server between concurrent media requests. Marker in the built `/app/sw.js`:
+  `not caching server support` (also `retrying without one`).
+- **Why:** stock sw.js does `await (await fetch(versions, auth)).json()` with no status
+  check and caches `supportsAuthedMedia = versions?.versions?.includes("v1.11")` for 2 h.
+  A 401 error body therefore caches `false`, and every media request of that SW instance
+  goes to the legacy `/_matrix/media/v3/*` endpoints, which our Synapse (authenticated
+  media enforced) answers 404: all thumbnails, avatars and downloads break until the
+  browser terminates the SW. The SW reads the access token from IndexedDB, and siwx-oidc
+  access tokens live 300 s (same default as MAS), so an expired stored token is routine:
+  any SW-intercepted media fetch between token expiry and the app's first 401-triggered
+  refresh poisons the map. `/versions` does not require auth, and media support is a
+  server property, so the anonymous retry is exact.
+- **Evidence (2026-09-28, dev, headless Chromium, harness
+  `~/.cache/ew-swver-repro/repro.mjs`):** SW console
+  `/versions response ...: {"errcode":"M_UNKNOWN_TOKEN","error":"Token is not active"}`
+  then `serverSupportMap update ...: {"supportsAuthedMedia":false,...}` then
+  `media/v3/download ... 404`, image still broken after a room re-open and a normal
+  reload. Reproduced (a) in a live tab after token expiry with an idle-terminated SW,
+  2/2 with and without our boot shim, i.e. stock Element; (b) on reopening an expired
+  session when the token refresh lands after load+3 s (prod ordering), 2/2 with the
+  shim, 0/2 with only guard (E) disabled, 0/2 with the shim blocked: there the trigger
+  is our own canary (E), which is gated separately (runtime delta `sw-boot.js`). Prod
+  log forensics: all three observed bursts started with the canary's `/versions` 401.
+  Not reproduced (0/10) on a fast reopen, where the refresh (~1.5 s) beats every SW fetch.
+- **Upstream status:** not filed. `develop` (checked 2026-09-28) still has no status
+  check; no upstream issue or PR names the mechanism. Filing is subject to the upstream
+  filing policy above.
+- **Retirement:** a tag bump where upstream checks `response.ok` (or otherwise stops
+  caching a failed `/versions`). The patch then fails to apply: check, and drop it.
+- **Coverage:** the harness above (`live` mode with `LIVE_STOP_SW=1`, `reopen` with
+  `TOKEN_DELAY_MS=4000`); not yet a spec in the siwx-oidc Element suite.
+
 ## Runtime-stage deltas (not `.patch` files, still upstream deviations)
 
 | Delta | Where | Why |
 |---|---|---|
 | `index.html` served no-cache | `config/element-nginx.conf` | stale-bundle TDZ crash prevention ("Your Element is misconfigured") |
 | Security headers include | `config/element-nginx-security-headers.inc` | S1 hardening checklist |
-| `sw-boot.js` head shim | `config/element-sw-boot.js` + build-time `sed` (fail-loud grep) | service-worker media-auth boot ordering (2026-07-31 download RCA) |
+| `sw-boot.js` head shim | `config/element-sw-boot.js` + build-time `sed` (fail-loud grep) | service-worker media-auth boot ordering (2026-07-31 download RCA); guard (E)'s canary gated on the app being `SYNCING` since 2026-09-28, because its probe hit the SW with an expired stored token and triggered the entry-9 poisoning |
 | Per-build `sw.js` stamp | Dockerfile `RUN` (bundle hash + build UTC) | byte-identical sw.js across deploys let a wedged SW survive every deploy (2026-07-31 incident); stamp forces eviction |
 | inblock.io overlay | `config/element-config.json`, theme CSS, logos/favicons, welcome background | branding + deployment config (`force_verification`, `sso_redirect_options.immediate`) |
 | Entrypoint templating | `entrypoints/element_entrypoint.sh` | `%%MATRIX_BASE_URL%%`/`%%MATRIX_HOST%%`/`%%CLIENT_HOST%%` substitution at container start |
