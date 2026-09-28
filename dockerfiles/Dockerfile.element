@@ -130,8 +130,9 @@ RUN git apply --verbose /tmp/ew-did-search.patch
 # was cached as "no authenticated media" for 2 h, and every media request of
 # that SW instance went to the legacy endpoints, which our Synapse 404s. The
 # patch retries /versions without the token, never caches a non-ok or
-# malformed answer, and shares one in-flight probe between concurrent media
-# requests. UPSTREAM DEFECT, touches only apps/web/src/serviceworker/index.ts,
+# malformed answer, shares one in-flight probe between concurrent media
+# requests, and retries a media request that 401s once the app has stored a
+# refreshed token (bounded ~5 s). UPSTREAM DEFECT, touches only apps/web/src/serviceworker/index.ts,
 # so its position in this list is free. Marker in the built /app/sw.js:
 # "not caching server support". See patches/element-web/README.md, entry 9.
 COPY patches/element-web/sw-versions-no-cache-on-error.patch /tmp/ew-sw-versions.patch

@@ -943,9 +943,12 @@ A tag bump must try every patch in this file's order.
   (a) retries `GET /_matrix/client/versions` **without** the `Authorization` header when
   the authenticated call is not `ok`, (b) never caches a non-`ok` or malformed answer
   (no `versions` array): it throws, the caller's existing catch serves that one request
-  as before, and the next media request probes again, and (c) shares one in-flight
-  probe per server between concurrent media requests. Marker in the built `/app/sw.js`:
-  `not caching server support` (also `retrying without one`).
+  as before, and the next media request probes again, (c) shares one in-flight
+  probe per server between concurrent media requests, and (d) when a media request
+  sent with the stored token comes back 401, polls the stored token for up to ~5 s
+  and retries once if the app has meanwhile refreshed it. Markers in the built
+  `/app/sw.js`: `not caching server support`, `retrying without one`,
+  `retrying media request with a refreshed access token`.
 - **Why:** stock sw.js does `await (await fetch(versions, auth)).json()` with no status
   check and caches `supportsAuthedMedia = versions?.versions?.includes("v1.11")` for 2 h.
   A 401 error body therefore caches `false`, and every media request of that SW instance
@@ -968,6 +971,9 @@ A tag bump must try every patch in this file's order.
   is our own canary (E), which is gated separately (runtime delta `sw-boot.js`). Prod
   log forensics: all three observed bursts started with the canary's `/versions` 401.
   Not reproduced (0/10) on a fast reopen, where the refresh (~1.5 s) beats every SW fetch.
+  With (a)-(c) alone, the one media request issued inside the stale-token window still
+  got a 401 on the authenticated endpoint and that image stayed blank until re-rendered
+  (4/4 live runs, also stock behaviour); (d) closes that.
 - **Upstream status:** not filed. `develop` (checked 2026-09-28) still has no status
   check; no upstream issue or PR names the mechanism. Filing is subject to the upstream
   filing policy above.
