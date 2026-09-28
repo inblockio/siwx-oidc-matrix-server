@@ -54,9 +54,14 @@
  *     the visibilitychange handling below); it does not re-probe mid-life.
  *     A wedge appearing later heals on next navigation, where the
  *     per-build sw.js stamp (Dockerfile.element) also evicts it after any
- *     deploy. Since 2026-09-28 the canary runs only once the app is SYNCING,
- *     so its probe can never reach the SW with a stale (expired, not yet
- *     refreshed) access token; see the gate comment at whenSessionSynced.
+ *     deploy. Since 2026-09-28 the canary waits until the app is SYNCING,
+ *     so its probe normally does not reach the SW with a stale (expired, not
+ *     yet refreshed) access token; if the app is not SYNCING within 120 s the
+ *     canary warns and runs anyway. See the gate comment at whenSessionSynced.
+ *     The 8000 ms timer is coupled to sw.js: a probe that 401s makes the SW
+ *     wait up to 5000 ms (wall clock) for a refreshed token before it settles
+ *     (patches/element-web/sw-media-401-token-retry.patch, registry entry 10),
+ *     so that bound must stay well under this timer. Change them together.
  */
 (function () {
     "use strict";
@@ -153,12 +158,38 @@
         // observed bursts were started by THIS probe, before the app's refresh;
         // the app's own media fetches came only after it. sw.js now refuses to
         // cache a failed probe (patches/element-web/sw-versions-no-cache-on-error
-        // .patch), but the canary must not send stale-token traffic either. So
+        // .patch), but the canary should not send stale-token traffic either. So
         // wait until the app has completed a network sync ("SYNCING": a /sync
-        // round-trip succeeded with a valid, persisted token). A client that
-        // never gets there (logged out, offline, broken) skips the canary:
-        // fail-open like every other guard here. A wedged SW does not block
-        // /sync (the SW only intercepts media), so the gate cannot hide a wedge.
+        // round-trip succeeded with a valid, persisted token).
+        //
+        // If the app is not SYNCING within 120 s (logged out, offline, a broken
+        // session, or a SW so stuck that it delays /sync), warn and run the canary
+        // anyway. That is safe now: sw.js never caches a failed /versions probe,
+        // and a probe that 401s settles within sw.js's 5 s refresh wait, under
+        // the 8 s timer below. Every request from a controlled page, /sync
+        // included, generates a SW fetch event; the handler returns without
+        // respondWith() for anything but media downloads/thumbnails, so the wedge
+        // E detects (a respondWith() that never settles) leaves /sync alone and
+        // the gate opens normally. A SW whose whole thread is stuck delays /sync
+        // too; the deadline is what keeps the gate from hiding that case.
+        //
+        // Hidden tabs: browsers throttle timers there, so the 1 s poll may run
+        // late; the deadline is wall-clock, so it still expires, and a late 8 s
+        // timer can only make a timeout (and a heal) less likely, never more.
+        // When the deadline expires while the tab is hidden, the canary waits
+        // for the tab to become visible, as on first load.
+        function whenVisible(cb) {
+            if (!document.hidden) {
+                cb();
+                return;
+            }
+            document.addEventListener("visibilitychange", function onSwCanaryVisible() {
+                if (document.hidden) return;
+                document.removeEventListener("visibilitychange", onSwCanaryVisible);
+                cb();
+            });
+        }
+
         function whenSessionSynced(cb) {
             var deadline = Date.now() + 120000;
             (function poll() {
@@ -172,7 +203,11 @@
                 } catch (e) {
                     return; // A guard must never break the app.
                 }
-                if (Date.now() > deadline) return;
+                if (Date.now() > deadline) {
+                    console.warn("sw-boot: app not SYNCING after 120 s; running the SW liveness canary anyway");
+                    whenVisible(cb);
+                    return;
+                }
                 setTimeout(poll, 1000);
             })();
         }
@@ -271,6 +306,9 @@
                 // No AbortController: aborting the fetch would settle its own promise
                 // and mask a genuinely wedged respondWith() as "alive". A plain timer
                 // promise racing the real fetch can't be fooled that way.
+                // 8000 ms is coupled to sw.js's media-401 refresh wait (5000 ms wall
+                // clock, registry entry 10): a probe sent with a rejected token
+                // settles only after that wait, so it must stay well under this.
                 var timer = new Promise(function (resolve) {
                     setTimeout(function () {
                         resolve("timeout");
@@ -316,14 +354,6 @@
         // hidden tab. Wait for the first visibilitychange to visible instead
         // (removing the listener once it fires). The canary still runs at
         // most once per page load either way.
-        if (document.hidden) {
-            document.addEventListener("visibilitychange", function onSwCanaryVisible() {
-                if (document.hidden) return;
-                document.removeEventListener("visibilitychange", onSwCanaryVisible);
-                armSwCanary();
-            });
-        } else {
-            armSwCanary();
-        }
+        whenVisible(armSwCanary);
     });
 })();

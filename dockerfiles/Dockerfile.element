@@ -130,13 +130,24 @@ RUN git apply --verbose /tmp/ew-did-search.patch
 # was cached as "no authenticated media" for 2 h, and every media request of
 # that SW instance went to the legacy endpoints, which our Synapse 404s. The
 # patch retries /versions without the token, never caches a non-ok or
-# malformed answer, shares one in-flight probe between concurrent media
-# requests, and retries a media request that 401s once the app has stored a
-# refreshed token (bounded ~5 s). UPSTREAM DEFECT, touches only apps/web/src/serviceworker/index.ts,
-# so its position in this list is free. Marker in the built /app/sw.js:
-# "not caching server support". See patches/element-web/README.md, entry 9.
+# malformed answer, and shares one in-flight probe between concurrent media
+# requests. UPSTREAM DEFECT; the patch is byte-for-byte the upstream PR diff
+# (inblockio/element-web branch fix/sw-versions-not-cached-on-error). Touches
+# only apps/web/src/serviceworker/, so its position after 1-8 is free.
+# See patches/element-web/README.md, entry 9.
 COPY patches/element-web/sw-versions-no-cache-on-error.patch /tmp/ew-sw-versions.patch
 RUN git apply --verbose /tmp/ew-sw-versions.patch
+
+# Service worker: a media request that 401s with the stored access token waits
+# (wall-clock bound 5 s, one shared waiter per rejected token) for the app to
+# store a refreshed token and retries once, so the image fetched inside the
+# stale-token window is not left blank. UPSTREAM DEFECT, not filed. Context
+# depends on entry 9: apply it AFTER sw-versions-no-cache-on-error. Its 5 s
+# bound is coupled to guard (E)'s 8 s canary timer in config/element-sw-boot.js
+# (a probe that 401s must still settle before the canary calls the SW wedged).
+# See patches/element-web/README.md, entry 10.
+COPY patches/element-web/sw-media-401-token-retry.patch /tmp/ew-sw-media-retry.patch
+RUN git apply --verbose /tmp/ew-sw-media-retry.patch
 
 # Install exactly what the lockfile pins.
 RUN corepack enable && pnpm install --frozen-lockfile
@@ -151,6 +162,16 @@ RUN pnpm --filter element-web build
 # overlay overwrites /app/config.json, but this keeps the bundle self-consistent
 # and the /config.json healthcheck path populated if the overlay is ever absent.
 RUN cp /src/apps/web/config.sample.json /src/apps/web/webapp/config.json
+
+# Fail loudly if the built service worker lost a vendored patch's code (entries
+# 9 and 10: each marker is a log string only that patch emits), or if the bundle
+# no longer exposes window.mxMatrixClientPeg, which sw-boot.js guard (E) polls
+# for the SYNCING gate. Without that global the gate would silently wait out its
+# 120 s deadline on every load instead of gating anything.
+RUN grep -q 'not caching server support' /src/apps/web/webapp/sw.js \
+    && grep -q 'retrying without one' /src/apps/web/webapp/sw.js \
+    && grep -q 'retrying media request with a refreshed access token' /src/apps/web/webapp/sw.js \
+    && grep -rqF 'mxMatrixClientPeg' /src/apps/web/webapp/bundles/
 
 # ---------------------------------------------------------------------------
 # Runtime: unprivileged nginx (same base family as vectorim/element-web), with

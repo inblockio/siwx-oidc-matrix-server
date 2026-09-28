@@ -1,0 +1,333 @@
+diff --git a/apps/web/src/serviceworker/index.ts b/apps/web/src/serviceworker/index.ts
+index 0b0a90f7ed..f4eaabdf2f 100644
+--- a/apps/web/src/serviceworker/index.ts
++++ b/apps/web/src/serviceworker/index.ts
+@@ -57,6 +57,7 @@ global.addEventListener("fetch", (event: FetchEvent) => {
+     event.respondWith(
+         (async (): Promise<Response> => {
+             let auth: { accessToken?: string; homeserver: string } | undefined;
++            let client: unknown;
+             try {
+                 // Figure out which homeserver we're communicating with
+                 const csApi = url.origin;
+@@ -66,7 +67,7 @@ global.addEventListener("fetch", (event: FetchEvent) => {
+ 
+                 // Locate the access token and homeserver url
+                 // @ts-expect-error - service worker types are not available. See 'fetch' event handler.
+-                const client = await global.clients.get(event.clientId);
++                client = await global.clients.get(event.clientId);
+                 auth = await getAuthData(client);
+ 
+                 // Is this request actually going to the homeserver?
+@@ -91,7 +92,19 @@ global.addEventListener("fetch", (event: FetchEvent) => {
+             // Add authentication and send the request. We add authentication even if MSC3916 endpoints aren't
+             // being used to ensure patches like this work:
+             // https://github.com/matrix-org/synapse/commit/2390b66bf0ec3ff5ffb0c7333f3c9b239eeb92bb
+-            return fetch(url, fetchConfigForToken(auth?.accessToken));
++            const response = await fetch(url, fetchConfigForToken(auth?.accessToken));
++            if (response.status === 401 && auth?.accessToken) {
++                // The stored access token was rejected: typically it expired and the app has not refreshed it yet
++                // (the app refreshes on its own next 401). Give the app a few seconds to store a new one and retry
++                // once with it, instead of leaving this image or file broken until it is rendered again.
++                const refreshed = await waitForRefreshedAuth(client, auth.accessToken);
++                if (refreshed && isSameOrigin(refreshed.homeserver, url)) {
++                    discardBody(response);
++                    console.log("[ServiceWorker] retrying media request with a refreshed access token");
++                    return fetch(url, fetchConfigForToken(refreshed.accessToken));
++                }
++            }
++            return response;
+         })(),
+     );
+ });
+@@ -152,6 +165,71 @@ async function checkServerSupport(clientApiUrl: string, accessToken?: string): P
+     );
+ }
+ 
++// How long a media request that got a 401 waits for the app to store a refreshed access token. A wall-clock bound
++// on the whole wait: the sw-boot.js liveness canary (config/element-sw-boot.js, guard E) treats a media fetch that
++// takes 8 s as a wedged service worker, so this must stay well under that.
++const REFRESH_WAIT_MS = 5000;
++const REFRESH_POLL_MS = 500;
++
++// One waiter per rejected token, shared by every media request that got a 401 with it (the same pattern as
++// serverSupportChecks): a room full of thumbnails would otherwise poll the tab once per image.
++const refreshWaiters: { [rejectedToken: string]: Promise<AuthData | undefined> | undefined } = {};
++
++type AuthData = { accessToken: string; homeserver: string };
++
++function waitForRefreshedAuth(client: unknown, rejectedToken: string): Promise<AuthData | undefined> {
++    if (!refreshWaiters[rejectedToken]) {
++        refreshWaiters[rejectedToken] = pollForRefreshedAuth(
++            client,
++            rejectedToken,
++            Date.now() + REFRESH_WAIT_MS,
++        ).finally(() => {
++            refreshWaiters[rejectedToken] = undefined;
++        });
++    }
++    return refreshWaiters[rejectedToken];
++}
++
++// Read the stored credentials until the access token differs from the rejected one, or the deadline passes. Every
++// read is capped by the time left, so a tab that stops answering cannot stretch the wait. Returns undefined when no
++// new token appears (for example the session really is gone): the caller then keeps the 401.
++async function pollForRefreshedAuth(
++    client: unknown,
++    rejectedToken: string,
++    deadline: number,
++): Promise<AuthData | undefined> {
++    for (;;) {
++        const remaining = deadline - Date.now();
++        if (remaining <= 0) return undefined;
++        try {
++            const auth = await withTimeout(getAuthData(client), remaining);
++            if (auth?.accessToken && auth.accessToken !== rejectedToken) return auth;
++        } catch {
++            // Storage mid-update, or the tab went away: keep trying until the deadline.
++        }
++        const pause = Math.min(REFRESH_POLL_MS, deadline - Date.now());
++        if (pause <= 0) return undefined;
++        await new Promise<void>((resolve) => setTimeout(resolve, pause));
++    }
++}
++
++function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
++    let timeoutId: ReturnType<typeof setTimeout> | undefined;
++    const timeout = new Promise<undefined>((resolve) => {
++        timeoutId = setTimeout(() => resolve(undefined), ms);
++    });
++    return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
++}
++
++// The retry must go to the same homeserver as the request: if the session changed server meanwhile, keep the 401.
++function isSameOrigin(homeserver: string, url: URL): boolean {
++    try {
++        return new URL(homeserver).origin === url.origin;
++    } catch {
++        return false;
++    }
++}
++
+ // Ideally we'd use the `Client` interface for `client`, but since it's not available (see 'fetch' listener), we use
+ // unknown for now and force-cast it to something close enough later.
+ async function getAuthData(client: unknown): Promise<{ accessToken: string; homeserver: string }> {
+@@ -195,7 +273,11 @@ async function askClientForUserIdParams(
+         // than just reading IndexedDB ourselves.
+ 
+         // Avoid stalling the tab in case something goes wrong.
+-        const timeoutId = setTimeout(() => reject(new Error("timeout in postMessage")), 1000);
++        // On timeout, also drop the listener: the retry above can call this repeatedly while the tab is busy.
++        const timeoutId = setTimeout(() => {
++            global.removeEventListener("message", listener);
++            reject(new Error("timeout in postMessage"));
++        }, 1000);
+ 
+         // We don't need particularly good randomness here - we just use this to generate a request ID, so we know
+         // which postMessage reply is for our active request.
+diff --git a/apps/web/src/serviceworker/mediaTokenRetry.test.ts b/apps/web/src/serviceworker/mediaTokenRetry.test.ts
+new file mode 100644
+index 0000000000..845d406523
+--- /dev/null
++++ b/apps/web/src/serviceworker/mediaTokenRetry.test.ts
+@@ -0,0 +1,200 @@
++/*
++Copyright 2026 Element Creations Ltd.
++
++SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++// @vitest-environment happy-dom
++
++// inblock.io vendored patch (patches/element-web/sw-media-401-token-retry.patch): a media request that gets a 401
++// with the stored access token waits, bounded, for the app to store a refreshed one and retries once.
++
++import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
++
++import * as StorageAccess from "../utils/StorageAccess";
++import { persistTokens } from "../utils/tokens/tokens";
++
++const USER_ID = "@alice:example.com";
++const DEVICE_ID = "ABCDEFG";
++const ACCESS_TOKEN = "stored_access_token";
++
++type Listener = (event: any) => void;
++
++/**
++ * The listeners the service worker registered on the global scope, keyed by event type.
++ *
++ * Everything below the `fetch` handler is module-private, so driving that handler is the only way in. We capture
++ * the registrations rather than dispatching real events so that the `message` exchange with the "tab" can be
++ * answered synchronously.
++ */
++const listeners = new Map<string, Set<Listener>>();
++
++vi.spyOn(global, "addEventListener").mockImplementation(((type: string, listener: Listener) => {
++    if (!listeners.has(type)) listeners.set(type, new Set());
++    listeners.get(type)!.add(listener);
++}) as typeof global.addEventListener);
++
++vi.spyOn(global, "removeEventListener").mockImplementation(((type: string, listener: Listener) => {
++    listeners.get(type)?.delete(listener);
++}) as typeof global.removeEventListener);
++
++// Importing the service worker registers its listeners, via the spies above.
++await import("./index");
++
++function emit(type: string, event: unknown): void {
++    for (const listener of listeners.get(type) ?? []) {
++        listener(event);
++    }
++}
++
++describe("serviceworker media retry after a refreshed access token", () => {
++    let storage: Record<string, Record<string, unknown>>;
++    let homeserver: string;
++    let homeserverCount = 0;
++    /** Answers media requests. `token` is the access token the service worker sent. */
++    let mediaResponse: (token?: string) => Response;
++    let requests: { url: string; token?: string }[];
++    let tabAnswers: boolean;
++
++    const tab = {
++        postMessage: vi.fn(({ responseKey }: { responseKey: string }) => {
++            if (!tabAnswers) return;
++            emit("message", { data: { responseKey, userId: USER_ID, deviceId: DEVICE_ID, homeserver } });
++        }),
++    };
++    const mediaRequests = (): { url: string; token?: string }[] =>
++        requests.filter((r) => !r.url.endsWith("/_matrix/client/versions"));
++    const refreshTokenIn = (ms: number): void => {
++        setTimeout(() => void persistTokens(undefined, { accessToken: "refreshed_access_token" }), ms);
++    };
++
++    beforeEach(async () => {
++        storage = {};
++        tabAnswers = true;
++        tab.postMessage.mockClear();
++        vi.spyOn(StorageAccess, "idbSave").mockImplementation(async (table, key, data) => {
++            storage[table] = { ...storage[table], [String(key)]: data };
++        });
++        vi.spyOn(StorageAccess, "idbLoad").mockImplementation(async (table, key) => storage[table]?.[String(key)]);
++
++        homeserver = `https://hs-${++homeserverCount}.example.com`;
++        requests = [];
++        mediaResponse = (token) =>
++            token === "refreshed_access_token" ? new Response("media") : new Response("", { status: 401 });
++        vi.stubGlobal(
++            "fetch",
++            vi.fn(async (input: URL | string, init?: RequestInit) => {
++                const url = input.toString();
++                const authorization = (init?.headers as Record<string, string> | undefined)?.Authorization;
++                const token = authorization?.replace(/^Bearer /, "");
++                requests.push({ url, token });
++                if (url.endsWith("/_matrix/client/versions"))
++                    return new Response(JSON.stringify({ versions: ["v1.11"] }));
++                return mediaResponse(token);
++            }),
++        );
++        vi.stubGlobal("clients", { get: vi.fn().mockResolvedValue(tab) });
++
++        vi.spyOn(console, "error").mockImplementation(() => {});
++        vi.spyOn(console, "log").mockImplementation(() => {});
++        vi.spyOn(console, "warn").mockImplementation(() => {});
++
++        await persistTokens(undefined, { accessToken: ACCESS_TOKEN });
++    });
++
++    afterEach(() => {
++        vi.unstubAllGlobals();
++    });
++
++    function interceptMediaRequest(): Promise<Response> {
++        let responded: Promise<Response> | undefined;
++        emit("fetch", {
++            request: { method: "GET", url: `${homeserver}/_matrix/media/v3/download/example.com/abc123` },
++            clientId: "client-1",
++            respondWith: (response: Promise<Response>) => {
++                responded = response;
++            },
++        });
++        expect(responded).toBeDefined();
++        return responded!;
++    }
++
++    it("retries once with the refreshed token", async () => {
++        refreshTokenIn(1200);
++        const response = await interceptMediaRequest();
++
++        expect(response.status).toBe(200);
++        expect(mediaRequests().map((r) => r.token)).toEqual([ACCESS_TOKEN, "refreshed_access_token"]);
++        expect(console.log).toHaveBeenCalledWith(
++            "[ServiceWorker] retrying media request with a refreshed access token",
++        );
++    });
++
++    it("keeps the 401 when no new token appears, within the wall-clock bound", async () => {
++        const started = Date.now();
++        const response = await interceptMediaRequest();
++        const elapsed = Date.now() - started;
++
++        expect(response.status).toBe(401);
++        expect(mediaRequests()).toHaveLength(1);
++        expect(elapsed).toBeGreaterThanOrEqual(4900);
++        expect(elapsed).toBeLessThan(6000);
++    }, 10000);
++
++    it("stays within the bound when the tab stops answering, and leaves no listeners behind", async () => {
++        const listenersBefore = listeners.get("message")?.size ?? 0;
++        const responded = interceptMediaRequest();
++        await vi.waitFor(() => expect(mediaRequests()).toHaveLength(1));
++        tabAnswers = false;
++        const started = Date.now();
++        const response = await responded;
++
++        expect(response.status).toBe(401);
++        expect(Date.now() - started).toBeLessThan(6000);
++        // Let the last postMessage timeout fire, then every listener the retry added must be gone.
++        await new Promise((resolve) => setTimeout(resolve, 1100));
++        expect(listeners.get("message")?.size ?? 0).toBe(listenersBefore);
++    }, 15000);
++
++    it("shares one wait between concurrent requests rejected with the same token", async () => {
++        refreshTokenIn(1200);
++        const responses = await Promise.all(Array.from({ length: 20 }, () => interceptMediaRequest()));
++
++        expect(responses.map((r) => r.status)).toEqual(Array(20).fill(200));
++        // 20 initial lookups, then about one per 500 ms poll for the single shared wait, not one per request.
++        expect(tab.postMessage.mock.calls.length).toBeLessThan(20 + 6);
++    }, 10000);
++
++    it("does not retry against a different homeserver", async () => {
++        const original = homeserver;
++        setTimeout(() => {
++            homeserver = "https://other.example.com";
++            void persistTokens(undefined, { accessToken: "refreshed_access_token" });
++        }, 600);
++        let responded: Promise<Response> | undefined;
++        emit("fetch", {
++            request: { method: "GET", url: `${original}/_matrix/media/v3/download/example.com/abc123` },
++            clientId: "client-1",
++            respondWith: (response: Promise<Response>) => {
++                responded = response;
++            },
++        });
++        const response = await responded!;
++
++        expect(response.status).toBe(401);
++        expect(mediaRequests()).toHaveLength(1);
++    }, 10000);
++
++    it("cancels the body of the 401 it discards", async () => {
++        const rejected = new Response(JSON.stringify({ errcode: "M_UNKNOWN_TOKEN" }), { status: 401 });
++        const cancel = vi.spyOn(rejected.body!, "cancel");
++        mediaResponse = (token) => (token === "refreshed_access_token" ? new Response("media") : rejected);
++        refreshTokenIn(300);
++
++        const response = await interceptMediaRequest();
++
++        expect(response.status).toBe(200);
++        expect(cancel).toHaveBeenCalled();
++    });
++});
