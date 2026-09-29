@@ -208,8 +208,9 @@ A tag bump must try every patch in this file's order.
   that can never verify a second device (the MSC4108/QR prerequisite is client-side and
   invisible to the server). The body-read fix is the root-cause fix of the
   owner-reported prod reset failure (2026-08-01).
-- **Evidence:** siwx-oidc repo `docs/2026-08-01-HANDOVER-elementx-verify-open-question.md`
-  §4; `docs/2026-08-02-elementx-verify-RESOLVED-identity-binding-walk.md`.
+- **Evidence:** two siwx-oidc maintainer write-ups of 2026-08-01 and 2026-08-02 (the
+  Element X verification open question, §4, and its resolution walk), no longer in that
+  repository's published tree.
 - **Upstream status:** the forced-setup half is NOT upstreamable (deployment policy).
   The `{}`-tombstone half IS an upstream defect and is already reported.
 - **Tracking:** [element-hq/element-web#29133](https://github.com/element-hq/element-web/issues/29133)
@@ -852,7 +853,8 @@ A tag bump must try every patch in this file's order.
   extended-profile support, a malformed value, a network error. Logged at `debug`, never
   `warn`: this hook runs for every member panel opened against every homeserver.
 - **Evidence:** siwx-oidc `docs/audits/2026-09-10-msc4133-acl-probe.md` (the field is
-  world-readable and provider-owned); `docs/2026-09-10-HANDOVER-attested-did-complete.md`.
+  world-readable and provider-owned); siwx-oidc `docs/identity-model.md` for the field
+  itself.
 - **Upstream status:** not upstreamable as-is — `io.inblock.did` is OUR field name, and
   upstream would need a generic custom-profile-field UI (or MSC4133 field registration)
   before anything like this could land. If upstream ships generic custom-field
