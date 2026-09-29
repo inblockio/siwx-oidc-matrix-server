@@ -35,17 +35,33 @@ jobs:
       # staged deploy).
       fail-fast: false
       matrix:
+        # `licenses` is each image's org.opencontainers.image.licenses label,
+        # an SPDX expression taken from NOTICE. metadata-action would stamp
+        # the repository's own license (Apache-2.0) on all three, which is
+        # wrong for an image that ships AGPL Synapse or Element Web. The
+        # expressions name what this repository puts in the image, not every
+        # package of the base image.
         include:
+          # Synapse with our patch (AGPL-3.0-or-later), our entrypoint
+          # (Apache-2.0), yq (MIT).
           - image: synapse
             dockerfile: dockerfiles/Dockerfile
+            licenses: 'AGPL-3.0-or-later AND Apache-2.0 AND MIT'
+          # Element Web with our patches (AGPL-3.0-only OR GPL-3.0-only), our
+          # overlay (Apache-2.0), the nginx skeleton in
+          # config/element-nginx.conf (BSD-2-Clause), and the brand assets,
+          # which are not licensed (NOTICE, "Brand assets").
           - image: element-web
             dockerfile: dockerfiles/Dockerfile.element
+            licenses: '(AGPL-3.0-only OR GPL-3.0-only) AND Apache-2.0 AND BSD-2-Clause AND LicenseRef-inblockio-brand-assets'
           # caddy-l4: Caddy with the layer4 module, the edge that terminates
           # TURN-TLS on :443 by SNI (see dockerfiles/Dockerfile.caddy-l4).
           # Publishing it here lets a deployment's edge pull a CI-built,
-          # digest-pinnable image instead of building it on the host.
+          # digest-pinnable image instead of building it on the host. Caddy,
+          # caddy-l4 and caddy-ratelimit are all Apache-2.0.
           - image: caddy-l4
             dockerfile: dockerfiles/Dockerfile.caddy-l4
+            licenses: 'Apache-2.0'
     steps:
       - uses: actions/checkout@v4
 
@@ -67,6 +83,10 @@ jobs:
             type=semver,pattern={{version}}
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}
+          # A custom label replaces the generated label of the same name
+          # (src/meta.ts, getOCIAnnotationsWithCustoms: later keys win).
+          labels: |
+            org.opencontainers.image.licenses=${{ matrix.licenses }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
