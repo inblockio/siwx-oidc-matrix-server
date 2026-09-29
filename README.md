@@ -1,27 +1,65 @@
 # siwx-oidc-matrix-server
 
-Docker Compose deployment stack that runs a Synapse Matrix homeserver fronted by
-siwx-oidc (CAIP-122 OIDC provider) so agents and wallets can authenticate with
-EIP-191, Ed25519, or P-256 keys. Includes a self-hosted Element Web client that
-sends signed-out users straight to the siwx-oidc sign-in page (wallet or passkey),
-and MatrixRTC calls through LiveKit.
+A Docker Compose bundle that runs a Synapse Matrix homeserver with
+[siwx-oidc](https://github.com/inblockio/siwx-oidc) as its authentication service.
+siwx-oidc takes the place of the Matrix Authentication Service (MAS) as Synapse's auth
+service: people sign in with a passkey or an Ethereum wallet, and software agents sign in
+with their own Ed25519 or P-256 key, without a password. The bundle also runs a
+self-hosted Element Web client, which sends signed-out users straight to the siwx-oidc
+sign-in page, and MatrixRTC calls through LiveKit.
 
 The Synapse and Element Web images built here are **not stock**: see
 [Upstream deviations (patches)](#upstream-deviations-patches).
 
+> [!IMPORTANT]
+> **Status: pathfinder project, non-commercial, provided as is.**
+> This bundle belongs to siwx-oidc, a pathfinder project for agent identity on Matrix, run
+> by inblock.io assets GmbH on a non-commercial basis. It is provided **as is**, without
+> warranty (Apache-2.0 §§7–8). There is **no support offering, no SLA, and no commitment to
+> maintain it for third-party deployments**: the maintainers maintain it for their own
+> use, and interfaces may change without notice. There are no tagged releases yet; `main`
+> is what runs. Contributions and security reports are welcome and handled best-effort;
+> see [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). Rules for
+> contributors and coding agents: [AGENTS.md](AGENTS.md).
+
 ## Table of Contents
 
-1. [Quick Start](#quick-start)
-2. [Services](#services)
-3. [Dependencies](#dependencies)
-4. [Upstream deviations (patches)](#upstream-deviations-patches)
-5. [Parameters](#parameters)
-6. [Security](#security)
-7. [Examples](#examples)
-8. [Element Web Client](#element-web-client)
-9. [Mobile Wallet Usage](#mobile-wallet-usage)
-10. [Issues/Integrations](#issuesintegrations)
+1. [What is and is not supported](#what-is-and-is-not-supported)
+2. [Quick Start](#quick-start)
+3. [Services](#services)
+4. [Dependencies](#dependencies)
+5. [Upstream deviations (patches)](#upstream-deviations-patches)
+6. [Parameters](#parameters)
+7. [Security](#security)
+8. [Examples](#examples)
+9. [Element Web Client](#element-web-client)
+10. [Mobile Wallet Usage](#mobile-wallet-usage)
 11. [Contributing](#contributing)
+12. [License](#license)
+
+## What is and is not supported
+
+- **Homeserver: Synapse only.** The bundle runs Synapse `v1.161.0`, patched (see below).
+  Other homeservers (Tuwunel, Dendrite, Conduit) are untested and unsupported.
+- **Delegated auth through Synapse's stable `matrix_authentication_service`
+  integration.** Synapse's side of it, `/_synapse/mas/*`, is an internal API designed for
+  MAS, and siwx-oidc tracks it per Synapse release, so every Synapse bump is also a
+  compatibility check. What siwx-oidc itself supports, and what it does not (password
+  login, upstream identity providers, an admin API, legacy `POST /login`), is described in
+  its [Matrix integration guide](https://github.com/inblockio/siwx-oidc/blob/main/docs/matrix-integration.md).
+- **Clients must implement the Matrix OAuth 2.0 authentication API.** Clients that only
+  know password login cannot sign in.
+- **Element Web is built from source** at `v1.12.29` with 10 vendored patches and a runtime
+  overlay (configuration, theme, branding, a service-worker boot shim).
+- **Element X is used unmodified**, as distributed through the app stores. This repository
+  does not patch it.
+- **The `io.inblock.did` profile field is write-protected only by the patched Synapse**
+  built here. The Synapse entrypoint refuses to start on a Synapse without the patch.
+- **Not included:** a reverse proxy (bring your own; the routes are in
+  `Caddyfile.local`), PostgreSQL (Synapse runs on SQLite), coturn (LiveKit's embedded TURN
+  is used instead), and MAS.
+- **Brand assets are not licensed.** The inblock.io logos, favicons and welcome background
+  in `config/` must be replaced by a deployment (see [License](#license)).
 
 ## Quick Start
 
@@ -35,10 +73,13 @@ docker network create portal-net   # once: docker-compose.yml joins it as an ext
 
 This writes `.env` (secrets included, mode 600) and starts the services. It does
 **not** terminate TLS or route hostnames: `docker-compose.yml` contains no reverse
-proxy. Run a Caddy on the `portal-net` network that proxies the three hostnames to
-`matrix_synapse`, `siwx-oidc` and `element-web`, and `/livekit/*` to `livekit` and
-`lk-jwt-service`; `Caddyfile.production` is the configuration the reference
-deployment uses. For a local, HTTP-only stack with Caddy included, use
+proxy. Run a reverse proxy on the `portal-net` network that proxies the three hostnames
+to `matrix_synapse`, `siwx-oidc` and `element-web`, and `/livekit/*` to `livekit` and
+`lk-jwt-service`. `Caddyfile.local` (HTTP-only, one port per service) lists every route
+the proxy must provide, including the client login, logout and refresh paths that go to
+siwx-oidc, and the `/_synapse/admin/*` and `/_synapse/mas/*` paths it must not expose. The
+`/siwx-matrix-setup` skill ([skills/siwx-matrix-setup.md](skills/siwx-matrix-setup.md))
+has a hostname-based Caddy example. For a local, HTTP-only stack with Caddy included, use
 `docker-compose.local.yml` (see its header).
 
 ## Services
@@ -46,49 +87,47 @@ deployment uses. For a local, HTTP-only stack with Caddy included, use
 | Service | Image (default in `docker-compose.yml`) | Purpose |
 |---|---|---|
 | `matrix_synapse` | `ghcr.io/inblockio/siwx-oidc-matrix-server/synapse`, built from `dockerfiles/Dockerfile` (Synapse + 1 patch) | Matrix homeserver; authentication delegated to siwx-oidc |
-| `siwx-oidc` | `ghcr.io/inblockio/siwx-oidc` | CAIP-122 OIDC provider (wallet and passkey sign-in); takes the place of the Matrix Authentication Service |
-| `redis` | `redis` | Session and token store for siwx-oidc |
+| `siwx-oidc` | `ghcr.io/inblockio/siwx-oidc` | OIDC provider (passkey, wallet and agent-key sign-in); takes the place of MAS as Synapse's auth service |
+| `redis` | `redis:8.10.2` | Session and token store for siwx-oidc |
 | `element-web` | `ghcr.io/inblockio/siwx-oidc-matrix-server/element-web`, built from source by `dockerfiles/Dockerfile.element` (Element Web + 10 patches) | Web client |
 | `livekit` | `livekit/livekit-server` | MatrixRTC SFU for Element Call, with embedded TURN |
 | `lk-jwt-service` | `ghcr.io/element-hq/lk-jwt-service` | Issues LiveKit access tokens to Matrix users |
 
-The reverse proxy is not a service in `docker-compose.yml`. The deployments use
-Caddy, custom-built with the `layer4` and `rate_limit` modules
-(`dockerfiles/Dockerfile.caddy-l4`), either on the external `portal-net` network
-(production) or in its own compose project (`docker-compose.caddy-proxy.yml`,
-dev-staging). Federation runs on port 443 through `.well-known/matrix/server`
-delegation served by that proxy; Synapse's own `serve_server_wellknown` is off.
+The reverse proxy is not a service in `docker-compose.yml`. The maintainers' deployments
+use Caddy, custom-built with the `layer4` and `rate_limit` modules
+(`dockerfiles/Dockerfile.caddy-l4`), outside this compose project. Federation runs on port
+443 through `.well-known/matrix/server` delegation served by that proxy; Synapse's own
+`serve_server_wellknown` is off.
 
 ## Dependencies
 
 What the bundle depends on, where each version is pinned, and whether we run it
-stock. The table shows the **repository defaults**. Each deployed box overrides
-every `*_IMAGE_REF` in its own `.env` (digest pins), and those files are not in this
-repository; the comments in `docker-compose.yml` record where production is known to
-run a different version (Redis 8.8.0, LiveKit v1.12.0, lk-jwt-service 0.5.0 as of
-their last update).
+stock. The table shows the **repository defaults**. A deployment overrides every
+`*_IMAGE_REF` in its own `.env`, pinned by digest, and those files are not in this
+repository; the comments in `docker-compose.yml` record where the maintainers' production
+deployment is known to run a different version.
 
 | Component | Version / pin | Pinned in | Stock / patched / built |
 |---|---|---|---|
-| Synapse | `v1.161.0` (`matrixdotorg/synapse:v1.161.0@sha256:6b95dd129e35…`, index digest) | `dockerfiles/Dockerfile:30` | **Patched**: 1 source patch, plus config written by `entrypoints/matrix_server.sh`. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/synapse` |
-| Synapse image the stack runs | default `…/synapse:sha-33a0c95@sha256:32abd6fa5e31…` (CI build of main at 33a0c95); dev-staging default `…/synapse@sha256:2f1b6c17406c…` | `docker-compose.yml:24`, `docker-compose.dev-staging.yml:65` (`SYNAPSE_IMAGE_REF`); `real-stack/Dockerfile.synapse:26` (same default, for the local real stack) | Built here |
-| Element Web | `v1.12.29` (git tag of element-hq/element-web; the build fails unless it resolves to commit `2d90d6b7b601…`) | `dockerfiles/Dockerfile.element:24-25` (`ARG ELEMENT_WEB_TAG`, `ARG ELEMENT_WEB_COMMIT`) | **Built from source and patched**: 10 source patches, plus a runtime overlay |
-| Element Web image the stack runs | default `…/element-web:sha-33a0c95@sha256:1761832069bd…` (CI build of main at 33a0c95); dev-staging default `…/element-web@sha256:8cea1873e574…` | `docker-compose.yml:115`, `docker-compose.dev-staging.yml:174` (`ELEMENT_IMAGE_REF`) | Built here |
+| Synapse | `v1.161.0` (`matrixdotorg/synapse:v1.161.0@sha256:6b95dd129e35…`, index digest) | `dockerfiles/Dockerfile` (`FROM`) | **Patched**: 1 source patch, plus config written by `entrypoints/matrix_server.sh`. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/synapse` |
+| Synapse image the stack runs | default `…/synapse:sha-33a0c95@sha256:32abd6fa5e31…` (CI build of main at 33a0c95) | `docker-compose.yml` (`SYNAPSE_IMAGE_REF`); `real-stack/Dockerfile.synapse` (`ARG SYNAPSE_IMAGE`, same default, for the local real stack) | Built here |
+| Element Web | `v1.12.29` (git tag of element-hq/element-web; the build fails unless it resolves to commit `2d90d6b7b601…`) | `dockerfiles/Dockerfile.element` (`ARG ELEMENT_WEB_TAG`, `ARG ELEMENT_WEB_COMMIT`) | **Built from source and patched**: 10 source patches, plus a runtime overlay |
+| Element Web image the stack runs | default `…/element-web:sha-33a0c95@sha256:1761832069bd…` (CI build of main at 33a0c95) | `docker-compose.yml` (`ELEMENT_IMAGE_REF`) | Built here |
 | Element Call | `0.24.0` (`@element-hq/element-call-embedded`) | Not pinned here: Element Web `v1.12.29`'s `apps/web/package.json` and `pnpm-lock.yaml` | Stock, embedded in the Element Web bundle (`element_call.use_exclusively` in `config/element-config.json`). Moves only with the Element Web tag |
 | matrix-js-sdk | `42.4.0` | Not pinned here: same, via the Element Web tag | Stock, bundled |
-| Element Web build toolchain | `node:24.20.0-bullseye@sha256:25f3016fcdae…`; pnpm `11.23.0` (upstream `devEngines`, via corepack); `pnpm install --frozen-lockfile` | `dockerfiles/Dockerfile.element:22`, `:168` | Stock |
-| Element Web serving base | `nginxinc/nginx-unprivileged:1.31.6-alpine-slim@sha256:c81a27f28bc2…` | `dockerfiles/Dockerfile.element:198` | Stock, with our `config/element-nginx.conf` and security headers |
-| siwx-oidc | default `ghcr.io/inblockio/siwx-oidc:sha-40efae9@sha256:54739f4813bf…` (CI build of siwx-oidc main at 40efae9) | `docker-compose.yml:84`, `docker-compose.dev-staging.yml:120` (`SIWX_OIDC_IMAGE_REF`) | First-party, built in [inblockio/siwx-oidc](https://github.com/inblockio/siwx-oidc) |
-| Redis | `8.10.2` (`redis:8.10.2@sha256:d5ac52db24d4…`) | `docker-compose.yml:62`, `docker-compose.dev-staging.yml:100` (`REDIS_IMAGE_REF`) | Stock, run with `--appendonly yes` |
-| LiveKit server | `v1.13.7` (`livekit/livekit-server:v1.13.7@sha256:6fd3b7088874…`) | `docker-compose.yml:145`, `docker-compose.dev-staging.yml:202` (`LIVEKIT_IMAGE_REF`) | Stock, configured by `config/livekit.yaml` (embedded TURN) |
-| lk-jwt-service | `0.7.0` (`ghcr.io/element-hq/lk-jwt-service:0.7.0@sha256:e0c7cecfa74e…`) | `docker-compose.yml:192`, `docker-compose.dev-staging.yml:262` (`LK_JWT_IMAGE_REF`) | Stock, configured |
-| Caddy | `v2.11.4` (`caddy:2.11.4-builder@sha256:369218c81ca6…`, `caddy:2.11.4@sha256:0c994536bddb…`) | `dockerfiles/Dockerfile.caddy-l4:124`, `:129` | **Custom build** with xcaddy and the two modules below. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/caddy-l4` |
-| Caddy module `layer4` (mholt/caddy-l4) | `v0.1.2` | `dockerfiles/Dockerfile.caddy-l4:126` | Stock module (TURN-TLS SNI split on :443) |
-| Caddy module `rate_limit` (mholt/caddy-ratelimit) | commit `5625512f24f6` (upstream has no tag after `v0.1.0`) | `dockerfiles/Dockerfile.caddy-l4:127` | Stock module at a commit (edge rate limit for siwx-oidc `GET /resolve`) |
-| Caddy image the edge runs | `…/caddy-l4@sha256:1c9825f346b1…` (digest only) | `docker-compose.caddy-proxy.yml:72` (dev-staging). Production's Caddy is defined outside this repository; the `Caddyfile.production` header records the same digest | Built here |
-| yq (Synapse image) | `v4.53.3`, SHA-256 checked | `dockerfiles/Dockerfile:36-38` | Stock binary |
-| Debian `patch` (Synapse image build) | not version-pinned: floats within the Debian release (trixie) that the base digest fixes. Build tool only: installed, used and purged in one layer, so it is not in the image | `dockerfiles/Dockerfile:65-72` | Stock |
-| Database | SQLite at `/data/homeserver.db` (Synapse's generated default) | `entrypoints/matrix_server.sh:5` (`/start.py generate`) | Stock; not a separate service |
+| Element Web build toolchain | `node:24.20.0-bullseye@sha256:25f3016fcdae…`; pnpm `11.23.0` (upstream `devEngines`, via corepack); `pnpm install --frozen-lockfile` | `dockerfiles/Dockerfile.element` (builder `FROM`, `corepack enable` step) | Stock |
+| Element Web serving base | `nginxinc/nginx-unprivileged:1.31.6-alpine-slim@sha256:c81a27f28bc2…` | `dockerfiles/Dockerfile.element` (runtime `FROM`) | Stock, with our `config/element-nginx.conf` and security headers |
+| siwx-oidc | default `ghcr.io/inblockio/siwx-oidc:sha-40efae9@sha256:54739f4813bf…` (CI build of siwx-oidc main at 40efae9) | `docker-compose.yml` (`SIWX_OIDC_IMAGE_REF`) | First-party, built in [inblockio/siwx-oidc](https://github.com/inblockio/siwx-oidc) |
+| Redis | `8.10.2` (`redis:8.10.2@sha256:d5ac52db24d4…`) | `docker-compose.yml` (`REDIS_IMAGE_REF`) | Stock, run with `--appendonly yes` |
+| LiveKit server | `v1.13.7` (`livekit/livekit-server:v1.13.7@sha256:6fd3b7088874…`) | `docker-compose.yml` (`LIVEKIT_IMAGE_REF`) | Stock, configured by `config/livekit.yaml` (embedded TURN) |
+| lk-jwt-service | `0.7.0` (`ghcr.io/element-hq/lk-jwt-service:0.7.0@sha256:e0c7cecfa74e…`) | `docker-compose.yml` (`LK_JWT_IMAGE_REF`) | Stock, configured |
+| Caddy | `v2.11.4` (`caddy:2.11.4-builder@sha256:369218c81ca6…`, `caddy:2.11.4@sha256:0c994536bddb…`) | `dockerfiles/Dockerfile.caddy-l4` (builder and final `FROM`) | **Custom build** with xcaddy and the two modules below. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/caddy-l4` |
+| Caddy module `layer4` (mholt/caddy-l4) | `v0.1.2` | `dockerfiles/Dockerfile.caddy-l4` (`xcaddy build`) | Stock module (TURN-TLS SNI split on :443) |
+| Caddy module `rate_limit` (mholt/caddy-ratelimit) | commit `5625512f24f6` (upstream has no tag after `v0.1.0`) | `dockerfiles/Dockerfile.caddy-l4` (`xcaddy build`) | Stock module at a commit (edge rate limit for siwx-oidc `GET /resolve`) |
+| Caddy image an edge runs | a CI build of `caddy-l4`, pinned by digest | Not in this repository: the edge is configured per deployment | Built here |
+| yq (Synapse image) | `v4.53.3`, SHA-256 checked | `dockerfiles/Dockerfile` (`yq` download step) | Stock binary |
+| Debian `patch` (Synapse image build) | not version-pinned: floats within the Debian release (trixie) that the base digest fixes. Build tool only: installed, used and purged in one layer, so it is not in the image | `dockerfiles/Dockerfile` (patch step) | Stock |
+| Database | SQLite at `/data/homeserver.db` (Synapse's generated default) | `entrypoints/matrix_server.sh` (`/start.py generate`) | Stock; not a separate service |
 
 Not part of the bundle: PostgreSQL (Synapse runs on SQLite), coturn (LiveKit's
 embedded TURN serves instead), the Matrix Authentication Service (siwx-oidc takes
@@ -101,15 +140,14 @@ defines it).
 A pin floats when the same reference can resolve to different bytes tomorrow. These
 do:
 
-- **`:main` defaults for first-party images**: `docker-compose.dev-staging.yml:120`
-  (siwx-oidc) and the template `.env.dev-staging.example:49`, `:50`, `:55`. A stack
-  started from them pulls whatever `:main` is at that moment. `docker-compose.yml`
-  no longer floats: its defaults are the tag-plus-digest builds listed in the table
-  above, so `start-matrix.sh` (which runs `docker compose up --pull always`) starts
-  the same bytes every time. Pin by digest in `.env` to run anything newer.
-- **Build-time package**: Debian `patch` in the Synapse build
-  (`dockerfiles/Dockerfile:66`) floats on purpose, within the Debian release the
-  base digest fixes, and is purged before its layer ends.
+- **Any image ref set to a tag without a digest.** `docker-compose.yml` no longer floats:
+  its defaults are the tag-plus-digest builds listed in the table above, so
+  `start-matrix.sh` (which runs `docker compose up --pull always`) starts the same bytes
+  every time. A `*_IMAGE_REF` set in `.env` to a bare tag such as `:main` pulls whatever
+  that tag names at the moment. Pin by digest to run anything newer.
+- **Build-time package**: Debian `patch` in the Synapse build (`dockerfiles/Dockerfile`)
+  floats on purpose, within the Debian release the base digest fixes, and is purged
+  before its layer ends.
 - **CI**: `.github/workflows/docker.yml` uses actions by major tag
   (`actions/checkout@v4`, `docker/login-action@v3`, `docker/metadata-action@v5`,
   `docker/build-push-action@v6`) on `ubuntu-latest`. `.github/workflows/checks.yml`
@@ -119,14 +157,6 @@ The other image references in the Dockerfiles, compose files and `e2e-harness/`
 scripts are pinned by digest, with the version tag alongside wherever one exists
 (the local and test stacks included); the Element Web source tag is checked against
 its commit, and the yq download against its checksum.
-
-Production, per the repository's own records: its `.env` pins Redis as
-`redis:latest@sha256:aa049e68…` (`docker-compose.yml:54-61`). The tag reads `latest`,
-but the digest fixes the bytes, so a pull does not move it; the production `.env` is
-not in this repository, so confirm on the box. Production also carries a leftover
-watchtower container that no compose file here defines; per
-`docs/deployment-recovery-reference.md:75` and `:534` it is scoped to itself and
-updates nothing (verified 2026-06-12).
 
 ## Upstream deviations (patches)
 
@@ -206,8 +236,9 @@ every `patches/*/*.patch` to have a numbered entry in its directory's registry, 
 applied by the Dockerfile that owns that directory, and to be listed above, with the
 registry and the list in the Dockerfile's apply order. CI runs it together with
 `scripts/check-patch-hunks.py` on every pull request and every push to `main`
-(`.github/workflows/checks.yml`, the repository's first pull-request check). The pin
-half is not checked: a Dependencies row is updated by hand.
+(`.github/workflows/checks.yml`). The pin half is not checked: a Dependencies row is
+updated by hand. [CONTRIBUTING.md](CONTRIBUTING.md) describes how to bump Synapse and
+Element Web.
 
 ```bash
 scripts/check-patch-registry.sh    # one OK line per patch directory, or FAIL lines and exit 1
@@ -236,8 +267,10 @@ Stop all containers.
 
 ### SIWX-OIDC Config
 
-> **Note:** Environment variable names use the `SIWEOIDC_` prefix for backward
-> compatibility with configuration tooling.
+> **Note:** `start-matrix.sh` and `docker-compose.yml` use the legacy `SIWEOIDC_` prefix
+> for siwx-oidc's environment variables. siwx-oidc still accepts it; its current prefix
+> is `SIWXOIDC_`, which wins when both are set. See siwx-oidc's
+> [configuration reference](https://github.com/inblockio/siwx-oidc/blob/main/docs/configuration.md).
 
 #### --SIWEOIDC_HOST **Required**
 
@@ -280,6 +313,8 @@ The client sends unauthenticated users straight to the siwx-oidc sign-in page.
 
 ## Security
 
+Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+
 ### .env file permissions
 
 The `.env` file contains secrets and is created with restricted permissions:
@@ -295,6 +330,11 @@ chmod 600 .env
 An EC P-256 signing key is auto-generated on first run and stored in `.env`
 (never as a separate file on disk). Do not delete it; tokens become invalid
 if the key changes.
+
+### Reverse proxy
+
+Do not expose `/_synapse/admin/*` or `/_synapse/mas/*` through the proxy: siwx-oidc
+reaches them over the Docker network, and `Caddyfile.local` shows the deny rules.
 
 ## Examples
 
@@ -331,8 +371,8 @@ if the key changes.
 ## Element Web Client
 
 A self-hosted Element Web instance is included in the stack, accessible at
-`https://<CLIENT_HOST>`. Sign-in uses Element's native OIDC support
-(MSC2965/MSC3861):
+`https://<CLIENT_HOST>`. Sign-in uses Element's native support for the Matrix OAuth 2.0
+API (MSC2965 discovery, MSC3861):
 
 1. User visits `https://element.example.com`
 2. Element discovers siwx-oidc as the homeserver's OIDC issuer and, because
@@ -353,25 +393,23 @@ Element Web is **not** the stock `vectorim/element-web` image.
 `dockerfiles/Dockerfile.element` clones element-hq/element-web at a pinned tag,
 applies our vendored patches, builds it, and serves it with the inblock.io overlay
 (config, theme, favicons, service-worker boot shim). See
-[Upstream deviations (patches)](#upstream-deviations-patches).
+[Upstream deviations (patches)](#upstream-deviations-patches) and
+[docs/element-web-source-build.md](docs/element-web-source-build.md).
 
 ## Mobile Wallet Usage
 
-For mobile, use the self-hosted Element Web client (`https://<CLIENT_HOST>`)
-in combination with a mobile wallet browser (e.g.,
-[Phantom Wallet](https://phantom.app/) on iOS).
-
-## Issues/Integrations
-
-### Element Android
-
-https://github.com/element-hq/element-meta/discussions/2556
+On a phone, open the self-hosted Element Web client (`https://<CLIENT_HOST>`) in the
+built-in browser of a mobile wallet app that injects an Ethereum provider (EIP-1193), or
+sign in with a passkey, which needs no wallet. Wallet sign-in inside Element's own mobile
+apps is an open upstream topic; see the element-meta discussion
+[MetaMask Integration](https://github.com/element-hq/element-meta/discussions/2556).
 
 ## Contributing
 
-Open contribution requests (new integrations, features, and services) are
-tracked in the [request-for-contribution](https://github.com/inblockio/request-for-contribution)
-repo. Browse open requests there if you want to help or propose new work.
+See [CONTRIBUTING.md](CONTRIBUTING.md), and [AGENTS.md](AGENTS.md) for the rules and
+invariants a change must respect. Open contribution requests (new integrations,
+features, and services) are tracked in the
+[request-for-contribution](https://github.com/inblockio/request-for-contribution) repo.
 
 ## License
 
