@@ -121,13 +121,14 @@ docker compose restart matrix_synapse
 
 ## Deploying to a remote server
 
-`deploy.sh` clones both repos on the server at a given git ref, then builds and restarts:
+This repository ships no remote-deploy tooling; how images reach a server is
+site-specific. The published images are on GHCR. Pin each one by digest in the
+server's `.env` (`SYNAPSE_IMAGE_REF`, `ELEMENT_IMAGE_REF`, `SIWX_OIDC_IMAGE_REF`),
+then pull and recreate on the server:
 
 ```bash
-./deploy.sh main --build --restart
+docker compose pull && docker compose up -d
 ```
-
-See `/deploy` skill for full usage, tagging workflow, and troubleshooting.
 
 ## Checklist
 

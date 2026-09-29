@@ -5,10 +5,6 @@ description: E2EE device verification, cross-signing key lifecycle, key backup t
 
 # siwx-matrix-device-verify: E2EE Architecture and Troubleshooting
 
-**Findings document:** `docs/2026-05-19-device-verification-analysis.md` contains the full
-root-cause analysis with cryptographic proof, server state snapshots, and the dependency chain.
-Read it first for deep context on verification failures.
-
 ## Section 1: Architecture Reference
 
 ### Cross-signing trust chain
@@ -121,8 +117,6 @@ Device not verified after login?
 ### STALE SIGNATURE (historically #1 cause, now prevented)
 
 **Context:** This was the primary verification failure mode before the 2026-05-19 fix.
-See `docs/2026-05-19-device-verification-analysis.md` for the full root-cause analysis
-with cryptographic proof.
 
 **Mechanism:** Synapse's `delete_device` (MAS API) removes e2e keys but not
 cross-signing signatures. When the same device_id was recycled with new keys,
@@ -159,12 +153,12 @@ every login. No device_id is ever reused, so no stale signatures can accumulate.
 
 ```bash
 # SSH to server, check cross-signing key generations
-ssh root@agentic.inblock.io
+ssh <user>@<your-server>
 # `docker compose exec` resolves the running container by service name, so it
 # survives Docker renaming the container on a name-conflict restart (the
 # compose-generated name matrix-matrix_synapse-1 is not stable) — stay in
 # this directory for the rest of this session's docker compose commands.
-cd /home/deploy/matrix/stack
+cd <stack-dir>   # the directory holding docker-compose.yml and .env
 cat << 'SCRIPT' | docker compose exec -T matrix_synapse python3 -
 import sqlite3
 from collections import Counter
@@ -348,7 +342,6 @@ After fixing a verification issue, verify:
 
 ## Section 6: Reference
 
-- **Full root-cause analysis:** `docs/2026-05-19-device-verification-analysis.md`
 - **Code (login path):** `siwx-oidc/src/oidc.rs` lines 1084-1131
 - **Code (logout handlers):** `siwx-oidc/src/compat.rs` revoke() and logout()
 - **Code (device trait):** `siwx-oidc/src/db/mod.rs` DBClient trait

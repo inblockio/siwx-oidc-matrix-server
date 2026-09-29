@@ -184,7 +184,7 @@ yq -i ".matrix_rtc.transports[0].type = \"livekit\"" /data/homeserver.yaml
 yq -i ".matrix_rtc.transports[0].livekit_service_url = \"https://${MATRIX_HOST}/livekit/jwt\"" /data/homeserver.yaml
 ```
 
-### 2. Caddyfile.production
+### 2. Reverse proxy (production Caddyfile)
 
 Add `org.matrix.msc4143.rtc_foci` to the `.well-known/matrix/client` response:
 
@@ -317,9 +317,10 @@ The `entrypoints/matrix_server.sh` changes only run on **first boot** (when
 homeserver.yaml already exists), apply the Synapse config manually:
 
 ```bash
-SSH_CMD="ssh -i ~/.ssh/id_ed25519 root@agentic.inblock.io"
+SSH_CMD="ssh <user>@<your-server>"
+STACK_DIR="<stack-dir>"   # the directory holding docker-compose.yml and .env
 
-$SSH_CMD "cd /home/matrix/stack && docker compose exec matrix_synapse sh -c '
+$SSH_CMD "cd $STACK_DIR && docker compose exec matrix_synapse sh -c '
   yq -i \".experimental_features.msc4143_enabled = true\" /data/homeserver.yaml &&
   yq -i \".experimental_features.msc3266_enabled = true\" /data/homeserver.yaml &&
   yq -i \".experimental_features.msc4222_enabled = true\" /data/homeserver.yaml &&
@@ -329,10 +330,10 @@ $SSH_CMD "cd /home/matrix/stack && docker compose exec matrix_synapse sh -c '
   yq -i \".rc_message.per_second = 0.5\" /data/homeserver.yaml &&
   yq -i \".rc_message.burst_count = 30\" /data/homeserver.yaml &&
   yq -i \".matrix_rtc.transports[0].type = \\\"livekit\\\"\" /data/homeserver.yaml &&
-  yq -i \".matrix_rtc.transports[0].livekit_service_url = \\\"https://matrix.inblock.io/livekit/jwt\\\"\" /data/homeserver.yaml
+  yq -i \".matrix_rtc.transports[0].livekit_service_url = \\\"https://<matrix-host>/livekit/jwt\\\"\" /data/homeserver.yaml
 '"
 
-$SSH_CMD "cd /home/matrix/stack && docker compose restart matrix_synapse"
+$SSH_CMD "cd $STACK_DIR && docker compose restart matrix_synapse"
 ```
 
 ### Firewall
@@ -402,7 +403,7 @@ docker compose ps
 ## Diagnosing call drops
 
 Worked example: 2026-06-11, five 1:1 drops in 15 min, root-caused to one
-participant's mobile connectivity (see `docs/2026-06-11-call-drop-analysis.md`).
+participant's mobile connectivity.
 Recipe (read-only SSH to production):
 
 ```bash
@@ -429,16 +430,9 @@ if in-call key sharing is rate-limited, fix `rc_message` (values above).
 
 ## Embedded TURN
 
-**Status (2026-08-03): enabled on dev-staging only** (`config/livekit.dev-staging.yaml`),
-via **TLS-edge termination (caddy-l4)**, production stays `turn: enabled:
-false` (`config/livekit.yaml`) pending graduation (checklist below). Full
-hypothesis register, verification evidence, and the prod-graduation
-checklist live in
-`docs/superpowers/plans/2026-08-03-turn-tls-edge-termination.md` (current
-design) and its predecessor
-`docs/superpowers/plans/2026-08-02-livekit-embedded-turn.md` (original
-embedded-TURN rollout, dev-staging-only pre-edge-termination) — read both
-before touching prod TURN config. ~10-20% of real-world sessions need TURN
+**Status:** `config/livekit.yaml` enables embedded TURN via **TLS-edge
+termination (caddy-l4)**. Enable it only on a deployment whose edge carries
+the `layer4` wrapper described below. ~10-20% of real-world sessions need TURN
 (LiveKit guidance); before this, ICE-TCP on 7881 was the only
 UDP-hostile-network fallback.
 
@@ -492,8 +486,8 @@ fmt.Sprintf("turns:%s:443?transport=tcp", domain)
 server startup itself lives in `pkg/service/turn.go`.) Caddy owns 443 on both
 dev-staging and prod, and stock Caddy has no way to route a raw TLS stream by
 SNI to anything but its own HTTP handling — so a bare Caddy in front of
-LiveKit left this leg permanently inert (the state described in the
-predecessor plan doc). **caddy-l4's `layer4` listener_wrapper is what fixes
+LiveKit left this leg permanently inert (the state before the edge
+existed). **caddy-l4's `layer4` listener_wrapper is what fixes
 this**: it demuxes on SNI ahead of Caddy's normal `tls` wrapper, so the
 client's hardcoded `turns:dev.turn.matrix.inblock.io:443` now lands exactly
 where it needs to (see architecture diagram above). **TURN-UDP was never
@@ -508,11 +502,11 @@ affected either way**: it's advertised correctly as
 `caddyserver/caddy/v2 v2.11.4` exactly — the Dockerfile's builder/final base
 tags must match that pin (see the Dockerfile header before bumping either
 version). Published by `.github/workflows/docker.yml` (matrix entry `image:
-caddy-l4`) to `ghcr.io/inblockio/siwx-oidc-matrix-server/caddy-l4` — this is
-the prod-graduation vehicle (portal-caddy-1 needs to adopt this image before
-prod TURN-TLS can graduate).
+caddy-l4`) to `ghcr.io/inblockio/siwx-oidc-matrix-server/caddy-l4`, so an
+edge can pull a digest-pinnable build instead of building on the host.
 
-`Caddyfile.dev-aquafire`'s global options block carries the actual wrapper:
+The edge Caddyfile's global options block carries the wrapper (example from
+the dev-staging edge):
 
 ```
 servers :443 {
@@ -558,24 +552,20 @@ port 80, which sits outside the `:443`-scoped `layer4` wrapper entirely.
 ### Cert-sync design — SUPERSEDED by edge termination
 
 The original design (LiveKit terminating TLS itself via
-`cert_file`/`key_file`, fed by a sync-copy of Caddy's ACME cert) is no longer
-what dev-staging runs. `scripts/livekit-turn-cert-sync.sh` and
-`systemd/livekit-turn-cert-sync.{service,timer}` are **retained in the repo**
-as tooling for the passthrough alternative (LiveKit terminating TLS directly,
-no edge SNI demux) — the plan doc's decision record explains why edge
-termination (variant 2) was chosen instead for dev/prod. They are unused by
-the current `config/livekit.dev-staging.yaml` / `docker-compose.dev-staging.yml`.
-Original description, for the passthrough variant: Caddy renews a Let's
-Encrypt cert by atomic rename inside its own ACME storage volume (700
-root:root); never bind-mount those files directly into the livekit container
-(pins the mount to a stale inode); the script sync-copies cert+key into
-`config/livekit-tls/` gated by a sha256 checksum state file, restarting
-`livekit` only when the bytes changed (no TLS hot reload in livekit-server).
+`cert_file`/`key_file`, fed by a sync-copy of Caddy's ACME cert) is retired;
+edge termination was chosen instead. It remains the passthrough alternative
+(LiveKit terminating TLS directly, no edge SNI demux). For that variant: Caddy
+renews a Let's Encrypt cert by atomic rename inside its own ACME storage
+volume (700 root:root); never bind-mount those files directly into the
+livekit container (pins the mount to a stale inode); sync-copy cert+key into
+`config/livekit-tls/` on a timer, gated by a sha256 checksum state file, and
+restart `livekit` only when the bytes changed (no TLS hot reload in
+livekit-server).
 
 ### Verification one-liners
 
 ```bash
-# TURN listeners bound on the box itself (dev-aquafire)
+# TURN listeners bound on the host itself
 ss -tlnp | grep 5349      # livekit's plaintext external_tls listener
 ss -ulnp | grep 3478      # TURN-UDP
 
@@ -586,21 +576,21 @@ openssl s_client -connect dev.turn.matrix.inblock.io:443 -servername dev.turn.ma
 
 # Caddy debug logs confirming the SNI match and the upstream dial (needs
 # `debug` log level; look for these two logger names specifically)
-docker logs caddy_proxy 2>&1 | grep 'caddy.listeners.layer4'   # the SNI matcher fired
-docker logs caddy_proxy 2>&1 | grep 'layer4.handlers.proxy'    # "dial upstream" to livekit:5349
+docker logs <caddy-container> 2>&1 | grep 'caddy.listeners.layer4'   # the SNI matcher fired
+docker logs <caddy-container> 2>&1 | grep 'layer4.handlers.proxy'    # "dial upstream" to livekit:5349
 
 # Force a client onto the relay path to prove the TLS leg actually carries
-# media end to end (aqua-agents, AQUA_E2E_FORCE_RELAY=1 — see T3 in the plan doc)
-AQUA_E2E_FORCE_RELAY=1 <aqua-e2e run command> # relay-forced round vs dev-staging
+# media end to end (aqua-agents' e2e test does this with AQUA_E2E_FORCE_RELAY=1)
+AQUA_E2E_FORCE_RELAY=1 <aqua-e2e run command> # relay-forced round
 ```
 
 ### Firewall
 
-`3478/udp` (TURN-UDP) must be allowed on **both** layers on dev-aquafire:
-`ufw allow 3478/udp` and the DigitalOcean cloud firewall for the droplet.
+`3478/udp` (TURN-UDP) must be allowed on **both** layers: the host firewall
+(`ufw allow 3478/udp`) and any cloud firewall in front of the host.
 `5349/tcp` (TURN-TLS) is **edge-internal only** — it is deliberately NOT
-host-published (see `docker-compose.dev-staging.yml`'s `livekit` service
-comment) and therefore needs **no** ufw rule; only the box's existing 443/tcp
+host-published (see the `livekit` service comment in `docker-compose.yml`)
+and therefore needs **no** ufw rule; only the host's existing 443/tcp
 rule (already open for the rest of the Caddy vhosts) matters for the TLS
 leg. Verify with `ss -tlnp | grep 5349` showing a listener bound only inside
 the container network namespace, not on a host-facing rule.
@@ -615,11 +605,10 @@ the default never blocks a real client and no override is needed.
 
 ## Known limitations
 
-- **LiveKit built-in TURN**: enabled on **dev-staging only** as of 2026-08-03,
-  via TLS-edge termination (see "Embedded TURN" above); production remains
-  disabled pending the prod-graduation checklist (needs portal-caddy-1 to
-  adopt the CI-built caddy-l4 image first). Until then, clients behind
-  symmetric NAT or strict corporate firewalls may fail to connect on prod.
+- **LiveKit built-in TURN** needs the caddy-l4 edge (see "Embedded TURN"
+  above). A deployment without it must set `turn.enabled: false`, and then
+  clients behind symmetric NAT or strict corporate firewalls may fail to
+  connect.
 - **No TURN for legacy calls**: the stack has no coturn. Legacy 1:1 VoIP calls
   (non-MatrixRTC) will fail behind NAT. This is acceptable because
   `use_exclusively: true` routes all calls through MatrixRTC/LiveKit.
@@ -636,9 +625,10 @@ the default never blocks a real client and no override is needed.
 4. Update `config/element-config.json` (element_call + features)
 5. Update `.env.example` (LIVEKIT_KEY, LIVEKIT_SECRET)
 6. Update `start-matrix.sh` (generate LiveKit credentials)
-7. Update `Caddyfile.production` (well-known rtc_foci + proxy routes)
+7. Update the production Caddyfile (well-known rtc_foci + proxy routes)
 8. Update `Caddyfile.local` (same for local dev)
-9. Deploy: `./deploy.sh <ref> --build --restart`
+9. Deploy: pull the new images and recreate the containers
+   (`docker compose pull && docker compose up -d`)
 10. Apply Synapse config on existing deployment (yq commands above)
 11. Open firewall ports 7881/tcp and 20100-20200/udp
 12. Verify with checklist above
