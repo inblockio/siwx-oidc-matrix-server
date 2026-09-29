@@ -2,58 +2,230 @@
 
 Docker Compose deployment stack that runs a Synapse Matrix homeserver fronted by
 siwx-oidc (CAIP-122 OIDC provider) so agents and wallets can authenticate with
-EIP-191, Ed25519, or P-256 keys. Includes a self-hosted Element Web client with
-automatic SIWX login (zero-click wallet authentication).
+EIP-191, Ed25519, or P-256 keys. Includes a self-hosted Element Web client that
+sends signed-out users straight to the siwx-oidc sign-in page (wallet or passkey),
+and MatrixRTC calls through LiveKit.
+
+The Synapse and Element Web images built here are **not stock**: see
+[Upstream deviations (patches)](#upstream-deviations-patches).
 
 ## Table of Contents
 
 1. [Quick Start](#quick-start)
 2. [Services](#services)
-3. [Parameters](#parameters)
-4. [Security](#security)
-5. [Examples](#examples)
-6. [Element Web Client](#element-web-client)
-7. [Mobile Wallet Usage](#mobile-wallet-usage)
-8. [Issues/Integrations](#issuesintegrations)
-9. [Contributing](#contributing)
+3. [Dependencies](#dependencies)
+4. [Upstream deviations (patches)](#upstream-deviations-patches)
+5. [Parameters](#parameters)
+6. [Security](#security)
+7. [Examples](#examples)
+8. [Element Web Client](#element-web-client)
+9. [Mobile Wallet Usage](#mobile-wallet-usage)
+10. [Issues/Integrations](#issuesintegrations)
+11. [Contributing](#contributing)
 
 ## Quick Start
 
 ```bash
+docker network create portal-net   # once: docker-compose.yml joins it as an external network
 ./start-matrix.sh \
   --MATRIX_HOST matrix.example.com \
   --SIWEOIDC_HOST siwx-oidc.example.com \
-  --CLIENT_HOST element.example.com \
-  --LETSENCRYPT_EMAIL admin@example.com
+  --CLIENT_HOST element.example.com
 ```
 
-This provisions TLS certificates automatically via Let's Encrypt, starts all
-services, and makes the Element Web client available at `https://element.example.com`.
+This writes `.env` (secrets included, mode 600) and starts the services. It does
+**not** terminate TLS or route hostnames: `docker-compose.yml` contains no reverse
+proxy. Run a Caddy on the `portal-net` network that proxies the three hostnames to
+`matrix_synapse`, `siwx-oidc` and `element-web`, and `/livekit/*` to `livekit` and
+`lk-jwt-service`; `Caddyfile.production` is the configuration the reference
+deployment uses. For a local, HTTP-only stack with Caddy included, use
+`docker-compose.local.yml` (see its header).
 
 ## Services
 
-| Service | Image | Purpose |
+| Service | Image (default in `docker-compose.yml`) | Purpose |
 |---|---|---|
-| `matrix_synapse` | `matrixdotorg/synapse` | Matrix homeserver (federation on port 8448) |
-| `siwx-oidc` | `ghcr.io/inblockio/siwx-oidc` | CAIP-122 OIDC provider (wallet-based auth) |
-| `redis` | `redis` | Session store for siwx-oidc |
-| `element-web` | `vectorim/element-web` (custom layer) | Web client with auto-SIWX login |
-| `proxy` | `nginxproxy/nginx-proxy` | Reverse proxy with TLS termination |
-| `letsencrypt` | `nginxproxy/acme-companion` | Auto-provisions Let's Encrypt certificates |
+| `matrix_synapse` | `ghcr.io/inblockio/siwx-oidc-matrix-server/synapse`, built from `dockerfiles/Dockerfile` (Synapse + 1 patch) | Matrix homeserver; authentication delegated to siwx-oidc |
+| `siwx-oidc` | `ghcr.io/inblockio/siwx-oidc` | CAIP-122 OIDC provider (wallet and passkey sign-in); takes the place of the Matrix Authentication Service |
+| `redis` | `redis` | Session and token store for siwx-oidc |
+| `element-web` | `ghcr.io/inblockio/siwx-oidc-matrix-server/element-web`, built from source by `dockerfiles/Dockerfile.element` (Element Web + 10 patches) | Web client |
+| `livekit` | `livekit/livekit-server` | MatrixRTC SFU for Element Call, with embedded TURN |
+| `lk-jwt-service` | `ghcr.io/element-hq/lk-jwt-service` | Issues LiveKit access tokens to Matrix users |
+
+The reverse proxy is not a service in `docker-compose.yml`. The deployments use
+Caddy, custom-built with the `layer4` and `rate_limit` modules
+(`dockerfiles/Dockerfile.caddy-l4`), either on the external `portal-net` network
+(production) or in its own compose project (`docker-compose.caddy-proxy.yml`,
+dev-staging). Federation runs on port 443 through `.well-known/matrix/server`
+delegation served by that proxy; Synapse's own `serve_server_wellknown` is off.
+
+## Dependencies
+
+What the bundle depends on, where each version is pinned, and whether we run it
+stock. The table shows the **repository defaults**. Each deployed box overrides
+every `*_IMAGE_REF` in its own `.env` (digest pins), and those files are not in this
+repository; the comments in `docker-compose.yml` record where production is known to
+run a different version (Redis 8.8.0, LiveKit v1.12.0, lk-jwt-service 0.5.0 as of
+their last update).
+
+| Component | Version / pin | Pinned in | Stock / patched / built |
+|---|---|---|---|
+| Synapse | `v1.161.0` (`matrixdotorg/synapse:v1.161.0`, tag only) | `dockerfiles/Dockerfile:21` | **Patched**: 1 source patch, plus config written by `entrypoints/matrix_server.sh`. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/synapse` |
+| Synapse image the stack runs | default `…/synapse:main` (**floating**); dev-staging default `…/synapse@sha256:2f1b6c17406c…` | `docker-compose.yml:14`, `docker-compose.dev-staging.yml:65` (`SYNAPSE_IMAGE_REF`) | Built here |
+| Element Web | `v1.12.29` (git tag of element-hq/element-web) | `dockerfiles/Dockerfile.element:17` (`ARG ELEMENT_WEB_TAG`) | **Built from source and patched**: 10 source patches, plus a runtime overlay |
+| Element Web image the stack runs | default `…/element-web:main` (**floating**); dev-staging default `…/element-web@sha256:8cea1873e574…` | `docker-compose.yml:103`, `docker-compose.dev-staging.yml:174` (`ELEMENT_IMAGE_REF`) | Built here |
+| Element Call | `0.24.0` (`@element-hq/element-call-embedded`) | Not pinned here: Element Web `v1.12.29`'s `apps/web/package.json` and `pnpm-lock.yaml` | Stock, embedded in the Element Web bundle (`element_call.use_exclusively` in `config/element-config.json`). Moves only with the Element Web tag |
+| matrix-js-sdk | `42.4.0` | Not pinned here: same, via the Element Web tag | Stock, bundled |
+| Element Web build toolchain | `node:24-bullseye`; pnpm `11.23.0` (upstream `devEngines`, via corepack); `pnpm install --frozen-lockfile` | `dockerfiles/Dockerfile.element:15`, `:155` | Stock |
+| Element Web serving base | `nginxinc/nginx-unprivileged:alpine-slim` (**floating**) | `dockerfiles/Dockerfile.element:183` | Stock, with our `config/element-nginx.conf` and security headers |
+| siwx-oidc | default `ghcr.io/inblockio/siwx-oidc:main` (**floating**) | `docker-compose.yml:73`, `docker-compose.dev-staging.yml:120` (`SIWX_OIDC_IMAGE_REF`) | First-party, built in [inblockio/siwx-oidc](https://github.com/inblockio/siwx-oidc) |
+| Redis | `8.10.2` (`redis:8.10.2@sha256:d5ac52db24d4…`) | `docker-compose.yml:52`, `docker-compose.dev-staging.yml:100` (`REDIS_IMAGE_REF`) | Stock, run with `--appendonly yes` |
+| LiveKit server | `v1.13.7` (`livekit/livekit-server:v1.13.7@sha256:6fd3b7088874…`) | `docker-compose.yml:133`, `docker-compose.dev-staging.yml:202` (`LIVEKIT_IMAGE_REF`) | Stock, configured by `config/livekit.yaml` (embedded TURN) |
+| lk-jwt-service | `0.7.0` (`ghcr.io/element-hq/lk-jwt-service:0.7.0@sha256:e0c7cecfa74e…`) | `docker-compose.yml:180`, `docker-compose.dev-staging.yml:262` (`LK_JWT_IMAGE_REF`) | Stock, configured |
+| Caddy | `v2.11.4` (`caddy:2.11.4-builder`, `caddy:2.11.4`, tags only) | `dockerfiles/Dockerfile.caddy-l4:116`, `:121` | **Custom build** with xcaddy and the two modules below. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/caddy-l4` |
+| Caddy module `layer4` (mholt/caddy-l4) | `v0.1.2` | `dockerfiles/Dockerfile.caddy-l4:118` | Stock module (TURN-TLS SNI split on :443) |
+| Caddy module `rate_limit` (mholt/caddy-ratelimit) | commit `5625512f24f6` (upstream has no tag after `v0.1.0`) | `dockerfiles/Dockerfile.caddy-l4:119` | Stock module at a commit (edge rate limit for siwx-oidc `GET /resolve`) |
+| Caddy image the edge runs | `…/caddy-l4@sha256:1c9825f346b1…` (digest only) | `docker-compose.caddy-proxy.yml:72` (dev-staging). Production's Caddy is defined outside this repository; the `Caddyfile.production` header records the same digest | Built here |
+| yq (Synapse image) | `v4.53.3`, SHA-256 checked | `dockerfiles/Dockerfile:36-37` | Stock binary |
+| Debian `wget`, `patch` (Synapse image) | unpinned `apt-get install` (**floating**) | `dockerfiles/Dockerfile:29` | Stock |
+| Database | SQLite at `/data/homeserver.db` (Synapse's generated default) | `entrypoints/matrix_server.sh:5` (`/start.py generate`) | Stock; not a separate service |
+
+Not part of the bundle: PostgreSQL (Synapse runs on SQLite), coturn (LiveKit's
+embedded TURN serves instead), the Matrix Authentication Service (siwx-oidc takes
+its place through Synapse's `matrix_authentication_service` config),
+nginx-proxy/acme-companion (replaced by Caddy), and watchtower (no compose file here
+defines it).
+
+### Floating pins
+
+A pin floats when the same reference can resolve to different bytes tomorrow. These
+do:
+
+- **`:main` defaults for the three first-party images**: `docker-compose.yml:14`,
+  `:73`, `:103`; `docker-compose.dev-staging.yml:120` (siwx-oidc); and the template
+  `.env.dev-staging.example:49`, `:50`, `:55`. A checkout run without `*_IMAGE_REF`
+  overrides pulls whatever `:main` is at that moment, and `start-matrix.sh` runs
+  `docker compose up --pull always`. Pin by digest in `.env` for anything that
+  matters.
+- **Base images by moving tag**: `node:24-bullseye` (`dockerfiles/Dockerfile.element:15`)
+  and `nginxinc/nginx-unprivileged:alpine-slim` (`dockerfiles/Dockerfile.element:183`).
+- **Unpinned packages**: `apt-get install` in `dockerfiles/Dockerfile:29` and
+  `real-stack/Dockerfile.synapse:11`; yq from `releases/latest` in
+  `real-stack/Dockerfile.synapse:12`.
+- **Local and test only**: `docker-compose.local.yml:43` (`redis`, no tag) and `:137`
+  (`caddy:2-alpine`); `docker-compose.e2e.yml:18` (`redis:7-alpine`), `:97`
+  (`livekit/livekit-server:v1.13.6`, tag without digest), `:170` and `:185`
+  (`caddy:2-alpine`), mirrored in `e2e-harness/up.sh:36`, `:81`, `:165`, `:173`;
+  `e2e-harness/av-check/run.sh:35` (`livekit-cli:latest`);
+  `e2e-harness/use-fixed-oidc.sh:40` (`ubuntu:rolling`).
+- **CI**: `.github/workflows/docker.yml` uses actions by major tag
+  (`actions/checkout@v4`, `docker/login-action@v3`, `docker/metadata-action@v5`,
+  `docker/build-push-action@v6`) on `ubuntu-latest`.
+
+Pinned by tag only, without a digest: `matrixdotorg/synapse:v1.161.0`,
+`caddy:2.11.4-builder` / `caddy:2.11.4`, and the Element Web git tag `v1.12.29`,
+which is cloned by name and not checked against a commit. Release tags are
+conventionally immutable, but nothing here enforces it.
+
+Production, per the repository's own records: its `.env` pins Redis as
+`redis:latest@sha256:aa049e68…` (`docker-compose.yml:44-51`). The tag reads `latest`,
+but the digest fixes the bytes, so a pull does not move it; the production `.env` is
+not in this repository, so confirm on the box. Production also carries a leftover
+watchtower container that no compose file here defines; per
+`docs/deployment-recovery-reference.md:75` and `:534` it is scoped to itself and
+updates nothing (verified 2026-06-12).
+
+## Upstream deviations (patches)
+
+The Synapse and Element Web images this repository builds are **not stock**. Each
+carries vendored source patches, applied at image build time so that a patch that
+stops applying fails the build instead of shipping silently. Every patch has a
+registry entry stating what it changes, why, the evidence, its upstream status and
+its retirement condition. The registries are the source of truth; the lists below
+only mirror them.
+
+**Synapse: 1 patch.** Registry: [`patches/synapse/README.md`](patches/synapse/README.md).
+Applied by `dockerfiles/Dockerfile` with `patch --fuzz=0`.
+
+1. [`msc4133-profile-field-write-policy.patch`](patches/synapse/msc4133-profile-field-write-policy.patch):
+   backport of element-hq/synapse#19980. A non-admin may not write or delete a
+   denylisted custom profile field, which makes the provider-published
+   `io.inblock.did` field read-only for users. UPSTREAM-TRACKED.
+
+Synapse settings that differ from upstream defaults are written by
+`entrypoints/matrix_server.sh`, not patched: delegated authentication to siwx-oidc
+(`matrix_authentication_service`), the `msc4133_key_denylist` with a startup guard
+that refuses to run without the patch, MatrixRTC experimental features (MSC4108,
+MSC4143, MSC3266, MSC4222), delayed-event and message rate limits, retention off by
+default, server notices, and `serve_server_wellknown: false`.
+
+**Element Web: 10 patches**, applied in this order by `dockerfiles/Dockerfile.element`
+with `git apply`; the order is load-bearing. Registry:
+[`patches/element-web/README.md`](patches/element-web/README.md).
+
+1. [`force-first-device-recovery.patch`](patches/element-web/force-first-device-recovery.patch):
+   recovery-key (4S) setup is mandatory on the first device, and the 4S probes read
+   the response body so a `{}` tombstone counts as "no key". POLICY.
+2. [`setup-encryption-busy-wedge.patch`](patches/element-web/setup-encryption-busy-wedge.patch):
+   recovers from the post-verification `Phase.Busy` dead end. UPSTREAM DEFECT.
+3. [`honest-qr-disabled-reason.patch`](patches/element-web/honest-qr-disabled-reason.patch):
+   "Show QR code" names this session's own crypto state instead of blaming the
+   account provider. UPSTREAM HONESTY DEFECT.
+4. [`offer-verify-current-session.patch`](patches/element-web/offer-verify-current-session.patch):
+   an unverified current session is offered "Verify session" instead of only the
+   destructive identity reset. UPSTREAM DEAD END.
+5. [`auto-approve-check-code.patch`](patches/element-web/auto-approve-check-code.patch):
+   the MSC4108 QR check code approves once both digits are typed. UX POLICY.
+6. [`browser-eventindex.patch`](patches/element-web/browser-eventindex.patch):
+   encrypted-room search in the browser, behind the labs flag
+   `feature_web_event_index`. Tracks element-hq/element-web#34718 and deliberately
+   leads it. UPSTREAM-TRACKED.
+7. [`show-attested-did.patch`](patches/element-web/show-attested-did.patch): shows
+   the provider-attested DID (`io.inblock.did`) in the member panel and in All
+   settings → Account. POLICY.
+8. [`resolve-did-search.patch`](patches/element-web/resolve-did-search.patch): a DID
+   typed into Spotlight or the invite dialog resolves to that user's Matrix ID, with
+   the DID proof verified in the browser. Depends on 7. POLICY.
+9. [`sw-versions-no-cache-on-error.patch`](patches/element-web/sw-versions-no-cache-on-error.patch):
+   the service worker never caches a failed `/_matrix/client/versions` check
+   (filed as element-hq/element-web#35242). UPSTREAM DEFECT.
+10. [`sw-media-401-token-retry.patch`](patches/element-web/sw-media-401-token-retry.patch):
+    a media request that gets a 401 waits up to 5 s for the app's token refresh and
+    retries once. Depends on 9. UPSTREAM DEFECT.
+
+Element Web also carries runtime deltas that are not `.patch` files: nginx caching
+and security headers, the service-worker boot shim, a per-build `sw.js` stamp, the
+inblock.io branding overlay, entrypoint templating, and a bind-mounted config. They
+are listed at the end of the Element Web registry.
+
+Caddy is not patched, but it is not the stock image either; see the Caddy rows under
+[Dependencies](#dependencies).
+
+### Maintainer rule: one commit for pin, registry and README
+
+Whenever a pin or a patch changes, update this README and the matching registry
+**in the same commit**: the Dependencies table for a version or digest, and the
+lists above for a patch that is added, dropped, renamed or reordered. To check that
+every patch file has a registry entry (prints nothing when complete):
+
+```bash
+for p in patches/*/*.patch; do
+  grep -qF "$(basename "$p")" "$(dirname "$p")/README.md" || echo "MISSING: $p"
+done
+```
 
 ## Parameters
 
+`start-matrix.sh` accepts only the flags listed here. Any other flag makes it print
+`unknown arg` and exit without starting anything.
+
 ### General
-
-#### --LETSENCRYPT_EMAIL **Required**
-
-Email address for Let's Encrypt certificate notifications (expiry warnings,
-security updates). Use a valid, monitored address.
 
 #### --ENABLE_DEBUG
 
 Enables debug mode: disables detached Docker Compose, sets siwx-oidc log level
-to debug for real-time log output.
+to debug for real-time log output. The log level is written into `.env` only when
+`.env` is first created; on later runs the value already in `.env` applies.
 
 #### --stop
 
@@ -72,21 +244,9 @@ Stop all containers.
 
 Hostname for the siwx-oidc OIDC provider (e.g., `siwx-oidc.example.com`).
 
-#### --SIWEOIDC_CLIENT_ID
-
-Client ID for OIDC authentication. Auto-generated if not set.
-
-#### --SIWEOIDC_SECRET_ID
-
-Client secret for OIDC authentication. Auto-generated if not set.
-
 #### --SIWEOIDC_PORT
 
 Port for the siwx-oidc service. Default: `8081`.
-
-#### --SIWEOIDC_DEFAULT_CLIENTS
-
-Pre-configured OIDC client list. Auto-generated if not set.
 
 ### Matrix
 
@@ -100,18 +260,24 @@ Port for the Matrix server. Default: `8080`.
 
 #### --MATRIX_MESSAGE_LIFETIME
 
-Duration messages are retained before automatic deletion. Default: `4w`.
+Written to `.env` as `MATRIX_MESSAGE_LIFETIME`. Default: `4w`. It does **not**
+delete messages. Message retention is off unless `MATRIX_RETENTION_ENABLED=true` is
+set in `.env`, and even then this value is only the upper bound a room's own
+retention policy may request (`retention.allowed_lifetime_max`). The setting that
+purges messages is `MATRIX_RETENTION_MAX_LIFETIME`. All three are applied on the
+first boot of a fresh data volume only; see `entrypoints/matrix_server.sh`.
 
 #### --MATRIX_REPORT_STATS
 
-Enable/disable Matrix server usage statistics reporting. Default: `no`.
+A flag without a value: passing it turns Matrix server usage statistics reporting
+on (`yes`). Default: `no`.
 
 ### Element Web Client
 
 #### --CLIENT_HOST **Required**
 
 Hostname for the self-hosted Element Web client (e.g., `element.example.com`).
-The client auto-redirects unauthenticated users to the SIWX wallet login flow.
+The client sends unauthenticated users straight to the siwx-oidc sign-in page.
 
 ## Security
 
@@ -139,8 +305,7 @@ if the key changes.
 ./start-matrix.sh \
   --MATRIX_HOST matrix.example.com \
   --SIWEOIDC_HOST siwx-oidc.example.com \
-  --CLIENT_HOST element.example.com \
-  --LETSENCRYPT_EMAIL admin@example.com
+  --CLIENT_HOST element.example.com
 ```
 
 ### Stop:
@@ -161,29 +326,35 @@ if the key changes.
 ./start-matrix.sh --ENABLE_DEBUG \
   --MATRIX_HOST matrix.example.com \
   --SIWEOIDC_HOST siwx-oidc.example.com \
-  --CLIENT_HOST element.example.com \
-  --LETSENCRYPT_EMAIL admin@example.com
+  --CLIENT_HOST element.example.com
 ```
 
 ## Element Web Client
 
 A self-hosted Element Web instance is included in the stack, accessible at
-`https://<CLIENT_HOST>`. It provides a zero-click SIWX login experience:
+`https://<CLIENT_HOST>`. Sign-in uses Element's native OIDC support
+(MSC2965/MSC3861):
 
 1. User visits `https://element.example.com`
-2. A branded splash screen appears briefly
-3. The wallet popup opens automatically (no buttons to click)
-4. After signing, the user lands directly in the chat
+2. Element discovers siwx-oidc as the homeserver's OIDC issuer and, because
+   `sso_redirect_options.immediate` is set in `config/element-config.json`, redirects
+   straight to the siwx-oidc sign-in page
+3. The user chooses **Sign in with Ethereum** (browser wallet) or **Sign in with
+   Passkey**
+4. After signing, the user lands back in Element, signed in
 
-The client is pre-configured to connect to the local Synapse instance. No
-homeserver configuration is needed by the user.
+The client is pre-configured to connect to the local Synapse instance
+(`default_server_config` in `config/element-config.json`, templated at container
+start by `entrypoints/element_entrypoint.sh`). No homeserver configuration is needed
+by the user. No login scripts are injected into Element: an earlier redirect script
+raced the native flow and was removed (see the comment in
+`entrypoints/element_entrypoint.sh`).
 
-The redirect logic lives in `config/siwx-redirect.js`. The branded splash
-screen is in `config/siwx-splash.html`. Both are injected into Element's
-`index.html` at container start by `entrypoints/element_entrypoint.sh`.
-
-No Element Web fork is required. The stock `vectorim/element-web` image is
-used as a base with a thin configuration layer on top.
+Element Web is **not** the stock `vectorim/element-web` image.
+`dockerfiles/Dockerfile.element` clones element-hq/element-web at a pinned tag,
+applies our vendored patches, builds it, and serves it with the inblock.io overlay
+(config, theme, favicons, service-worker boot shim). See
+[Upstream deviations (patches)](#upstream-deviations-patches).
 
 ## Mobile Wallet Usage
 
