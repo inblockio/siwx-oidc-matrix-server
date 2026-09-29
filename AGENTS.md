@@ -148,7 +148,11 @@ it read-only for non-admins.
 - **`matrix_authentication_service` is the only delegation mode.** Synapse 1.157 removed
   `experimental_features.msc3861`, and a leftover block is a config error. `endpoint` is
   the only location setting: Synapse derives both the discovery and the introspection
-  URL from it and ignores the metadata's own `introspection_endpoint`.
+  URL from it and ignores the metadata's own `introspection_endpoint`. The entrypoint
+  sets it to `SIWEOIDC_INTERNAL_URL` when that is set (local and e2e stacks), otherwise
+  to `SIWEOIDC_BASE_URL`; siwx-oidc builds its discovery document from its base URL, so
+  an internal address still yields the public URLs. siwx-oidc reaches Synapse at
+  `SIWEOIDC_SYNAPSE_ENDPOINT`.
 - **Two credentials, two route families.** The shared secret (`MAS_SHARED_SECRET`, the
   same value as siwx-oidc's `…_MAS_SHARED_SECRET`) authenticates introspection and
   `/_synapse/mas/*`. The Synapse admin API needs an admin-scoped token that siwx-oidc
