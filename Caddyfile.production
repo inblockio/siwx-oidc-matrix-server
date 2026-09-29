@@ -59,6 +59,19 @@
 	}
 }
 
+# HSTS for the prod vhosts flagged by the aqua-ops header scanner
+# (2026-09-29, approved by Tim). One year, deliberately WITHOUT
+# includeSubDomains and WITHOUT preload: both are hard to undo and would
+# reach subdomains these site blocks do not control. Set immediately, NOT
+# deferred with `?`: a deferred header is lost on responses Caddy writes
+# from an error (the website_gate 401, the siwx 429), so those would go
+# out without HSTS. None of these upstreams sends HSTS itself (checked
+# 2026-09-29), so nothing is doubled; if one ever starts to, drop it here.
+# matrix.inblock.io and element.inblock.io carry their own inline HSTS.
+(hsts) {
+	header Strict-Transport-Security "max-age=31536000"
+}
+
 :80 {
     respond "OK" 200
 }
@@ -210,6 +223,7 @@ matrix.inblock.io {
 }
 
 siwx-oidc.inblock.io {
+    import hsts
     encode zstd gzip
 
     # PUBLIC KEY MATERIAL is readable from any origin; everything else on
@@ -341,11 +355,13 @@ element.inblock.io {
 }
 
 openwitness.org {
+    import hsts
     encode zstd gzip
     reverse_proxy timestamp:8080
 }
 
 timestamps.inblock.io {
+    import hsts
     redir https://openwitness.org{uri} permanent
 }
 
@@ -356,12 +372,14 @@ agentic.inblock.io {
 
 
 audit.inblock.io {
+    import hsts
     encode zstd gzip
     import website_gate
     reverse_proxy regulator:8791
 }
 
 viewer.inblock.io {
+    import hsts
     # Shared-password gate for the Aqua state viewer preview (user: website).
     import website_gate
 
@@ -382,12 +400,14 @@ viewer.inblock.io {
 }
 
 projects.inblock.io {
+    import hsts
     encode zstd gzip
     import website_gate
     reverse_proxy projects:8080
 }
 
 aqua-registry.inblock.io {
+    import hsts
     encode zstd gzip
     reverse_proxy aqua-registry:8088
 }
