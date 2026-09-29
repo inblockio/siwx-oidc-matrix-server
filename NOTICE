@@ -24,9 +24,11 @@ patches/synapse/msc4133-profile-field-write-policy.patch
     backports code from https://github.com/element-hq/synapse/pull/19980.
 
 patches/synapse/tests/test_msc4133_write_policy.py
-    AGPL-3.0-or-later, like the patch it tests. It is written to be copied
-    into Synapse's own test tree and run there, and it reuses the set-up
-    code of Synapse's tests/rest/client/test_profile.py.
+    AGPL-3.0-or-later, like the patch it tests, as its SPDX header says. It
+    is written to be copied into Synapse's own test tree and run there, and
+    it reuses the set-up code of Synapse's tests/rest/client/test_profile.py,
+    whose notice (Copyright 2014-2016 OpenMarket Ltd, Copyright (C) 2023 New
+    Vector, Ltd) its header reproduces.
 
 patches/element-web/*.patch
     Almost every existing file these patches change carries

@@ -447,8 +447,9 @@ they contain and sets out two exceptions in full:
 
 - **Patches.** The `.patch` files under `patches/` change Synapse and Element Web, so
   each change takes the license of the upstream file it changes: AGPL-3.0-or-later for
-  Synapse (and for the test in `patches/synapse/tests/`), and for the Element Web code
-  the image ships, AGPL-3.0-only OR GPL-3.0-only.
+  Synapse (and for the test in `patches/synapse/tests/`, which carries Synapse's notice for
+  the set-up code it reuses), and for the Element Web code the image ships,
+  AGPL-3.0-only OR GPL-3.0-only.
 - **Brand assets.** The inblock.io logos, favicons and welcome background are not
   licensed. A deployment must replace them with its own.
 

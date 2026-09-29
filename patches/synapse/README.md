@@ -9,7 +9,9 @@ build loudly** — never silently at runtime.
 **License.** The patch and its test in this directory are licensed AGPL-3.0-or-later,
 not Apache-2.0 like the rest of the repository: the patch changes two Synapse files whose
 headers license them AGPL-3.0-or-later, and the test only runs inside Synapse's own test
-tree. See [`NOTICE`](../../NOTICE) at the repository root.
+tree. The test's header says so (`SPDX-License-Identifier: AGPL-3.0-or-later`) and keeps
+the copyright notice of `tests/rest/client/test_profile.py`, whose set-up code it reuses.
+See [`NOTICE`](../../NOTICE) at the repository root.
 
 The rules are the same as `patches/element-web/README.md`, and for the same reason:
 

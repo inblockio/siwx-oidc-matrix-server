@@ -1,9 +1,33 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Copyright 2026 inblock.io assets GmbH
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
+#
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
+#
+# The test set-up (the `servlets` list and `prepare()`) follows Synapse's
+# tests/rest/client/test_profile.py, which carries:
+#
+#   This file is licensed under the Affero General Public License (AGPL) version 3.
+#
+#   Copyright 2014-2016 OpenMarket Ltd
+#   Copyright (C) 2023 New Vector, Ltd
+#
+#   Originally licensed under the Apache License, Version 2.0:
+#   <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+#   [This file includes modifications made by New Vector Limited]
 #
 # Regression tests for patches/synapse/msc4133-profile-field-write-policy.patch.
 #
 # NOT shipped in the image. The Dockerfile patches the installed tree under
 # site-packages, which has no `tests` package. These run against an upstream
-# Synapse CHECKOUT carrying the patch, as step 5 of the bump procedure in
+# Synapse CHECKOUT carrying the patch, as part of the bump procedure (rule 4) in
 # patches/synapse/README.md:
 #
 #   cp patches/synapse/tests/test_msc4133_write_policy.py \
