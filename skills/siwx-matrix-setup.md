@@ -141,10 +141,10 @@ element.example.com {
 
 ## Step 3: Calls (LiveKit and TURN)
 
-Calls work without further setup for clients that can reach UDP 20100-20200 on the
-host: open 7881/tcp and 20100-20200/udp in the host firewall, and add the `/livekit/jwt`
-and `/livekit/sfu` routes from `Caddyfile.local` to the proxy. `config/livekit.yaml` ships
-with LiveKit's embedded TURN **off**, so clients behind symmetric NAT or strict firewalls
+Calls need the `/livekit/jwt` and `/livekit/sfu` routes from `Caddyfile.local` in the
+proxy, and 7881/tcp and 20100-20200/udp open in the host firewall; the
+`/matrix-rtc-transport-specialist` skill has the rest. `config/livekit.yaml` ships with
+LiveKit's embedded TURN **off**, so clients behind symmetric NAT or strict firewalls
 cannot connect. To enable TURN:
 
 1. Run the edge on the `caddy-l4` image built here, with the `layer4` SNI split on `:443`
