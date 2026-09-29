@@ -462,11 +462,12 @@ images", names the Alpine releases and their source. An image's corresponding so
 the upstream release its Dockerfile pins plus this repository at the commit its
 `org.opencontainers.image.revision` label names.
 
-**AGPL and network use (not legal advice).** A deployment of this bundle serves
-modified AGPL-3.0 programs to its users over a network: Synapse, and Element Web when
-it is used under the AGPL. Section 13 of the AGPL then requires the operator to offer
-those users the Corresponding Source of the modified programs. The patches and
-Dockerfiles published here are those modifications, which is likely what meets that
-obligation for inblock.io's own deployment. If you run this bundle, link your users to
-the source you run (for example from the client's About page), and check your
+**AGPL and conveying (not legal advice).** A deployment of this bundle serves modified
+AGPL-3.0 programs to its users over a network: Synapse, and Element Web when it is used
+under the AGPL. Section 13 of the AGPL then requires the operator to offer those users
+the Corresponding Source of the modified programs. Element Web is also *conveyed*: its
+JavaScript is sent to every browser that loads it, so the source obligations for
+conveying apply to it under either license, AGPL-3.0 or GPL-3.0. The patches and
+Dockerfiles published here are the modifications. If you run this bundle, link your
+users to the source you run (for example from the client's About page), and check your
 obligations with counsel.
