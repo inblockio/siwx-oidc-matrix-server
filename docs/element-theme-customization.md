@@ -5,9 +5,11 @@ discipline that keeps semantic colors correct. This supersedes two earlier
 handover notes (2026-06-04), whose root-cause theory was **disproved against
 the pinned Element source**.
 
-Element is built from source at `ELEMENT_WEB_TAG` (currently `v1.12.20`, see
-`dockerfiles/Dockerfile.element`). The facts below are cited from that tag and
-its pinned `@vector-im/compound-design-tokens@10.1.1`.
+Element is built from source at `ELEMENT_WEB_TAG` (see
+`dockerfiles/Dockerfile.element`; `v1.12.29` at the time of writing, which pins
+`@vector-im/compound-design-tokens@10.2.1`). The facts below were read from `v1.12.20`
+and its `@vector-im/compound-design-tokens@10.1.1`, and have not been re-read against
+later tags; `./verify-theme.sh` checks the repository side of the contract.
 
 ## Corrected mental model (the load-bearing fact)
 
