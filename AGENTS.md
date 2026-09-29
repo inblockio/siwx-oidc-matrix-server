@@ -213,9 +213,10 @@ Guides and scripts here must not contradict it:
 
 - **The UDP media range 20100–20200 stays below the Linux ephemeral range** and must match
   in `docker-compose.yml` and `config/livekit.yaml`.
-- **`LIVEKIT_URL` stays the public `wss://` URL.** lk-jwt-service uses it for the SFU URL
-  it hands out and for its own room-creation call, which therefore comes back in through
-  the proxy; the proxy admits `/livekit/sfu/twirp/*` only from private addresses.
+- **`LIVEKIT_URL` stays the public `wss://` URL.** lk-jwt-service (verified through
+  0.6.0) uses it both for the SFU URL it hands out and for its own room-creation call,
+  which therefore comes back in through the proxy; the proxy admits
+  `/livekit/sfu/twirp/*` only from private addresses.
 - **`LIVEKIT_FULL_ACCESS_HOMESERVERS` names the homeserver explicitly**, never `*`, which
   would let users of any federated server create rooms on the SFU.
 - **Keep `matrix_rtc.transports[0].livekit_service_url` and do not write `url`.** Synapse

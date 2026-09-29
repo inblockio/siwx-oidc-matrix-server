@@ -90,9 +90,9 @@ lk-jwt-service:
     disable: true
 ```
 
-- **`LIVEKIT_URL` stays the public `wss://` URL.** lk-jwt-service uses it both for the
-  SFU URL it hands to clients and for its own room-creation (Twirp) call, so that call
-  comes back in through the proxy. The proxy therefore admits `/livekit/sfu/twirp/*`
+- **`LIVEKIT_URL` stays the public `wss://` URL.** lk-jwt-service (verified through
+  0.6.0) uses it both for the SFU URL it hands to clients and for its own room-creation
+  (Twirp) call, so that call comes back in through the proxy. The proxy therefore admits `/livekit/sfu/twirp/*`
   only from private source addresses (see `Caddyfile.local`).
 - **`LIVEKIT_FULL_ACCESS_HOMESERVERS` is mandatory** since lk-jwt-service 0.5.0 (it exits
   at startup without it). Since 0.7.0, users of other homeservers get subscribe-only

@@ -54,7 +54,9 @@ The Synapse and Element Web images built here are **not stock**: see
 - **Element X is used unmodified**, as distributed through the app stores. This repository
   does not patch it.
 - **The `io.inblock.did` profile field is write-protected only by the patched Synapse**
-  built here. The Synapse entrypoint refuses to start on a Synapse without the patch.
+  built here. The Synapse entrypoint refuses to start on a Synapse without the patch,
+  unless that check is explicitly overridden (see
+  [patches/synapse/README.md](patches/synapse/README.md)).
 - **Not included:** a reverse proxy (bring your own; the routes are in
   `Caddyfile.local`), PostgreSQL (Synapse runs on SQLite), coturn (LiveKit's embedded TURN
   is used instead), and MAS.
