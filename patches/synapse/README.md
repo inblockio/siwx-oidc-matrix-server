@@ -125,13 +125,15 @@ all.
   API passes `by_admin=True` unconditionally, so `provision_user` and the
   displayname writes are likewise unaffected.
 
-**Upstream status.** #19980 (author `Barry3D`, successor to the abandoned #18562 by
-`anoadragon453`, both implementing issue
-[#18525](https://github.com/element-hq/synapse/issues/18525)) is **OPEN but stalled**:
-`CHANGES_REQUESTED` from anoadragon453 on 2026-08-13, last activity 2026-08-14, and
-now `mergeable: false` / `dirty` against `develop`. The maintainer has said he may
-prefer to stabilise MSC4133 *first*. We should not expect this to land soon, and we
-should not open a competing PR while the author is active.
+**Upstream status** (checked 2026-09-30 with `gh pr view`). #19980 (author `Barry3D`)
+is **OPEN but stalled**: `CHANGES_REQUESTED` from anoadragon453 on 2026-08-13, the
+author's last push 2026-08-14, last activity a comment on 2026-09-11, and
+`mergeable: CONFLICTING` against `develop`. It succeeds
+[#18562](https://github.com/element-hq/synapse/pull/18562) by `anoadragon453`, which is
+also still **OPEN**: no review since 2025-07-02, labels added 2026-09-23. Both implement
+issue [#18525](https://github.com/element-hq/synapse/issues/18525). The maintainer has
+said he may prefer to stabilise MSC4133 *first*. We should not expect this to land soon,
+and we should not open a competing PR while the author is active.
 
 **What we took, and what we deliberately left.** Only the
 `synapse/config/experimental.py` and `synapse/handlers/profile.py` hunks, taken from

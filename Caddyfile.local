@@ -1,10 +1,11 @@
 # Local-only Caddy config for docker-compose.local.yml.
 #
 # HTTP only, port-based virtual hosts (no DNS, no TLS). Each listening
-# port maps to one logical service. The Matrix port intercepts the
-# MSC3861 login/logout/refresh paths and proxies them to siwx-oidc —
-# the same trick the production Caddyfile uses, just over plain HTTP
-# on localhost ports.
+# port maps to one logical service. The Matrix port sends the client
+# login, logout, refresh and device-deletion paths to siwx-oidc, which
+# serves them under delegated auth instead of Synapse. It is the
+# reference route set for a deployment's own proxy (AGENTS.md), not a
+# copy of any particular deployment's edge.
 
 (strip_upstream_cors) {
     header_down -Access-Control-Allow-Origin
@@ -43,10 +44,10 @@
         respond `{"m.homeserver": {"base_url": "{$MATRIX_PUBLIC_BASE:http://localhost:8080}"}, "m.authentication": {"issuer": "{$SIWX_PUBLIC_BASE:http://localhost:8081}/", "account": "{$SIWX_PUBLIC_BASE:http://localhost:8081}/account"}, "org.matrix.msc4143.rtc_foci": [{"type": "livekit", "livekit_service_url": "{$MATRIX_PUBLIC_BASE:http://localhost:8080}/livekit/jwt"}]}`
     }
 
-    # MSC3861: login/logout/refresh + in-client device teardown go to siwx-oidc.
-    # Synapse returns 404 for these under delegated auth; Element "Sign out this
-    # session" / remove-device must hit siwx-oidc (parity with e2e/real-stack/Caddyfile
-    # and production method-routes).
+    # Login, logout, refresh and in-client device teardown go to siwx-oidc.
+    # Synapse does not serve these under delegated auth; Element's "Sign out
+    # this session" and removing a device must reach siwx-oidc, which revokes
+    # the device's tokens.
     handle /_matrix/client/v3/login {
         import public_cors
         reverse_proxy siwx-oidc:8081 {
@@ -111,8 +112,7 @@
 
     # MatrixRTC: LiveKit SFU. Port 7880 muxes WebSocket signaling AND the Twirp
     # management API, which no upstream flag can split or disable, so the edge
-    # is the only place to restrict it (S3, 2026-08-01 av-hardening audit;
-    # kept in parity with the production edge).
+    # is the only place to restrict it (S3, 2026-08-01 av-hardening audit).
     # Private-range callers pass through because lk-jwt's own CreateRoom call
     # hairpins back in through here.
     @livekit_twirp_public {
@@ -137,7 +137,7 @@
 
     # SEC-0003: never expose the Synapse admin / MAS provisioning surfaces at the
     # edge. siwx-oidc reaches them directly over the Docker network, so the deny
-    # breaks nothing. Kept in parity with the production edge.
+    # breaks nothing.
     handle /_synapse/admin/* {
         respond 404
     }

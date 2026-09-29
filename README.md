@@ -62,7 +62,9 @@ The Synapse and Element Web images built here are **not stock**: see
   `Caddyfile.local`), PostgreSQL (Synapse runs on SQLite), coturn (LiveKit's embedded TURN
   is used instead), and MAS.
 - **Brand assets are not licensed.** The inblock.io logos, favicons and welcome background
-  in `config/` must be replaced by a deployment (see [License](#license)).
+  in `config/`, and the logo at the repository root, are not licensed for reuse. The ones
+  in `config/` go into the Element image, so a deployment must replace them (see
+  [License](#license)).
 
 ## Quick Start
 

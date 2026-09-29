@@ -76,9 +76,9 @@ services:
     # Built by the separate siwx-oidc repo, so it is versioned independently of
     # synapse + element-web. SIWX_OIDC_IMAGE_REF is a FULL image ref (not a
     # bare tag, which the old SIWX_OIDC_TAG was) so that a digest-only
-    # `ghcr.io/inblockio/siwx-oidc@sha256:…` pin is expressible — the promoted
-    # digests are tagged `:dev` on GHCR while `:main` resolves elsewhere
-    # (builds are not reproducible), so a tag name would misdescribe the bytes.
+    # `ghcr.io/inblockio/siwx-oidc@sha256:…` pin is expressible. CI builds are
+    # not reproducible, and a branch tag such as `:main` moves with every
+    # build, so a tag name alone can misdescribe the bytes a deployment runs.
     # Default: immutable, like SYNAPSE_IMAGE_REF above. The build siwx-oidc's CI
     # published from its main at 40efae9 (2026-09-29).
     image: ${SIWX_OIDC_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc:sha-40efae9@sha256:54739f4813bfa5dcfb104cdfdf1fedd4c7b7ff7a4c307059128cf047a30ba12f}
