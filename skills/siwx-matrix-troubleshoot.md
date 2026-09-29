@@ -147,11 +147,21 @@ docker compose exec siwx-oidc wget -qO- http://matrix_synapse:8080/health
 
 ### 6. Signing key lost (new .env generated)
 
-**Symptoms**: All existing tokens stop working. Users must re-login.
+**Symptoms**: Signed-in users stay signed in: access and refresh tokens are opaque Redis
+entries that do not depend on the key. What fails is verification against siwx-oidc's
+JWKS: an ID token signed with the old key (a sign-in in flight during the change), and
+every `io.inblock.did` proof already in a user's profile (`siwx-oidc-auth --verify-did`
+reports a `kid` that is not in the JWKS) until that user's next sign-in publishes a new
+one.
 
 **Prevention**: Back up `.env` before any destructive operation.
 
-**Recovery**: There is no recovery for the old key. Users re-login and get new tokens. If the whole `.env` was regenerated, `MAS_SHARED_SECRET` changed too; the Synapse entrypoint writes the new value at its next boot, so recreate both `matrix_synapse` and `siwx-oidc`. DID proofs signed with the old key can no longer be verified unless its public half is kept as a retired key (see siwx-oidc's configuration reference).
+**Recovery**: The old private key cannot be recovered. If you still have the old key or
+its public half, list the public half in `SIWXOIDC_RETIRED_SIGNING_KEYS_PEM` so the old
+proofs keep verifying (siwx-oidc, [Key rotation](https://github.com/inblockio/siwx-oidc/blob/main/docs/configuration.md#key-rotation)); `docker-compose.yml` does not
+pass that variable through, so add it to the `siwx-oidc` service's `environment`. If the
+whole `.env` was regenerated, `MAS_SHARED_SECRET` changed too; the Synapse entrypoint
+writes the new value at its next boot, so recreate both `matrix_synapse` and `siwx-oidc`.
 
 ### 7. Redis data lost
 

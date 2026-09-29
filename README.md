@@ -336,8 +336,14 @@ chmod 600 .env
 ### OIDC signing key
 
 An EC P-256 signing key is auto-generated on first run and stored in `.env`
-(never as a separate file on disk). Do not delete it; tokens become invalid
-if the key changes.
+(never as a separate file on disk). Back it up with `.env`. Access and refresh tokens are
+opaque entries in Redis, so a new key signs no one out. What a key change breaks: ID
+tokens signed with the old key no longer verify against siwx-oidc's JWKS, and neither
+does any `io.inblock.did` proof already published in a user's profile, until that user's
+next sign-in publishes a new one. To keep the old proofs verifiable, list the old key's
+public half in `SIWXOIDC_RETIRED_SIGNING_KEYS_PEM` (siwx-oidc,
+[Key rotation](https://github.com/inblockio/siwx-oidc/blob/main/docs/configuration.md#key-rotation)). `docker-compose.yml` does not pass that variable through: add it to
+the `siwx-oidc` service's `environment`, for example in `docker-compose.override.yml`.
 
 ### Reverse proxy
 
