@@ -571,7 +571,7 @@ rev_of() {
 }
 REV_HARNESS="$(rev_of "$REPO_ROOT")"
 REV_SIWX="$(rev_of "$SIWX_OIDC_DIR_FOR_SUMMARY")"
-REV_CONNECTOR="$(rev_of "${CONNECTOR_DIR:-/home/waldknoten-01/aqua-matrix-agent}")"
+REV_CONNECTOR="$(rev_of "${CONNECTOR_DIR:-$HOME/aqua-matrix-agent}")"
 
 jq -n \
   --arg run_id "$RUN_ID" \
