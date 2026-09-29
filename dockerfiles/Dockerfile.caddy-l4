@@ -1,15 +1,15 @@
 # Caddy + caddy-l4 (layer4) + caddy-ratelimit, custom-built via xcaddy.
 #
 # PURPOSE 1 — TURN-TLS SNI split on :443. Stock Caddy has no way to inspect the
-# raw TLS ClientHello SNI before termination, so a bare Caddy on this box
-# cannot divert only the TURN hostname (dev.turn.matrix.inblock.io /
-# turn.matrix.inblock.io) to LiveKit's plaintext external_tls listener while
-# leaving every other :443 vhost untouched. caddy-l4's `layer4` Caddyfile
-# app + `listener_wrappers` adds that SNI-based demux ahead of the `tls`
-# wrapper. See docs/superpowers/plans/2026-08-03-turn-tls-edge-termination.md
-# for the full design (Caddyfile.dev-aquafire carries the actual
-# `servers :443 { listener_wrappers { layer4 { ... } tls } }` block that
-# consumes this image).
+# raw TLS ClientHello SNI before termination, so a bare Caddy that owns :443
+# cannot divert only the TURN hostname (`turn.domain` in config/livekit.yaml)
+# to LiveKit's plaintext external_tls listener while leaving every other
+# :443 vhost untouched. caddy-l4's `layer4` Caddyfile app +
+# `listener_wrappers` adds that SNI-based demux ahead of the `tls` wrapper.
+# The edge Caddyfile consumes this image through a
+# `servers :443 { listener_wrappers { layer4 { ... } tls } }` block;
+# skills/matrix-rtc-transport-specialist.md shows one, and the `turn:` block
+# of config/livekit.yaml lists what else the edge needs.
 #
 # PURPOSE 2 — edge rate limiting for siwx-oidc's PUBLIC `GET /resolve`. That
 # route is unauthenticated by design and costs up to two Synapse probes per
@@ -18,29 +18,29 @@
 # already fronts this service (Caddy), where it can be shaped per-deployment
 # without a release. Do not add an in-process one here". Caddy ships NO
 # rate-limiting directive of any kind, so that delegation is unimplementable
-# without this module. The zones live in the `dev.siwx.inblock.io` /
-# `siwx-oidc.inblock.io` site blocks of Caddyfile.dev-aquafire /
-# Caddyfile.production.
+# without this module. The zones belong in the edge Caddyfile's site block
+# for siwx-oidc, matching GET/HEAD /resolve INSIDE its catch-all handle, so the
+# `header_down` lines that strip upstream CORS headers still apply to /resolve.
 #
 # DEPLOY ORDER — IMAGE FIRST, and be precise about what is new here.
 #
-# Both Caddyfiles ALREADY required this custom image before rate limiting
-# existed: each carries a `layer4` block, and stock `caddy:2-alpine` rejects
-# them identically before and after this change (verified: same error, same
-# line, on `git show HEAD:Caddyfile.production` and on the edited file). So
-# "fails on stock Caddy" is not the new risk.
+# An edge config with a `layer4` block ALREADY required this custom image
+# before rate limiting existed: stock Caddy rejects it, with or without a
+# `rate_limit` block (verified when the limiter was added: the same error on
+# the same line, before and after). So "fails on stock Caddy" is not the new
+# risk.
 #
-# The NEW risk is narrower and more likely: the image currently DEPLOYED
-# (`caddy-l4:2.11.4-l4v0.1.2` — layer4 only, no ratelimit) parses today's
-# config fine and will REJECT the new one. A `caddy reload` ahead of the image
-# bump therefore takes down every vhost on the box — 8 on dev, 12 on prod, not
-# just siwx-oidc. Rebuild and pull this image, THEN deploy the Caddyfile.
-# Same shape as the Synapse-then-publisher ordering in siwx-oidc's CLAUDE.md,
-# and for the same reason: the consumer of a capability must never arrive
-# before the capability.
+# The NEW risk is narrower and more likely: an older build of this image
+# (`caddy-l4:2.11.4-l4v0.1.2` — layer4 only, no ratelimit) parses a
+# layer4-only config fine and REJECTS one with `rate_limit`. A `caddy reload`
+# ahead of the image bump therefore takes down every vhost that edge serves,
+# not just siwx-oidc. Rebuild and pull this image, THEN deploy the Caddyfile.
+# Same rule as the patched-Synapse-before-DID-publisher order, and for the
+# same reason: the consumer of a capability must never arrive before the
+# capability.
 #
 # This is also why Caddyfile.local and Caddyfile.e2e carry NEITHER block —
-# both run stock `caddy:2-alpine` (docker-compose.local.yml,
+# both run stock `caddy:2.11.4-alpine` (docker-compose.local.yml,
 # docker-compose.e2e.yml), so adding one would break local dev and the e2e
 # harness.
 #

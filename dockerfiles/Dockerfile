@@ -80,9 +80,9 @@ COPY LICENSE NOTICE /usr/share/licenses/siwx-oidc-matrix-server/
 
 ENTRYPOINT ["/matrix_server.sh"]
 
-# Harmless content marker: proves the `dev` branch CI trigger produces a
+# Harmless content marker: proved that the `dev` branch CI trigger produced a
 # genuinely new, distinct :dev image (not a coalesced/reused build from a
-# simultaneous `main` push). See docs/2026-07-30-dev-staging-dev-aquafire.md
-# §9 (branch-based CI deploys).
+# simultaneous `main` push). The `dev` branch was folded into `main` on
+# 2026-09-01; the labels have been inert since.
 LABEL io.inblock.dev-branch-ci-test="2026-07-31"
 LABEL io.inblock.dev-branch-ci-test-s5-live-check="2026-07-31T00:48Z"
