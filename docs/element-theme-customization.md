@@ -1,9 +1,9 @@
 # Element Web theme customization (contract)
 
 How the inblock.io Element Web themes are defined, who owns what, and the one
-discipline that keeps semantic colors correct. This supersedes the two
-`docs/2026-06-04-element-*-handover.md` notes, whose root-cause theory was
-**disproved against the pinned Element source**.
+discipline that keeps semantic colors correct. This supersedes two earlier
+handover notes (2026-06-04), whose root-cause theory was **disproved against
+the pinned Element source**.
 
 Element is built from source at `ELEMENT_WEB_TAG` (currently `v1.12.20`, see
 `dockerfiles/Dockerfile.element`). The facts below are cited from that tag and
