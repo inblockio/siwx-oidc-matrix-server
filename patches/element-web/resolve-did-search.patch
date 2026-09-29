@@ -436,10 +436,10 @@ index ef0a821..93fdeec 100644
          "disinvite_button_space": "Disinvite from space",
 diff --git a/apps/web/src/utils/didLocalpart.test.ts b/apps/web/src/utils/didLocalpart.test.ts
 new file mode 100644
-index 0000000..e9e4df2
+index 0000000..cb721e1
 --- /dev/null
 +++ b/apps/web/src/utils/didLocalpart.test.ts
-@@ -0,0 +1,959 @@
+@@ -0,0 +1,950 @@
 +/**
 +Copyright 2026 inblock.io
 +
@@ -1064,7 +1064,7 @@ index 0000000..e9e4df2
 +                });
 +                expect(client.getExtendedProfile).toHaveBeenCalledWith(own());
 +                expect(client.getExtendedProfileProperty).not.toHaveBeenCalled();
-+                // The fresh value overwrote the stale copy.
++                // The fresh proof (e.g. re-issued under a new key) overwrote the cached one.
 +                const cached = client.cache.get(own())?.[DID_PROFILE_FIELD] as { proof?: string };
 +                expect(cached.proof).not.toBe("stale.junk.copy");
 +            });
@@ -1096,15 +1096,6 @@ index 0000000..e9e4df2
 +                    resolveDid(client, KEY_UPPER, { fetchFn: mockFetch(ownResolverNames(own())) }),
 +                ).resolves.toEqual({ userId: own(), verification: "unverified", reason: "unpublished" });
 +                expect(client.cache.has(own())).toBe(false);
-+            });
-+
-+            it("field CHANGED server-side: the fresh value decides and overwrites the cached one", async () => {
-+                const client = mockClient({
-+                    fields: { [own()]: published(KEY_LOWER) },
-+                    cached: { [own()]: { [DID_PROFILE_FIELD]: await genuineCopy(own()) } },
-+                });
-+                await expect(resolveDid(client, KEY_UPPER, { fetchFn: mockFetch(RESOLVER_DOWN) })).resolves.toBeNull();
-+                expect((client.cache.get(own())?.[DID_PROFILE_FIELD] as { did: string }).did).toBe(KEY_LOWER);
 +            });
 +
 +            it("account GONE (404 M_NOT_FOUND): no result, and its cached profile is evicted", async () => {
@@ -1401,10 +1392,10 @@ index 0000000..e9e4df2
 +});
 diff --git a/apps/web/src/utils/didLocalpart.ts b/apps/web/src/utils/didLocalpart.ts
 new file mode 100644
-index 0000000..2512607
+index 0000000..6daadcd
 --- /dev/null
 +++ b/apps/web/src/utils/didLocalpart.ts
-@@ -0,0 +1,708 @@
+@@ -0,0 +1,711 @@
 +/**
 +Copyright 2026 inblock.io
 +
@@ -2026,21 +2017,23 @@ index 0000000..2512607
 + * of a key writes the value through to the client store (IndexedDB in Element)
 + * and every later read returns that copy without asking the server again. Only
 + * a sync `profile_updates` entry (MSC4429, for keys in the sync filter, which
-+ * this one is not) ever refreshes it. So a DID that was unpublished, rebound or
-+ * deactivated after the first search would keep answering from the cache
-+ * forever. `getExtendedProfile` bypasses that cache (it returns the whole
-+ * profile, which the cache cannot), so it is the read that decides.
++ * this one is not) ever refreshes it. So a DID that was unpublished, a proof
++ * re-issued under a new key, or an account deactivated after the first search
++ * would keep answering from the cache forever. `getExtendedProfile` bypasses
++ * that cache (it returns the whole profile, which the cache cannot), so it is
++ * the read that decides.
 + *
 + * # Keeping the cache honest
 + *
 + * The cached copy is also what other surfaces read (`useAttestedDid`), so a
-+ * fresh answer is written back over it: a changed value overwrites the cached
-+ * one, a field the server no longer has is removed from the cached profile, and
-+ * an account the server no longer knows (any 404) loses its cached profile
-+ * altogether. The cache is consulted only when the homeserver cannot
-+ * answer at all (network error, 5xx, an unreachable federated peer), and then
-+ * the candidate still has to pass proof verification; a cached value that
-+ * fails it is evicted by the caller ({@link forgetCachedDidField}).
++ * fresh answer is written back over it: a re-issued proof overwrites the cached
++ * one (an account's DID itself never changes), a field the server no longer has
++ * is removed from the cached profile, and an account the server no longer knows
++ * (any 404) loses its cached profile altogether. The cache is consulted only
++ * when the homeserver cannot answer at all (network error, 5xx, an unreachable
++ * federated peer), and then the candidate still has to pass proof verification;
++ * a cached value that fails it is evicted by the caller
++ * ({@link forgetCachedDidField}).
 + */
 +async function readDidField(client: MatrixClient, userId: string): Promise<DidField | null> {
 +    let profile: Record<string, unknown>;
@@ -2078,6 +2071,7 @@ index 0000000..2512607
 +        if (fresh === undefined) {
 +            await forgetCachedDidField(client, userId);
 +        } else {
++            // The same DID, possibly with a proof re-issued under a new key.
 +            // Read off the wire as JSON, so it is JSON: the cast only restates that.
 +            const value = fresh as SyncUserProfile[string];
 +            await store.storeUserProfiles(new Map([[userId, { ...cached, [DID_PROFILE_FIELD]: value }]]));

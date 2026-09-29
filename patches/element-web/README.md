@@ -1063,20 +1063,22 @@ A tag bump must try every patch in this file's order.
 - **Stale profile cache (2026-09-29):** matrix-js-sdk's `getExtendedProfileProperty` is
   cache-first: the first read of `io.inblock.did` is written through to the client store
   (IndexedDB) and every later read returns that copy, which only an MSC4429 sync update
-  for a sync-filter key would refresh (this key is not one). So a DID removed, rebound or
-  deactivated after the first search kept answering from the cache. The candidate read
-  now uses `getExtendedProfile` (never cached), and writes the fresh answer back over any
-  cached copy: a changed value overwrites it, a missing field is removed from the cached
+  for a sync-filter key would refresh (this key is not one). So a DID removed, a proof
+  re-issued under a new key, or an account deactivated after the first search kept
+  answering from the cache. The candidate read now uses `getExtendedProfile` (never
+  cached), and writes the fresh answer back over any cached copy: a re-issued proof
+  overwrites it (an account's DID itself never changes, so there is no "changed DID"
+  case), a missing field is removed from the cached
   profile (the whole entry when nothing else is left), an account the server answers 404
   for loses its cached profile (any errcode: an erase-deactivated account answers
   `404 M_UNKNOWN "No row found (profiles)"` on Synapse 1.161, found by the dev browser
   run, where an `M_NOT_FOUND`-only check fell back to the stale cached copy). Only when the homeserver cannot answer (network, 5xx, unreachable
   peer) is the cached copy read, and a cached copy whose proof is REJECTED is evicted.
   No js-sdk patch needed. Not covered: `useAttestedDid` (entry 7) still reads cache-first,
-  so a user-info panel opened with no DID search in between can show a stale DID; a DID
-  search for that user corrects it. 10 vitest cases (mock client modelled on js-sdk's
-  cache-first read); disabling the fresh read fails 9, the reject eviction 1, the 404
-  eviction 1.
+  so a user-info panel opened with no DID search in between can show a deactivated
+  account's DID or a proof that no longer verifies; a DID search for that user corrects
+  it. 9 vitest cases (mock client modelled on js-sdk's cache-first read); disabling the
+  fresh read fails 8, the proof overwrite 1, the reject eviction 1, the 404 eviction 2.
 - **Spotlight coverage (2026-09-29):** 6 jest cases in `SpotlightDialog-test.tsx`
   (verified hit with no filter and with People, unverified marker with no filter, no
   other Suggestions leak in with no filter, existing DM shown, no-results). The Spotlight
