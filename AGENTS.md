@@ -227,11 +227,13 @@ Guides and scripts here must not contradict it:
 - **Keep `matrix_rtc.transports[0].livekit_service_url` and do not write `url`.** Synapse
   1.161 deprecates the first, but a client that sees `url` expects lk-jwt-service to be
   registered as an application service, which it is not here.
-- **Embedded TURN needs the `caddy-l4` edge.** `config/livekit.yaml` enables TURN with TLS
-  terminated at an edge that splits `:443` by SNI; port 5349 is never published on the
-  host. A deployment without that edge must set `turn.enabled: false`.
-- **`rtc.ips.excludes` removes the proxy network's subnet**, because a LiveKit container
-  on two networks otherwise advertises a private address as external.
+- **Embedded TURN needs the `caddy-l4` edge.** `config/livekit.yaml` ships with TURN off
+  and an example domain. It is built for TLS terminated at an edge that splits `:443` by
+  SNI; port 5349 is never published on the host. Enable it (`turn.enabled: true`, a real
+  `turn.domain`) only on a deployment with that edge.
+- **`rtc.ips.excludes` must list the proxy network's subnet** on a host where LiveKit sits
+  on two networks, which otherwise makes it advertise a private address as external. The
+  subnet is host-specific, so the shipped file sets none; its comment says how to find it.
 - **The lk-jwt-service healthcheck is disabled in `docker-compose.yml`**; 0.6.0's image
   healthcheck cannot pass with any bind value. Re-enable it only together with an image
   it was verified against.

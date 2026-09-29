@@ -84,6 +84,12 @@ siwx-oidc, and the `/_synapse/admin/*` and `/_synapse/mas/*` paths it must not e
 has a hostname-based Caddy example. For a local, HTTP-only stack with Caddy included, use
 `docker-compose.local.yml` (see its header).
 
+Calls go through LiveKit. Its embedded TURN is **off** in `config/livekit.yaml`, so
+clients behind symmetric NAT or strict firewalls cannot join a call. Enabling it needs an
+edge that splits `:443` by SNI (the `caddy-l4` image), a DNS record for the TURN host,
+3478/udp open, and `turn.enabled: true` with your `turn.domain` in `config/livekit.yaml`;
+the `/siwx-matrix-setup` skill has the steps.
+
 ## Services
 
 | Service | Image (default in `docker-compose.yml`) | Purpose |
@@ -92,7 +98,7 @@ has a hostname-based Caddy example. For a local, HTTP-only stack with Caddy incl
 | `siwx-oidc` | `ghcr.io/inblockio/siwx-oidc` | OIDC provider (passkey, wallet and agent-key sign-in); takes the place of MAS as Synapse's auth service |
 | `redis` | `redis:8.10.2` | Session and token store for siwx-oidc |
 | `element-web` | `ghcr.io/inblockio/siwx-oidc-matrix-server/element-web`, built from source by `dockerfiles/Dockerfile.element` (Element Web + 10 patches) | Web client |
-| `livekit` | `livekit/livekit-server` | MatrixRTC SFU for Element Call, with embedded TURN |
+| `livekit` | `livekit/livekit-server` | MatrixRTC SFU for Element Call; embedded TURN is off by default |
 | `lk-jwt-service` | `ghcr.io/element-hq/lk-jwt-service` | Issues LiveKit access tokens to Matrix users |
 
 The reverse proxy is not a service in `docker-compose.yml`. The maintainers' deployments
@@ -121,7 +127,7 @@ deployment is known to run a different version.
 | Element Web serving base | `nginxinc/nginx-unprivileged:1.31.6-alpine-slim@sha256:c81a27f28bc2…` | `dockerfiles/Dockerfile.element` (runtime `FROM`) | Stock, with our `config/element-nginx.conf` and security headers |
 | siwx-oidc | default `ghcr.io/inblockio/siwx-oidc:sha-40efae9@sha256:54739f4813bf…` (CI build of siwx-oidc main at 40efae9) | `docker-compose.yml` (`SIWX_OIDC_IMAGE_REF`) | First-party, built in [inblockio/siwx-oidc](https://github.com/inblockio/siwx-oidc) |
 | Redis | `8.10.2` (`redis:8.10.2@sha256:d5ac52db24d4…`) | `docker-compose.yml` (`REDIS_IMAGE_REF`) | Stock, run with `--appendonly yes` |
-| LiveKit server | `v1.13.7` (`livekit/livekit-server:v1.13.7@sha256:6fd3b7088874…`) | `docker-compose.yml` (`LIVEKIT_IMAGE_REF`) | Stock, configured by `config/livekit.yaml` (embedded TURN) |
+| LiveKit server | `v1.13.7` (`livekit/livekit-server:v1.13.7@sha256:6fd3b7088874…`) | `docker-compose.yml` (`LIVEKIT_IMAGE_REF`) | Stock, configured by `config/livekit.yaml` (embedded TURN, off by default) |
 | lk-jwt-service | `0.7.0` (`ghcr.io/element-hq/lk-jwt-service:0.7.0@sha256:e0c7cecfa74e…`) | `docker-compose.yml` (`LK_JWT_IMAGE_REF`) | Stock, configured |
 | Caddy | `v2.11.4` (`caddy:2.11.4-builder@sha256:369218c81ca6…`, `caddy:2.11.4@sha256:0c994536bddb…`) | `dockerfiles/Dockerfile.caddy-l4` (builder and final `FROM`) | **Custom build** with xcaddy and the two modules below. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/caddy-l4` |
 | Caddy module `layer4` (mholt/caddy-l4) | `v0.1.2` | `dockerfiles/Dockerfile.caddy-l4` (`xcaddy build`) | Stock module (TURN-TLS SNI split on :443) |

@@ -155,7 +155,8 @@ services:
       # firewall must allow 20100:20200/udp before this is rolled out. The
       # range moved here from 50100-50200, which sat inside the ephemeral range.
       - "20100-20200:20100-20200/udp"
-      # Embedded TURN (the `turn:` block in config/livekit.yaml lists what the
+      # Embedded TURN, used only when `turn.enabled` is true in
+      # config/livekit.yaml (off by default; its `turn:` block lists what the
       # edge needs). UDP leg only: TURN-TLS terminates at the edge
       # (caddy-l4 SNI split on 443 → plaintext TURN to container port 5349
       # over the proxy network), so 5349 must NOT be host-published. ufw must

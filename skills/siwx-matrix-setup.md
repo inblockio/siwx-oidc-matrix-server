@@ -139,7 +139,23 @@ element.example.com {
   make browsers reject the response
 - Matrix API endpoints on `matrix.example.com` need CORS for `element.example.com`
 
-## Step 3: Verify
+## Step 3: Calls (LiveKit and TURN)
+
+Calls work without further setup for clients that can reach UDP 20100-20200 on the
+host: open 7881/tcp and 20100-20200/udp in the host firewall, and add the `/livekit/jwt`
+and `/livekit/sfu` routes from `Caddyfile.local` to the proxy. `config/livekit.yaml` ships
+with LiveKit's embedded TURN **off**, so clients behind symmetric NAT or strict firewalls
+cannot connect. To enable TURN:
+
+1. Run the edge on the `caddy-l4` image built here, with the `layer4` SNI split on `:443`
+   and a certificate site for the TURN host (the `/matrix-rtc-transport-specialist` skill,
+   "Embedded TURN", has the Caddyfile).
+2. Add a DNS record for the TURN host, e.g. `turn.example.com`, pointing at the server.
+3. In `config/livekit.yaml` set `turn.enabled: true` and `turn.domain` to that host.
+4. Allow 3478/udp in the host firewall. Never publish 5349; only the edge reaches it.
+5. `docker compose up -d --force-recreate livekit`.
+
+## Step 4: Verify
 
 ```bash
 # OIDC discovery
@@ -155,7 +171,7 @@ curl -s https://matrix.example.com/_matrix/client/versions | jq .
 curl -sI https://element.example.com/
 ```
 
-## Step 4: First login
+## Step 5: First login
 
 1. Open `https://element.example.com`
 2. Element discovers the OIDC provider and redirects to `siwx-oidc.example.com`
@@ -163,7 +179,7 @@ curl -sI https://element.example.com/
 4. Sign the CAIP-122 challenge
 5. siwx-oidc provisions the user in Synapse and redirects back to Element
 
-## Step 5: Admin promotion (optional)
+## Step 6: Admin promotion (optional)
 
 ```bash
 # After the target user has logged in at least once:
@@ -193,6 +209,8 @@ docker compose pull && docker compose up -d
 - [ ] `.env` generated (check with `ls -la .env`)
 - [ ] Reverse proxy routes configured (especially login/logout/refresh to siwx-oidc, and
       `/_synapse/admin/*` and `/_synapse/mas/*` not exposed)
+- [ ] Calls: firewall open for 7881/tcp and 20100-20200/udp; TURN enabled only with the
+      caddy-l4 edge (3478/udp open)
 - [ ] OIDC discovery returns valid JSON
 - [ ] `.well-known/matrix/client` returns `m.authentication.issuer`
 - [ ] Element loads and redirects to OIDC login
