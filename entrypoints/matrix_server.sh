@@ -89,13 +89,15 @@ fi
 
 # Server notices: the channel the storage controller (scripts/matrix-storage-controller.sh)
 # pushes WARN/CRIT storage alerts through. Synapse force-creates @notices and a
-# "Server Alerts" room and posts via POST /_synapse/admin/v1/send_server_notice
-# (authed by the msc3861 admin_token). Verified to work under MSC3861.
+# "Server Alerts" room and posts via POST /_synapse/admin/v1/send_server_notice,
+# authenticated by a short-TTL admin token the controller mints from siwx-oidc
+# (POST /oauth2/admin_token). The MAS shared secret does not work there on
+# Synapse 1.157+.
 yq -i ".server_notices.system_mxid_localpart = \"notices\"" /data/homeserver.yaml
 yq -i ".server_notices.system_mxid_display_name = \"${MATRIX_HOST} storage alerts\"" /data/homeserver.yaml
 yq -i ".server_notices.room_name = \"Server Alerts\"" /data/homeserver.yaml
 
-echo "First boot: Synapse configured with MSC3861 delegated auth."
+echo "First boot: homeserver.yaml generated; delegated auth is applied below on every boot."
 
 else
   echo "Setup already completed! Skipping Setup"
@@ -129,7 +131,7 @@ fi
 #   matrix_authentication_service:
 #     enabled: true
 #     endpoint: <base URL of the OP>   # AnyHttpUrl
-#     secret:   <shared secret>        # == the old client_secret AND admin_token
+#     secret:   <shared secret>        # == the old msc3861 client_secret
 #
 # `endpoint` is the ONLY location knob. Synapse derives BOTH
 #   {endpoint}/.well-known/openid-configuration  (MasDelegatedAuth._metadata_url)
@@ -155,10 +157,13 @@ fi
 #     metadata (a REQUIRED field of ServerMetadata), which siwx-oidc always emits
 #     as {base_url}/account.
 #
-# The shared secret keeps its double duty: introspection is authenticated with
-# `Authorization: Bearer <secret>` (siwx-oidc's src/introspect.rs already accepts
-# a Bearer shared secret), and is_request_using_the_shared_secret() survives, so
-# siwx-oidc's admin_token calls in synapse_client.rs keep working unchanged.
+# The shared secret has two uses on 1.157+: Synapse sends it as
+# `Authorization: Bearer <secret>` to siwx-oidc's introspection endpoint, and
+# siwx-oidc presents it on Synapse's /_synapse/mas/* routes
+# (is_request_using_the_shared_secret()). It no longer opens /_synapse/admin/*:
+# 1.157 removed the msc3861 `admin_token`, so siwx-oidc mints itself a short-TTL
+# admin-scoped token (POST /oauth2/admin_token) for the admin API. Do not
+# reintroduce an admin_token setting here.
 # -----------------------------------------------------------------------------
 apply_mas_config() {
   # Where Synapse reaches siwx-oidc. Internal docker address when the compose
