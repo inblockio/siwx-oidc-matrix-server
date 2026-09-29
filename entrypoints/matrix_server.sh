@@ -157,12 +157,13 @@ fi
 #     metadata (a REQUIRED field of ServerMetadata), which siwx-oidc always emits
 #     as {base_url}/account.
 #
-# The shared secret has two uses on 1.157+: Synapse sends it as
-# `Authorization: Bearer <secret>` to siwx-oidc's introspection endpoint, and
-# siwx-oidc presents it on Synapse's /_synapse/mas/* routes
+# On 1.157+ Synapse accepts the shared secret in two places only: as the
+# `Authorization: Bearer <secret>` it sends to siwx-oidc's introspection
+# endpoint, and on its own /_synapse/mas/* routes
 # (is_request_using_the_shared_secret()). It no longer opens /_synapse/admin/*:
-# 1.157 removed the msc3861 `admin_token`, so siwx-oidc mints itself a short-TTL
-# admin-scoped token (POST /oauth2/admin_token) for the admin API. Do not
+# 1.157 removed the msc3861 `admin_token`. The admin API takes a short-TTL
+# admin-scoped token that siwx-oidc mints (POST /oauth2/admin_token, itself
+# authenticated with this secret; the storage controller uses it too). Do not
 # reintroduce an admin_token setting here.
 # -----------------------------------------------------------------------------
 apply_mas_config() {
