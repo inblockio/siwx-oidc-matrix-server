@@ -463,9 +463,8 @@ A tag bump must try every patch in this file's order.
   - **What the non-blocking load changes.** `initEventIndex` no longer awaits a
     full read of the persisted index before returning, so opening Element with a
     large index no longer blocks app start — which was the binding constraint
-    recorded in the EventIndex bounded-memory ruling (memory
-    `event-index-bounded-memory-design`: ~0.18 ms/event of startup decryption,
-    not memory, is what hurts). Hydration now runs in the background behind a
+    recorded in the maintainers' EventIndex bounded-memory ruling (not published:
+    ~0.18 ms/event of startup decryption, not memory, is what hurts). Hydration now runs in the background behind a
     `hydrating` flag, surfaced to callers as a new `IIndexStats.loading`;
     `SearchWarning` polls it so the "results may be incomplete" notice appears
     and, unlike the checkpoint signal, **clears itself** when hydration finishes;
