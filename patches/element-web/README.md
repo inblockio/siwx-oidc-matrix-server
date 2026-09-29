@@ -35,6 +35,10 @@ Rules of this registry:
    [element-web#35242](https://github.com/element-hq/element-web/pull/35242) (see the
    policy exception below) and its vendored patch is byte-for-byte the prepared PR diff,
    so the same no-drift discipline applies to it.
+   Pushing to an upstream PR that a registry entry mirrors is not finished until the
+   vendored patch is re-copied (and the entry's provenance updated) in the same change:
+   on 2026-09-29 the SonarCloud follow-up to #35242 (`246724f407`) drifted entry 9 by
+   24 lines because this step was missing.
 4. **Tag-bump procedure** (do this for every `ELEMENT_WEB_TAG` change):
    ```bash
    git clone --depth 1 --branch <newtag> https://github.com/element-hq/element-web.git /tmp/ewcheck
@@ -49,6 +53,27 @@ Rules of this registry:
    For each failing patch, consult its retirement condition **before** forward-porting:
    an upstream-defect patch that no longer applies often means upstream changed that
    code — check whether they fixed it, and if so DROP the patch, don't port it by reflex.
+
+   **4b. Upstream refresh (every tag bump, from the repo root).** First, refresh the
+   upstream status of every upstream link in both registries and update each entry's
+   upstream-status line with what it prints:
+   ```bash
+   grep -ohE 'github\.com/element-hq/[a-z-]+/(pull|issues)/[0-9]+' patches/*/README.md | sort -u \
+     | sed -E 's#github\.com/([^/]+/[^/]+)/(pull|issues)/#\1 #' | while read r n; do
+       gh api "repos/$r/issues/$n" --jq "\"$r#$n \(.state) merged=\(.pull_request.merged_at) last=\(.updated_at[0:10])\""; done
+   ```
+   Second, compare every entry under the no-drift discipline (rule 3) against its PR's
+   current diff. The added/removed lines must be identical (the `index` lines may
+   differ, see entry 9); no output before the echo means no drift:
+   ```bash
+   pm() { grep -E '^[+-]' | grep -vE '^(\+\+\+|---) '; }
+   diff <(gh api repos/element-hq/element-web/pulls/35242 -H 'Accept: application/vnd.github.diff' | pm) \
+        <(pm < patches/element-web/sw-versions-no-cache-on-error.patch) && echo "entry 9: no drift"
+   ```
+   Entry 6 is expected to differ from #34718 by its recorded lead only; check the
+   difference against its named provenance commit instead. Third, evaluate the
+   #34718 gate of the upstream filing policy below (SUCCESS / FAILURE / AMBIGUOUS) and
+   record the outcome and date there, as that policy requires.
 5. **Non-`.patch` deltas count too.** The runtime stage of Dockerfile.element also
    modifies the served app; those deltas are listed at the bottom of this file.
 6. **The repo README mirrors this list.** Its "Upstream deviations (patches)" section
@@ -1108,13 +1133,19 @@ A tag bump must try every patch in this file's order.
   server support`, `retrying without one` (the Dockerfile greps both and fails the build
   if either is missing).
 - **Byte-for-byte the upstream PR diff.** The patch is `git diff upstream/develop` of
-  branch `fix/sw-versions-not-cached-on-error` on inblockio/element-web (three commits:
-  (b), (a), (c); head 4ea5f83813 after the 2026-09-28 header fix), byte-identical apart
+  branch `fix/sw-versions-not-cached-on-error` on inblockio/element-web (four commits:
+  (b), (a), (c), then a SonarCloud follow-up; PR head `246724f407`), byte-identical apart
   from the `index` line of `index.ts`, which carries the v1.12.29 blob ids so that entry
   10's `index` line chains from it. Applied to v1.12.29, the only difference between
   the two trees in this file is the unrelated `ACCESS_TOKEN_IV` -> `ACCESS_TOKEN_NAME`
   rename (#35077), which no hunk touches. Keep them identical: a change here is a change to the PR, and the
   reverse.
+- **Re-vendored 2026-09-29 from PR head `246724f407`** (was `4ea5f83813`). The SonarCloud
+  follow-up throws a `TypeError` for an `ok` response without a `versions` list (a
+  non-`ok` response keeps its own `Error`, both messages end `not caching server
+  support`) and uses `??=` for the shared in-flight check; no behaviour change. The
+  vendored patch again equals the PR diff (0 differing added/removed lines, rule 4b).
+  Dev still runs the `4ea5f83813` copy; the dev verification below is of that copy.
 - **Why:** stock sw.js does `await (await fetch(versions, auth)).json()` with no status
   check and caches `supportsAuthedMedia = versions?.versions?.includes("v1.11")` for 2 h.
   A 401 error body therefore caches `false`, and every media request of that SW instance
@@ -1163,7 +1194,8 @@ A tag bump must try every patch in this file's order.
   2026-09-28). PR:
   [element-web#35242](https://github.com/element-hq/element-web/pull/35242) (opened
   2026-09-28, head inblockio/element-web `fix/sw-versions-not-cached-on-error` at
-  `4ea5f83813`, no force-push from here on). Drafts as filed in
+  `246724f407` since 2026-09-29, was `4ea5f83813`; no force-push from here on). Checked
+  2026-09-29: #35241 and #35242 both open, not merged. Drafts as filed in
   `docs/upstream/2026-09-28-element-sw-versions/`. The open maintainer PR #34955 (hughns)
   adds `serviceworker/index.test.ts` with a fetch mock that lacks `ok`; our tests live in
   `serverSupport.test.ts` to avoid the file conflict, and we rebase onto #34955 (and move
@@ -1223,6 +1255,10 @@ A tag bump must try every patch in this file's order.
   change keeps the 401, discarded body cancelled). Marker in the built `/app/sw.js`:
   `retrying media request with a refreshed access token` (grepped at build time).
 - **Order:** applied after entry 9, whose context it needs.
+- **Header refresh (2026-09-29):** regenerated on top of entry 9 re-vendored from
+  `246724f407`. It still applied (hunks 4 and 5 at offset -4), but its `index` line and
+  those two hunk headers were refreshed so the chain from entry 9 holds. Added/removed
+  lines unchanged (0 differences), no behaviour change.
 - **Why:** with entry 9 alone, the media request issued inside the stale-token window
   (between access-token expiry and the app's 401-triggered refresh) still goes to the
   authenticated endpoint with the expired token and gets a 401; the image stays blank

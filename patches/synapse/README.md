@@ -50,6 +50,9 @@ The rules are the same as `patches/element-web/README.md`, and for the same reas
      tests.rest.client.test_profile tests.handlers.test_profile \
      tests.storage.test_profile tests.config.test_experimental tests.rest.synapse.mas
    ```
+
+   **4b.** Then run step 4b of `patches/element-web/README.md` rule 4 (upstream-status
+   refresh over both registries, no-drift check for every entry that mirrors a PR).
 5. **`patch`, not `git apply`.** `matrixdotorg/synapse:v1.159.0` ships neither
    `git` nor `patch` (verified 2026-09-10), and the installed tree under
    `site-packages/` is not a git repository. The Dockerfile installs `patch` and
