@@ -112,7 +112,8 @@ do:
   base digest fixes, and is purged before its layer ends.
 - **CI**: `.github/workflows/docker.yml` uses actions by major tag
   (`actions/checkout@v4`, `docker/login-action@v3`, `docker/metadata-action@v5`,
-  `docker/build-push-action@v6`) on `ubuntu-latest`.
+  `docker/build-push-action@v6`) on `ubuntu-latest`. `.github/workflows/checks.yml`
+  pins its one action by commit and runs on `ubuntu-24.04`.
 
 Everything else is pinned by name and content: images by version tag plus digest
 (the local and test stacks too: `docker-compose.local.yml`, `docker-compose.e2e.yml`
@@ -134,7 +135,8 @@ carries vendored source patches, applied at image build time so that a patch tha
 stops applying fails the build instead of shipping silently. Every patch has a
 registry entry stating what it changes, why, the evidence, its upstream status and
 its retirement condition. The registries are the source of truth; the lists below
-only mirror them.
+only mirror them, and CI fails a pull request whose patches, registries, Dockerfiles
+and these lists disagree (see the maintainer rule below).
 
 **Synapse: 1 patch.** Registry: [`patches/synapse/README.md`](patches/synapse/README.md).
 Applied by `dockerfiles/Dockerfile` with `patch --fuzz=0`.
@@ -197,13 +199,18 @@ Caddy is not patched, but it is not the stock image either; see the Caddy rows u
 
 Whenever a pin or a patch changes, update this README and the matching registry
 **in the same commit**: the Dependencies table for a version or digest, and the
-lists above for a patch that is added, dropped, renamed or reordered. To check that
-every patch file has a registry entry (prints nothing when complete):
+lists above for a patch that is added, dropped, renamed or reordered.
+
+The patch half of this rule is checked. `scripts/check-patch-registry.sh` requires
+every `patches/*/*.patch` to have a numbered entry in its directory's registry, to be
+applied by the Dockerfile that owns that directory, and to be listed above, with the
+registry and the list in the Dockerfile's apply order. CI runs it together with
+`scripts/check-patch-hunks.py` on every pull request and every push to `main`
+(`.github/workflows/checks.yml`, the repository's first pull-request check). The pin
+half is not checked: a Dependencies row is updated by hand.
 
 ```bash
-for p in patches/*/*.patch; do
-  grep -qF "$(basename "$p")" "$(dirname "$p")/README.md" || echo "MISSING: $p"
-done
+scripts/check-patch-registry.sh    # one OK line per patch directory, or FAIL lines and exit 1
 ```
 
 ## Parameters
