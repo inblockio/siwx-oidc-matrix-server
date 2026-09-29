@@ -123,33 +123,50 @@ sign-in. Profiles with a published proof: 3 (notify-tim + 2 e2e).
 Rollback triggers were: an existing identity on a NEW localpart, failing logins, fleet not reconnected
 within ~15 min, any vhost down. None fired.
 
+Rewritten 2026-09-29 after the housekeeping in section 11. Only the paths below still exist.
+**A key-restoring rollback no longer exists, by design:** every copy of the exposed old signing keys
+(prod `.env.bak-20260927-pre-siwx-17d1461`, the bundle's `env`, dev
+`.env.bak-20260927T205631Z-signingkeyrot-leak`) was shredded, so the old keys cannot and must not come
+back. A rollback keeps the new keys (prod kid `c8551128d18f71ff`, dev kid `4b54128db23d668b`). If a
+new key itself were ever the problem, the answer is another fresh key, not the old one. The
+`portal-caddy-rollback` container was removed too; the edge rolls back by recreating the container
+from the previous image digest.
+
 ```bash
-# [prod] siwx-oidc. Prefer rolling back the IMAGE ONLY and keeping the new key: the old binary
-# runs fine with it (it serves it as kid "key1"). Restoring the .env backup would reinstate the
-# COMPROMISED key; do that only if the new key itself is the problem.
+# [prod] siwx-oidc: IMAGE ONLY, keeps the new key. The old binary (548b543) runs fine with it
+# (it serves it as kid "key1"). The image is present locally on prod.
 cd /home/deploy/matrix/stack
 sed -i 's#^SIWX_OIDC_IMAGE_REF=.*#SIWX_OIDC_IMAGE_REF=ghcr.io/inblockio/siwx-oidc@sha256:458842fae04aa45539bce5040c11017d7c8eb56b13c801a03bbdb442324ee7f1#' .env
 docker compose up -d --no-deps siwx-oidc          # NEVER a bare `up`: it would recreate Synapse
-#   full restore instead: cp -p .env.bak-20260927-pre-siwx-17d1461 .env && docker compose up -d --no-deps siwx-oidc
 
 # [prod] edge. CONFIG FIRST: the old image cannot parse the rate_limit file.
+# Previous image (recorded in section 1 and ROLLBACK_DIGESTS.txt, present locally on prod):
+#   ghcr.io/inblockio/siwx-oidc-matrix-server/caddy-l4@sha256:3976e41110fd3f7c92c6d26c9eed3abd8b7223ec0c3f4ab1e119b67a731d9557
 cd /home/portal/portal
 cat Caddyfile.bak-20260927-pre-ratelimit > Caddyfile   # in place, never mv (inode trap)
 docker exec portal-caddy-1 caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
-docker rm -f portal-caddy-1 && docker rename portal-caddy-rollback portal-caddy-1 && docker start portal-caddy-1
+# Then recreate the hand-run container on the previous image (args as in
+# docs/deployment-recovery-reference.md, "The prod edge"). Outage for all vhosts until it is up.
+docker rm -f portal-caddy-1
+docker run -d --name portal-caddy-1 --restart unless-stopped \
+  --network portal-net -p 80:80 -p 443:443 \
+  -v /home/portal/portal/Caddyfile:/etc/caddy/Caddyfile \
+  -v /home/deploy/caddy/config:/config \
+  -v /home/deploy/caddy/data:/data \
+  --entrypoint "" \
+  ghcr.io/inblockio/siwx-oidc-matrix-server/caddy-l4@sha256:3976e41110fd3f7c92c6d26c9eed3abd8b7223ec0c3f4ab1e119b67a731d9557 \
+  caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
 
-# [dev] edge, same order
+# [dev] edge, same order (previous image: local build caddy-l4:2.11.4-l4v0.1.2, sha256:1ceb2c43...,
+# still present on dev)
 cd ~/caddy-proxy
 cat Caddyfile.dev-aquafire.bak-20260927T210029Z-pre-ratelimit > Caddyfile.dev-aquafire
 docker exec caddy_proxy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
 cp -p docker-compose.caddy-proxy.yml.bak-20260927T210029Z-ratelimit-image docker-compose.caddy-proxy.yml
 docker compose -f docker-compose.caddy-proxy.yml up -d caddy
 
-# [dev] siwx-oidc (reinstates the EXPOSED key; only if the new key is broken)
-cd ~/matrix-staging
-cp -p .env.bak-20260927T205631Z-signingkeyrot-leak .env
-cp -p docker-compose.dev-staging.yml.bak-20260927T205631Z-retiredkeys docker-compose.dev-staging.yml
-docker compose -f docker-compose.dev-staging.yml up -d --no-deps siwx-oidc
+# [dev] siwx-oidc: nothing to roll back. This promotion changed only the dev KEY (the image was
+# already 17d1461), and the old dev key is gone by design (see above).
 ```
 
 Redis was never touched; `redis_data.tar.gz` in the bundle is a belt-and-braces copy only. A rollback
