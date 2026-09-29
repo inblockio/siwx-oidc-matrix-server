@@ -7,7 +7,9 @@ description: Use when setting up, testing, or debugging passkey-first registrati
 
 ## Architecture overview
 
-Element X mobile authenticates via MSC3861 delegated auth. The system browser
+Element X mobile authenticates through the Matrix OAuth 2.0 API (MSC3861), with
+siwx-oidc as the homeserver's auth service. Element X is used unmodified from the app
+stores; nothing in this repository patches it. The system browser
 (not a WebView) opens the siwx-oidc login page, where the user registers or
 signs in with a passkey. No wallet, no seed phrase, no prior account required.
 
@@ -31,7 +33,7 @@ Element X app
 ## Complete registration flow (new user, passkey only)
 
 ```
-Step 1:  User enters "matrix.inblock.io" as homeserver in Element X
+Step 1:  User enters "matrix.example.org" as homeserver in Element X
 Step 2:  Element X fetches /.well-known/matrix/client (finds homeserver URL)
 Step 3:  Element X fetches /_matrix/client/v1/auth_metadata (discovers OIDC issuer)
          (unstable: /_matrix/client/unstable/org.matrix.msc2965/auth_metadata)
@@ -49,8 +51,8 @@ Step 9:  POST /webauthn/register/finish
 Step 10: Auto-authenticate: handlePasskeySignIn() sets session.verified_did
 Step 11: GET /sign_in takes server-verified path (no wallet signature needed)
 Step 12: provision_synapse_device() provisions Matrix user + device
-         Uses client-proposed device_id from scope if present (oidc.rs:1407-1417)
-         Falls back to SIWX_{uuid} only when no device_id is in the scope
+         Uses client-proposed device_id from scope if present
+         Falls back to SIWX_ + 8 hex characters only when no device_id is in the scope
 Step 13: Authorization code issued, browser redirects to Element X
 Step 14: User is logged in, prompted to verify device for E2EE
 ```
@@ -65,7 +67,7 @@ authorization scope. The server does not assign device IDs.
 ```
 Element X generates device_id locally (random, 10+ chars)
   -> Embeds in authorize scope: urn:matrix:org.matrix.msc2967.client:device:<id>
-  -> siwx-oidc extracts device_id from scope (oidc.rs:1407-1411)
+  -> siwx-oidc extracts device_id from scope (extract_device_id_from_scope)
      Parses both stable prefix:   urn:matrix:client:device:
      and unstable MSC2967 prefix: urn:matrix:org.matrix.msc2967.client:device:
   -> provision_synapse_device() uses the client-proposed ID
@@ -75,7 +77,7 @@ Element X generates device_id locally (random, 10+ chars)
 ```
 
 If no device_id is found in the scope (e.g., a non-Matrix OIDC client),
-siwx-oidc falls back to generating `SIWX_{uuid}`.
+siwx-oidc falls back to generating `SIWX_` plus 8 hex characters.
 
 Device_id character constraints (MSC2967): `a-z`, `A-Z`, `0-9`, `-`;
 minimum 10 characters; exactly one device scope per session.
@@ -103,7 +105,7 @@ Step 13: User is logged in with fresh device, E2EE verification prompt
 |----------|-----------------|------------------|
 | Source | Blockchain address | Passkey P-256 public key |
 | Format | `did:pkh:eip155:1:0x...` | `did:key:zDn...` |
-| Matrix localpart | `did-pkh-eip155-1-0x...` | `did-key-zdn...` |
+| Matrix localpart | 16 base36 characters derived from the DID (accounts created before 2026-09 keep a legacy `did-pkh-…` form) | same scheme (legacy form `did-key-…`) |
 | Cross-device sync | Via wallet app | Via OS credential manager |
 | Blockchain association | Direct | None (optional linking later) |
 
@@ -111,19 +113,19 @@ Step 13: User is logged in with fresh device, E2EE verification prompt
 
 | Condition | Status | Detail |
 |-----------|--------|--------|
-| `did:key` in `supported_did_methods` | OK | Default `["pkh", "key"]` at `config.rs:71` |
+| `did:key` in `supported_did_methods` | OK | siwx-oidc's default is `["pkh", "key"]`; `docker-compose.yml` also sets `SIWEOIDC_SUPPORTED_DID_METHODS` to it |
 | System browser (not WebView) | OK | RFC 8252 mandated; both platforms comply |
-| Passkey domain binding | OK | `siwx-oidc.inblock.io` is the RP; system browser opens that domain |
+| Passkey domain binding | OK | the siwx-oidc host (e.g. `siwx-oidc.example.org`) is the RP; system browser opens that domain |
 | Synapse MAS API available | OK | Same provisioning path as wallet logins |
 | CORS irrelevant for mobile | OK | Native HTTP clients do not enforce CORS |
 | Dynamic client registration | OK | `/register` endpoint, no redirect URI scheme restrictions |
 | Public client support | OK | `SIWEOIDC_REQUIRE_SECRET=false` in docker-compose.yml |
-| Stable device scope prefix | OK | `urn:matrix:client:device:*` advertised in discovery (`oidc.rs:60`) |
-| Unstable MSC2967 device scope | OK | `urn:matrix:org.matrix.msc2967.client:device:*` also advertised (`oidc.rs:63`) |
-| Device_id extraction from scope | OK | Both prefixes parsed at `oidc.rs:1167-1178` |
-| Introspection includes device_id | OK | Explicit field in response (`introspect.rs:109`) + scope string |
-| Auth metadata endpoint (MSC2965) | OK | Served by Synapse under MSC3861 delegated auth |
-| QR code login (device_code, MSC4108) | OK | `msc4108_enabled = true` in entrypoint; `provision_synapse_device_additive()` handles it |
+| Stable device scope prefix | OK | `urn:matrix:client:device:*` advertised in discovery |
+| Unstable MSC2967 device scope | OK | `urn:matrix:org.matrix.msc2967.client:device:*` also advertised |
+| Device_id extraction from scope | OK | Both prefixes parsed by `extract_device_id_from_scope` |
+| Introspection includes device_id | OK | Explicit field in the introspection response + scope string |
+| Auth metadata endpoint (MSC2965) | OK | Served by Synapse under delegated auth (forwards siwx-oidc's metadata) |
+| QR code login (device_code, MSC4108) | OK | `msc4108_enabled = true` written by the entrypoint on every boot; the device-code grant calls the same `provision_synapse_device` |
 
 ## Debugging: quick diagnosis
 
@@ -185,16 +187,13 @@ docker compose logs siwx-oidc --tail=100 2>&1 | grep -iE "webauthn|passkey|regis
 docker compose logs matrix_synapse --tail=100 2>&1 | grep -iE "provision|introspect|device|error|401"
 
 # Redis state: check session exists
-docker compose exec redis redis-cli KEYS 'sessions/*'
+docker compose exec redis redis-cli --scan --pattern 'sessions/*'
 
 # Redis state: check WebAuthn credentials stored
-docker compose exec redis redis-cli KEYS 'webauthn:credential/*'
+docker compose exec redis redis-cli --scan --pattern 'webauthn:credential/*'
 
-# Redis state: check device mapping
-docker compose exec redis redis-cli KEYS 'device_ids/*'
-
-# Inspect a specific session
-docker compose exec redis redis-cli HGETALL 'sessions/{session_id}'
+# Inspect a specific session (a JSON string)
+docker compose exec redis redis-cli GET 'sessions/{session_id}'
 ```
 
 ## Debugging: common problems
@@ -220,8 +219,8 @@ Matrix host). The session cookie is set for the siwx-oidc domain specifically.
 
 **Diagnose**:
 ```bash
-docker compose exec siwx-oidc printenv SIWEOIDC_ALLOWED_DID_METHODS
-# Should be unset (defaults to ["pkh", "key"]) or explicitly include "key"
+docker compose exec siwx-oidc printenv SIWEOIDC_SUPPORTED_DID_METHODS SIWXOIDC_SUPPORTED_DID_METHODS
+# Unset means the default ["pkh", "key"]; if set, it must include "key"
 ```
 
 **Fix**: If overridden in .env or docker-compose.yml, ensure `"key"` is included.
@@ -232,8 +231,9 @@ docker compose exec siwx-oidc printenv SIWEOIDC_ALLOWED_DID_METHODS
 
 **Cause**: The WebAuthn RP ID doesn't match the domain the browser opened.
 
-**Diagnose**: Check the `rp_id` in siwx-oidc WebAuthn config. It must match
-`SIWEOIDC_HOST` exactly (minus protocol and port).
+**Diagnose**: The WebAuthn RP ID defaults to the host name of siwx-oidc's base URL
+(`SIWEOIDC_BASE_URL`); `…_RP_ID` and `…_RP_ORIGIN` override it behind a proxy. It must
+equal the host name the browser opened.
 
 ### 4. Token exchange fails (public client rejected)
 
@@ -271,9 +271,9 @@ the OS can handle.
 **Diagnose**:
 ```bash
 # Check registered clients in Redis
-docker compose exec redis redis-cli KEYS 'client:*'
+docker compose exec redis redis-cli --scan --pattern 'clients/*'
 # Inspect a specific client registration
-docker compose exec redis redis-cli GET 'client:{client_id}'
+docker compose exec redis redis-cli GET 'clients/{client_id}'
 ```
 
 **Verify**: The `redirect_uris` should include the Element X URI scheme for the
@@ -281,34 +281,29 @@ platform.
 
 ## Code references (siwx-oidc repo)
 
-| Component | File | Lines |
-|-----------|------|-------|
-| "Create one" UI | `js/ui/src/App.svelte` | 420-428 |
-| Registration handler (frontend) | `js/ui/src/App.svelte` | 268-329 |
-| Auto sign-in after register | `js/ui/src/App.svelte` | 315-318 |
-| register_start (backend) | `src/webauthn.rs` | 111-137 |
-| register_finish + DID derivation | `src/webauthn.rs` | 139-181 |
-| did_from_passkey | `src/webauthn.rs` | 35-66 |
-| authenticate_finish (sets verified_did) | `src/webauthn.rs` | 332-360 |
-| extract_device_id_from_scope | `src/oidc.rs` | 1166-1178 |
-| Device_id extraction (auth_code flow) | `src/oidc.rs` | 1407-1417 |
-| Server-verified sign_in path | `src/oidc.rs` | 1309-1334 |
-| allowed_did_methods default | `src/config.rs` | 71 |
-| Synapse user provisioning | `src/oidc.rs` | 1186-1234 |
-| Additive provisioning (QR/device_code) | `src/oidc.rs` | 1239-1270 |
-| Introspection response (device_id field) | `src/introspect.rs` | 106-118 |
-| Session creation (no preconditions) | `src/oidc.rs` | 990-1001 |
-| Supported scopes (stable + unstable) | `src/oidc.rs` | 55-63 |
+| Component | File | Symbol |
+|-----------|------|--------|
+| "Create one" UI, registration handler, auto sign-in after register | `js/ui/src/App.svelte` | `handlePasskeySignIn` and the registration handler |
+| Passkey registration (backend) | `src/webauthn.rs` | `register_start`, `register_finish` |
+| DID derivation from the passkey | `src/webauthn.rs` | `did_from_passkey` |
+| Authentication (sets `verified_did`) | `src/webauthn.rs` | `authenticate_finish` |
+| Device ID from the scope | `src/oidc.rs` | `extract_device_id_from_scope` |
+| Server-verified sign-in path | `src/oidc.rs` | `sign_in` |
+| Synapse user and device provisioning (all flows) | `src/oidc.rs` | `provision_synapse_device` |
+| Introspection response (`device_id` field) | `src/introspect.rs` | `introspect` |
+| Default DID methods | `src/config.rs` | `supported_did_methods` default |
 
 ## QR code login (device_code grant)
 
 Element X also supports QR code login via RFC 8628 device_code grant (MSC4108).
-This uses `provision_synapse_device_additive()` which adds a second device without
-deleting the existing one. The scope-based device_id extraction works the same way.
+It uses the same `provision_synapse_device` as the browser flow, which adds the new
+device without deleting existing ones. The scope-based device_id extraction works the
+same way.
 
-MSC4108 is enabled in `entrypoints/matrix_server.sh:29`. The device_code flow is
-handled at `oidc.rs:566-669`. For QR login issues, check the `device_code` paths
-in siwx-oidc logs.
+MSC4108 is enabled by `apply_matrixrtc_config()` in `entrypoints/matrix_server.sh`. The
+device_code grant is handled in siwx-oidc's `src/oidc.rs` (token endpoint) and
+`src/device_auth.rs`. For QR login issues, check the `device_code` paths in siwx-oidc
+logs.
 
 ## Spec references
 
@@ -318,7 +313,7 @@ in siwx-oidc logs.
 | MSC2965 | Auth metadata discovery | `/_matrix/client/v1/auth_metadata` endpoint |
 | MSC2966 | Dynamic client registration | RFC 7591, `token_endpoint_auth_method: "none"` for public clients |
 | MSC2967 | API scopes | `urn:matrix:client:device:<id>` format, client generates device_id |
-| MSC3861 | Delegated auth (MAS) | Token introspection, `mat_`/`mcr_` tokens, device provisioning |
+| MSC3861 | Matrix OAuth 2.0 API (umbrella; spec v1.15) | Token introspection, `mat_`/`mcr_` tokens, device provisioning |
 | MSC4108 | QR code login | Device_code grant for cross-device login |
 | RFC 8252 | OAuth for native apps | System browser required (no WebView) |
 
