@@ -238,6 +238,12 @@ COPY config/favicon-512.png /app/favicon-512.png
 COPY config/favicon-1024.png /app/favicon-1024.png
 COPY entrypoints/element_entrypoint.sh /docker-entrypoint.sh
 
+# LICENSE and NOTICE travel with the image. It redistributes this repository's
+# files (Apache-2.0 §4(a) and (d)); NOTICE states the license of the patches
+# built into the bundle, and it carries the BSD notice that the nginx skeleton
+# in config/element-nginx.conf requires in a binary distribution.
+COPY LICENSE NOTICE /usr/share/licenses/siwx-oidc-matrix-server/
+
 # Service-worker media-auth boot shim (2026-07-31 download RCA). Must be a
 # separate same-origin file: index.html ships a CSP with script-src 'self' and
 # no 'unsafe-inline', so an inline script would be blocked. Injected into
