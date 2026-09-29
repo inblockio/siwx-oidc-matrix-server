@@ -361,6 +361,18 @@ Rollback: the previous container is kept, stopped, as `portal-caddy-rollback`
 && docker rename portal-caddy-rollback portal-caddy-1 && docker start
 portal-caddy-1`. Remove it once the new edge has soaked.
 
+**2026-09-27: swapped to the rate-limit-capable build.** It now runs
+`caddy-l4@sha256:1c9825f346b1d45a001c9a7a8d7cf082403da8a0875a3a33064f0372203fabae`
+(main `0a58e7e`: Caddy v2.11.4 + caddy-l4 v0.1.2 + caddy-ratelimit `5625512`), recreated
+with the exact `docker run` above. Module diff against the old image: `+http.handlers.rate_limit`
+only. After the swap the live Caddyfile gained the `/resolve` `rate_limit` zones, so the OLD image
+can no longer parse it. The previous container is kept stopped as `portal-caddy-rollback`
+(image `caddy-l4@sha256:3976e411...`). Rollback order is CONFIG FIRST: write
+`/home/portal/portal/Caddyfile.bak-20260927-pre-ratelimit` over the live file IN PLACE
+(`cat bak > Caddyfile`), `docker exec portal-caddy-1 caddy reload --config /etc/caddy/Caddyfile
+--adapter caddyfile`, and only then swap the containers as described above. Note that
+`docker stop -t 10` ran into the timeout (exit 137); the swap gap was about 15 s.
+
 Still open: converting this to a small compose file so the edge stops being an
 undeclared container. Deliberately not done during the 2026-09-01 window, to
 keep that change to a single variable.

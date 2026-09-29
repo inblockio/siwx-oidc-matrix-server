@@ -31,6 +31,10 @@ Rules of this registry:
      residents.
    Today exactly one entry is UPSTREAM-TRACKED: #6 `browser-eventindex`
    ([element-web#34718](https://github.com/element-hq/element-web/pull/34718)).
+   Entry 9 stays an UPSTREAM DEFECT, but its fix is filed as
+   [element-web#35242](https://github.com/element-hq/element-web/pull/35242) (see the
+   policy exception below) and its vendored patch is byte-for-byte the prepared PR diff,
+   so the same no-drift discipline applies to it.
 4. **Tag-bump procedure** (do this for every `ELEMENT_WEB_TAG` change):
    ```bash
    git clone --depth 1 --branch <newtag> https://github.com/element-hq/element-web.git /tmp/ewcheck
@@ -70,6 +74,11 @@ filing is worth repeating.
 | FAILURE | Closed unmerged, explicitly rejected, **or** no maintainer engagement for 3 months. |
 | AMBIGUOUS | Maintainers want a substantially different implementation. Engagement works but costs more than one PR's worth; re-decide, do not auto-file. |
 
+**Exception (Tim, 2026-09-28): entry 9 is filed now** (issue #35241, PR #35242). This policy gates only entries
+2, 3 and 4 on #34718; entry 9 (`sw-versions-no-cache-on-error`) is a defect that breaks
+all media for users on servers that enforce authenticated media, and filing it was
+ordered explicitly. Entry 10 is not covered by this exception (see its entry).
+
 **Evaluate at the next Element tag bump, or 2026-12-01, whichever comes first.**
 Without a date this becomes an indefinite wait and the three patches stay in
 limbo by default.
@@ -99,16 +108,22 @@ re-litigated each time someone audits the registry.
 
 ## What runs on prod today
 
-**Updated 2026-09-13: all EIGHT patches are now live on `element.inblock.io`.**
-Entries 7 and 8 (added 2026-09-11) reached prod with this promotion, and entry 6
-is there in its **non-blocking labs-flag form**. Verified against the deployed
-artifact `element-web@sha256:785ab46c…`, label
-`org.opencontainers.image.revision=f933e7b`, and against the config prod
-actually serves (`https://element.inblock.io/config.json` →
-`features.feature_web_event_index: true`). Previous prod artifact, and the
-rollback target for this promotion: `element-web@sha256:d7ba8b7b…`, `rev=60b037b`.
-Synapse was deliberately **not** restarted (`up -d --no-deps element-web`); its
-container has been up since 2026-08-31.
+**Updated 2026-09-28: entries 1-8 are live on `element.inblock.io`; entries 9 and 10
+are NOT.** Prod was re-promoted on 2026-09-25 (the Matrix stack promotion: Element Web
+1.12.29, `element-web@sha256:8cea1873…`, the `:main` digest). Checked read-only on
+2026-09-28: `https://element.inblock.io/version` = `1.12.29`; the served `sw.js` ends in
+the build stamp `// build: 4c2ef16084332bf0ad41 2026-09-25T11:40:49Z` and contains
+none of the entry 9/10 markers (`not caching server support`, `retrying without one`,
+`retrying media request with a refreshed access token`: 0 each), i.e. prod runs the
+stock service worker and is exposed to the entry 9 defect; the served `sw-boot.js`
+carries the canary (`swprobe`) but not the `SYNCING` gate; the served English i18n
+carries entry 7's `did_label_unsigned`. Entry 8 has no string marker that survives
+minification; it is in the build by provenance (same Dockerfile, fail-loud apply).
+
+The 2026-09-13 note that used to head this section ("all EIGHT patches are now live")
+listed only rows 1-6 below and named an artifact (`element-web@sha256:785ab46c…`,
+`rev=f933e7b`) that the 2026-09-25 promotion replaced. f933e7b did carry all eight
+patches; the table now lists every entry.
 
 | # | Patch | Purpose | Active on prod |
 |---|---|---|---|
@@ -118,6 +133,10 @@ container has been up since 2026-08-31.
 | 4 | `offer-verify-current-session` | `DeviceVerificationStatusCard` gave an unverified **current** session a card with no action and no reason, leaving the destructive identity reset as the only visible exit. | yes, ungated |
 | 5 | `auto-approve-check-code` | MSC4108 QR device-link check-code auto-approves once both digits are typed. The deliberate read-and-type is the security property; the extra confirm click is not. | yes, ungated |
 | 6 | `browser-eventindex` | A `BrowserEventIndexManager` implementing `BaseEventIndexManager` so E2EE room search works in hosted Element Web, with a **non-blocking** load so a large index cannot delay app start, bounded crawl/memory/disk budgets, a chunked encrypted store, and a streamed cold scan for what is on disk outside the resident window. Upstream PR #34718 plus increments A, B, C, D-core and E, which lead it. | **yes, via `features.feature_web_event_index: true`** (renamed on prod 2026-09-13) |
+| 7 | `show-attested-did` | Shows the provider-attested DID (`io.inblock.did`) under the MXID in the member panel and in All settings -> Account. | yes, ungated (i18n key `did_label_unsigned` served) |
+| 8 | `resolve-did-search` | A DID typed into Spotlight or the invite/DM dialog resolves to the user's MXID. Depends on 7. | yes, ungated (by build provenance; no surviving string marker) |
+| 9 | `sw-versions-no-cache-on-error` | The service worker never caches a failed `/versions` check, retries it anonymously, and shares one check per server. | **no**: dev only (main 2e9eb93, pinned on dev 2026-09-28). Release notes and procedure: `docs/2026-09-28-PENDING-PROMOTION-element-sw-media-auth.md` |
+| 10 | `sw-media-401-token-retry` | A media request that 401s with the stored token waits (5 s bound) for the app's refresh and retries once. | **no**: dev only, ships together with 9 (same doc) |
 
 Entry 6 is the only gated one. **Its gate is now the same everywhere**, which it
 was not before 2026-09-13:
@@ -144,8 +163,11 @@ configured.
 
 ## Which Dockerfile applies what
 
-**One Dockerfile, all eight patches.** `dockerfiles/Dockerfile.element` on `main`
-applies every numbered patch below, in this file's order. Entries 7
+**One Dockerfile, all ten patches.** `dockerfiles/Dockerfile.element` applies every
+numbered patch below, in this file's order. Entries 9 (`sw-versions-no-cache-on-error`)
+and 10 (`sw-media-401-token-retry`), both 2026-09-28, touch only the service worker, live
+on branch `fix/ew-sw-versions-401-poison` until merged, and are not on prod; **10 depends
+on 9** and must stay after it. Entries 7
 (`show-attested-did`) and 8 (`resolve-did-search`) were added 2026-09-11 and are
 the newest; entries 1-6 are the set the paragraphs below describe. **8 depends on
 7** and must stay after it — see its Order note.
@@ -1060,13 +1082,170 @@ A tag bump must try every patch in this file's order.
   from `transformIgnorePatterns`); run it with a local config that adds `content-type`
   to that allowlist: 37/37 with the fix, 4 of the new cases fail without it.
 
+### 9. `sw-versions-no-cache-on-error.patch` — UPSTREAM DEFECT (carry until fixed)
+
+- **What:** in `apps/web/src/serviceworker/index.ts`, the check behind
+  `tryUpdateServerSupportMap` now (a) retries `GET /_matrix/client/versions` **without**
+  the `Authorization` header when the authenticated call is not `ok`, (b) never caches a
+  non-`ok` or malformed answer (no `versions` array): it throws, the caller's existing
+  catch serves that one request as before, and the next media request checks again,
+  and (c) shares one in-flight check per server between concurrent media requests. The
+  bodies of discarded error responses are cancelled. Ships the co-located vitest file
+  `serverSupport.test.ts` (7 tests). Markers in the built `/app/sw.js`: `not caching
+  server support`, `retrying without one` (the Dockerfile greps both and fails the build
+  if either is missing).
+- **Byte-for-byte the upstream PR diff.** The patch is `git diff upstream/develop` of
+  branch `fix/sw-versions-not-cached-on-error` on inblockio/element-web (three commits:
+  (b), (a), (c); head 4ea5f83813 after the 2026-09-28 header fix), byte-identical apart
+  from the `index` line of `index.ts`, which carries the v1.12.29 blob ids so that entry
+  10's `index` line chains from it. Applied to v1.12.29, the only difference between
+  the two trees in this file is the unrelated `ACCESS_TOKEN_IV` -> `ACCESS_TOKEN_NAME`
+  rename (#35077), which no hunk touches. Keep them identical: a change here is a change to the PR, and the
+  reverse.
+- **Why:** stock sw.js does `await (await fetch(versions, auth)).json()` with no status
+  check and caches `supportsAuthedMedia = versions?.versions?.includes("v1.11")` for 2 h.
+  A 401 error body therefore caches `false`, and every media request of that SW instance
+  goes to the legacy `/_matrix/media/v3/*` endpoints, which our Synapse (authenticated
+  media enforced) answers 404: all thumbnails, avatars and downloads break until the
+  browser terminates the SW. The SW reads the access token from IndexedDB, and siwx-oidc
+  access tokens live 300 s (same default as MAS), so an expired stored token is routine:
+  any SW-intercepted media fetch between token expiry and the app's first 401-triggered
+  refresh poisons the map. A 5xx (a Synapse restart, a proxy hiccup) poisons it the same
+  way. `/versions` does not require auth, and media support is a server property, so the
+  anonymous retry is exact.
+- **Evidence (2026-09-28, dev, headless Chromium, harness
+  `scripts/element-sw-media-repro.mjs`, pre-fix builds):** SW console
+  `/versions response ...: {"errcode":"M_UNKNOWN_TOKEN","error":"Token is not active"}`
+  then `serverSupportMap update ...: {"supportsAuthedMedia":false,...}` then
+  `media/v3/download ... 404`, image still broken after a room re-open and a normal
+  reload. Which leg each result tests:
+  - **Live stale-token window, SW idle-terminated** (`live`, `LIVE_STOP_SW=1`): poisoned
+    in **1/1 run per arm, 2 runs total** (shim and noshim, i.e. also stock Element). This
+    is the leg entry 9 fixes.
+  - **Delayed-refresh reopen** (`reopen`, `TOKEN_DELAY_MS=4000`: the refresh lands after
+    load+3 s, the prod ordering): poisoned 2/2 with the shim, 0/2 with only guard (E)
+    disabled, 0/2 with the shim blocked. These runs exercised the **guard (E) gate**
+    (runtime delta `sw-boot.js`), not the SW patch: the trigger was our own canary.
+    Prod log forensics: all three observed bursts started with the canary's `/versions`
+    401.
+  - **Fast reopen** (refresh ~1.5 s, beats every SW fetch): 8 runs, all clean, but
+    those logs (`ff-*`) were taken on the 740f227 build, i.e. after the fix. No pre-fix
+    fast-reopen log survives, so the earlier "not reproduced, 0/10" claim is withdrawn
+    as unsupported; the ordering argument (the refresh lands before any SW fetch) is
+    the reason to expect no poisoning there.
+  - With (a)-(c) alone, the one media request issued inside the stale-token window still
+    got a 401 on the authenticated endpoint and that image stayed blank until
+    re-rendered (4/4 live runs, also stock behaviour): that is entry 10.
+- **Possibly related upstream reports:**
+  [element-web#34842](https://github.com/element-hq/element-web/issues/34842) (open, "All
+  media 404 in Firefox") and
+  [element-web#34897](https://github.com/element-hq/element-web/issues/34897) (closed,
+  "After upgrade to 1.12.27, media not loading"). Neither names this mechanism. The
+  missing `response.ok` check was already on our own list on 2026-07-31
+  (`docs/superpowers/plans/2026-07-31-sw-hardening-handover.md`, "File upstream (a)")
+  and was not acted on then.
+- **Upstream status:** Filing ordered by Tim 2026-09-28, explicit exception: the
+  2026-09-01 filing policy gates only entries 2/3/4 on #34718. Issue:
+  [element-web#35241](https://github.com/element-hq/element-web/issues/35241) (filed
+  2026-09-28). PR:
+  [element-web#35242](https://github.com/element-hq/element-web/pull/35242) (opened
+  2026-09-28, head inblockio/element-web `fix/sw-versions-not-cached-on-error` at
+  `4ea5f83813`, no force-push from here on). Drafts as filed in
+  `docs/upstream/2026-09-28-element-sw-versions/`. The open maintainer PR #34955 (hughns)
+  adds `serviceworker/index.test.ts` with a fetch mock that lacks `ok`; our tests live in
+  `serverSupport.test.ts` to avoid the file conflict, and we rebase onto #34955 (and move
+  its mock to `new Response(...)`) when it lands.
+- **Retirement:** a tag bump where upstream checks `response.ok` (or otherwise stops
+  caching a failed `/versions`), i.e. our PR or an equivalent merged. The patch then
+  fails to apply: check, and drop it (and rebase entry 10 onto the upstream code).
+- **Coverage (rule 2):** Playwright leg `e2e/element/ew-sw-media-auth.spec.mjs` in the
+  siwx-oidc repo, branch `test/ew-sw-media-auth` (commit 207f4b8), legs SW-1 (authed
+  `/versions` 401, anonymous retry, image renders, zero legacy requests, SW logs the
+  retry marker) and SW-2 (one `/versions` check 503s; a room opened afterwards and the
+  room opened during the outage both render). Plus the vitest file in the patch, and the
+  harness below.
+- **Verified on dev (rev 3a3dae8, `element-web@sha256:9db9df51…`, 2026-09-28):** served
+  `sw.js` carries all three entry 9/10 markers. Playwright leg (siwx-oidc 207f4b8,
+  re-run 2026-09-28 evening) **3/3 runs green** (SW-1, SW-2, SW-3 each pass in every
+  run; `~/.cache/ew-sw-pw-final/run{1,2,3}-patched.log`). The same leg against the
+  **stock v1.12.29 sw.js** (from `docker.io/vectorim/element-web:v1.12.29`, served
+  through the spec's pass-through proxy via `EW_SW_OVERRIDE`) **fails every leg (1 stock
+  run per leg)**: SW-1 in a full run (serial mode then skips SW-2/SW-3;
+  `run2-stock.log`), SW-2 and SW-3 each alone with `-g` (`run-stock-SW-2.log`,
+  `run-stock-SW-3.log`). SW-1 and SW-2 fail with the exact poisoning
+  (`serverSupportMap update ...: {"supportsAuthedMedia":false}`), SW-3 with a blank
+  image. Override verified in each stock run: the stock file carries none of the three
+  markers, the proxy served it 4x, and the SW console lacks `not caching server support`.
+  The 6 accounts these runs created and the 8 from earlier runs (14 in total, each
+  verified as the creator of its own `sw-media-auth text` room) were deactivated with
+  `erase: false` (`~/.cache/ew-sw-pw-final/deactivate.log`, `check-after.log`).
+  Harness: live window (`live`, `LIVE_STOP_SW=1 LIVE_TRIGGER_S=300.8`) **3/3 shim
+  and 3/3 noshim** clean, every one logging `retrying without one` and `retrying media
+  request with a refreshed access token`, image rendered first time; fast reopen **3/3**
+  clean. `element-deploy-audit.sh`: 21 PASS, 1 WARN, 0 FAIL. The harness's network
+  counters recorded `swVersions401 = 0` in all six live runs although the SW console
+  shows the 401 and the retry: that is the cold-SW blind spot documented in the harness
+  header, and why its pass criteria are the SW console plus render state.
+- **Earlier verification** (rev 740f227, `element-web@sha256:17b878c1…`, the unsplit
+  patch; counts re-derived from the surviving logs): live window with the SW stopped
+  6/6 clean, 3 per arm (4 plain, 2 with the `/token` response delayed 4 s), each logging
+  both retry markers; delayed-refresh reopen 6/6 clean, which tests the guard (E) gate,
+  not the SW patch; fast reopen 8/8 clean (the registry said 10/10). Not exercised in either round: the logged-out page under the new gate (the
+  canary returns before probing without `mx_hs_url`/`mx_user_id`, by code reading only).
+
+### 10. `sw-media-401-token-retry.patch` — UPSTREAM DEFECT (not filed; carry until fixed)
+
+- **What:** in the same file, a media request sent with the stored access token that
+  comes back **401** waits for the app to store a refreshed token and retries once. The
+  wait has a **wall-clock deadline of 5000 ms**; every read of the stored credentials
+  (`getAuthData`, which includes a postMessage round trip to the tab) is capped by the
+  time left, so a tab that stops answering cannot stretch it. **One shared waiter per
+  rejected token** (the same pattern as entry 9's shared check), so a room of thumbnails
+  that all 401 polls once, not once per image. Before retrying it re-checks that the
+  refreshed credentials still point at the request's homeserver, and it cancels the body
+  of the 401 it discards. It also fixes an upstream leak it would otherwise multiply:
+  `askClientForUserIdParams` never removed its `message` listener on timeout. Ships
+  `mediaTokenRetry.test.ts` (6 vitest tests: retry, 5 s bound with no refresh, silent-tab
+  bound with zero leaked listeners, 20 concurrent requests share one wait, homeserver
+  change keeps the 401, discarded body cancelled). Marker in the built `/app/sw.js`:
+  `retrying media request with a refreshed access token` (grepped at build time).
+- **Order:** applied after entry 9, whose context it needs.
+- **Why:** with entry 9 alone, the media request issued inside the stale-token window
+  (between access-token expiry and the app's 401-triggered refresh) still goes to the
+  authenticated endpoint with the expired token and gets a 401; the image stays blank
+  until it is rendered again (4/4 live runs on dev, stock behaviour too). The SW has no
+  way to refresh a token itself, so it can only wait for the app.
+- **Coupling (F3):** guard (E)'s canary in `config/element-sw-boot.js` calls the SW
+  wedged when its probe does not settle within **8000 ms**. A probe sent with a rejected
+  token settles only after this patch's wait, so the 5000 ms bound must stay well under
+  the 8000 ms timer. Change them together; both files say so.
+- **Evidence:** the 4/4 live runs above; after the patch, all six live runs of
+  2026-09-28 logged the retry and rendered the image first time; Playwright leg SW-3
+  (the image's own media request is answered 401 while one page `whoami` 401 makes the
+  app refresh) passes on the patched build and fails on stock sw.js. The auditor's
+  scratch suite (`~/.cache/ew-audit-applycheck/audit.test.ts`) against this revision:
+  8/8, revoked token returns the 401 after about 5.0 s, silent tab after about 4.7 s with
+  0 leaked listeners, 20 concurrent 401s cost 30 postMessages in total (was one poll loop
+  per request).
+- **Upstream status:** UPSTREAM DEFECT, **not filed**, and not covered by the 2026-09-28
+  filing exception. Recommended as a separate issue later. Polling from the SW is our
+  interim carrier; the better upstream design is the SW asking the controlling tab to
+  refresh (a `postMessage` the app answers with a fresh token, or with "gone"), which
+  removes the polling and the fixed bound.
+- **Retirement:** upstream fixes the service worker's stale-token handling (any form:
+  the tab-refresh message above, or the SW retrying a 401 itself). The patch then fails
+  to apply or becomes redundant: check, and drop it.
+- **Coverage (rule 2):** Playwright leg SW-3 in `e2e/element/ew-sw-media-auth.spec.mjs`
+  (siwx-oidc branch `test/ew-sw-media-auth`), plus the vitest file in the patch and the
+  harness `live` mode.
+
 ## Runtime-stage deltas (not `.patch` files, still upstream deviations)
 
 | Delta | Where | Why |
 |---|---|---|
 | `index.html` served no-cache | `config/element-nginx.conf` | stale-bundle TDZ crash prevention ("Your Element is misconfigured") |
 | Security headers include | `config/element-nginx-security-headers.inc` | S1 hardening checklist |
-| `sw-boot.js` head shim | `config/element-sw-boot.js` + build-time `sed` (fail-loud grep) | service-worker media-auth boot ordering (2026-07-31 download RCA) |
+| `sw-boot.js` head shim | `config/element-sw-boot.js` + build-time `sed` (fail-loud grep) | service-worker media-auth boot ordering (2026-07-31 download RCA); guard (E)'s canary waits for the app to be `SYNCING` since 2026-09-28, because its probe hit the SW with an expired stored token and triggered the entry-9 poisoning; after 120 s without `SYNCING` it warns and runs anyway (safe with entries 9 and 10). The gate needs `window.mxMatrixClientPeg` in the bundle, which the Dockerfile greps for. Its 8 s timer is coupled to entry 10's 5 s wait |
 | Per-build `sw.js` stamp | Dockerfile `RUN` (bundle hash + build UTC) | byte-identical sw.js across deploys let a wedged SW survive every deploy (2026-07-31 incident); stamp forces eviction |
 | inblock.io overlay | `config/element-config.json`, theme CSS, logos/favicons, welcome background | branding + deployment config (`force_verification`, `sso_redirect_options.immediate`) |
 | Entrypoint templating | `entrypoints/element_entrypoint.sh` | `%%MATRIX_BASE_URL%%`/`%%MATRIX_HOST%%`/`%%CLIENT_HOST%%` substitution at container start |

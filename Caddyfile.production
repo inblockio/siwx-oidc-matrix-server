@@ -1,19 +1,19 @@
 # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-# DO NOT APPLY THIS FILE TO A BOX YET (recorded 2026-09-25).
+# NEEDS THE caddy-ratelimit MODULE (applied 2026-09-27).
 #
 # Since 42dac7b this file carries `rate_limit` blocks (the edge limiter for the
 # public GET /resolve on the siwx vhost). `rate_limit` is NOT stock Caddy: it
 # needs the caddy-ratelimit module, which only the CI-built caddy-l4 image
 # from 42dac7b onward contains (ghcr.io/inblockio/siwx-oidc-matrix-server/
-# caddy-l4, dockerfiles/Dockerfile.caddy-l4). NEITHER running Caddy has it:
-# dev-aquafire runs `caddy-l4:2.11.4-l4v0.1.2` built on the box, prod runs
-# portal-caddy-1. A Caddy without the module REFUSES TO PARSE the file, so a
-# reload fails (at best) or a restart takes every vhost on the box down.
+# caddy-l4, dockerfiles/Dockerfile.caddy-l4). A Caddy without the module
+# REFUSES TO PARSE this file, so a reload fails (at best) or a restart takes
+# every vhost on the box down.
 #
-# Order of operations: first ship and run a Caddy image that has the module,
-# verify `caddy list-modules | grep rate_limit` inside the running container,
-# THEN reload with this file. Until then the live file on each box stays the
-# version without the limiter (dev: ~/caddy-proxy/Caddyfile.dev-aquafire).
+# 2026-09-27: prod (portal-caddy-1, /home/portal/portal/Caddyfile) now runs
+# caddy-l4@sha256:1c9825f346b1d45a001c9a7a8d7cf082403da8a0875a3a33064f0372203fabae
+# (main 0a58e7e: Caddy v2.11.4 + caddy-l4 v0.1.2 + caddy-ratelimit 5625512),
+# and this file is live there. Any future edge image swap must keep the module:
+# check `caddy list-modules | grep rate_limit` in the NEW image BEFORE the swap.
 # Reload in place, never `mv` over the bind-mounted file (inode trap).
 # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
@@ -219,6 +219,15 @@ siwx-oidc.inblock.io {
     @options method OPTIONS
     handle @options {
         respond 204
+    }
+
+    # Upgrade to siwx-oidc 548b543 adds POST /oauth2/admin_token, which mints an
+    # `urn:synapse:admin:*`-scoped token from MAS_SHARED_SECRET. Nothing in
+    # production calls it over HTTP (synapse_client mints in-process; the only
+    # HTTP caller is the e2e suite), so it is closed at the edge. Same idiom as
+    # the /_synapse/admin/* block on matrix.inblock.io. See SEC-0006 addendum.
+    handle /oauth2/admin_token {
+        respond 404
     }
 
     handle {
