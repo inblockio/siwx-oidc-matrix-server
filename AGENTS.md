@@ -44,7 +44,7 @@ stores; nothing here can patch it.
 | `config/` | Element config, nginx config and security headers, service-worker boot shim, theme CSS, LiveKit config, brand assets. |
 | `patches/synapse/`, `patches/element-web/` | Vendored patches and their registries (`README.md` in each). |
 | `scripts/` | Registry and hunk checks (run in CI), DID-field guard acceptance test, localpart-vector check, deployment audits, the storage controller, e2e helpers. |
-| `verify-deployment.sh`, `verify-theme.sh` | Read-only probe of a live deployment's public endpoints; static theme check. |
+| `verify-deployment.sh`, `verify-theme.sh` | Probe of a live deployment's public endpoints, read-only unless `--e2ee` (which signs in and sends a message); static theme check. |
 | `docs/` | Element theme contract, Element source build, audits, drafts filed upstream. |
 | `skills/` | Task guides for agents (see [Skills](#skills)). |
 
@@ -273,8 +273,11 @@ e2e-harness/run.sh smoke                 # hermetic stack; needs podman and a si
   [patches/synapse/README.md](patches/synapse/README.md) rule 4.
 - Element patch behaviour is covered by Playwright suites in siwx-oidc (`e2e/element/`);
   each registry entry names its leg.
-- `verify-deployment.sh` and `scripts/element-deploy-audit.sh` probe a live deployment's
-  public endpoints read-only. Point them at your own hosts.
+- `scripts/element-deploy-audit.sh` and `verify-deployment.sh` probe a live deployment's
+  public endpoints, read-only; both take the target as a required argument or variable,
+  with no default. `verify-deployment.sh --e2ee` is **not** read-only: its test agent
+  signs in (provisioning an account and a device on first use) and sends a message. Run
+  either only against a deployment you operate.
 
 ## Conventions
 
