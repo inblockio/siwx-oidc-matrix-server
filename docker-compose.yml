@@ -8,10 +8,20 @@ services:
     # digests for the same tag string, and GHCR sha-tags have been observed to
     # be republishable (element-web:sha-4a3d434 drifted from the bytes
     # originally deployed under that tag), so tag-only pinning is not
-    # sufficient. Mirrors docker-compose.dev-staging.yml. Defaults track
-    # `:main` so a fresh checkout with no overrides still starts (same
-    # fallback behavior the old shared IMAGE_TAG had).
-    image: ${SYNAPSE_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/synapse:main}
+    # sufficient. Mirrors docker-compose.dev-staging.yml.
+    #
+    # The defaults are IMMUTABLE (2026-09-29): tag plus digest of the images CI
+    # published from main at 33a0c95, which carry exactly the Synapse version,
+    # Element tag and patch set the README's Dependencies table lists. They used
+    # to be `:main`, so a checkout with no overrides silently ran whatever main
+    # was at pull time, and start-matrix.sh pulls on every start. A required
+    # `${VAR:?}` would have broken start-matrix.sh, which writes no image refs.
+    # The digest decides the bytes; the `sha-` tag only names the commit that
+    # built them. Bump deliberately, with the README row and the SYNAPSE_IMAGE
+    # default in real-stack/Dockerfile.synapse: take the digest a later main
+    # build published under its `sha-<commit>` tag. A default can only name a
+    # build of an EARLIER commit: no commit can hold its own build's digest.
+    image: ${SYNAPSE_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/synapse:sha-33a0c95@sha256:32abd6fa5e312796926eb33a2aeebecfe2ec705768828d3f570004c8ba44d775}
     restart: unless-stopped
     expose:
       - "${MATRIX_PORT}"
@@ -69,8 +79,9 @@ services:
     # `ghcr.io/inblockio/siwx-oidc@sha256:…` pin is expressible — the promoted
     # digests are tagged `:dev` on GHCR while `:main` resolves elsewhere
     # (builds are not reproducible), so a tag name would misdescribe the bytes.
-    # Defaults to :main so a fresh checkout with no overrides still starts.
-    image: ${SIWX_OIDC_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc:main}
+    # Default: immutable, like SYNAPSE_IMAGE_REF above. The build siwx-oidc's CI
+    # published from its main at 40efae9 (2026-09-29).
+    image: ${SIWX_OIDC_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc:sha-40efae9@sha256:54739f4813bfa5dcfb104cdfdf1fedd4c7b7ff7a4c307059128cf047a30ba12f}
     restart: unless-stopped
     depends_on:
       redis:
@@ -99,8 +110,9 @@ services:
       - default
 
   element-web:
-    # See SYNAPSE_IMAGE_REF comment above — same split-var rationale.
-    image: ${ELEMENT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/element-web:main}
+    # See SYNAPSE_IMAGE_REF comment above — same split-var rationale, same
+    # immutable default (main at 33a0c95: Element Web v1.12.29, all ten patches).
+    image: ${ELEMENT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/element-web:sha-33a0c95@sha256:1761832069bd37ba089f62a5f74ba847171738444a62146a5ca9685dc5dd56a0}
     restart: unless-stopped
     environment:
       MATRIX_BASE_URL: ${MATRIX_BASE_URL}

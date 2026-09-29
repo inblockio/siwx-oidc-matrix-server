@@ -1,0 +1,40 @@
+# Fast, hermetic checks on every pull request and on main.
+#
+# Until this workflow the repository had no pull-request checks at all:
+# docker.yml only builds and publishes images on a push to main. So a patch
+# registry could drift from the patches it describes and nothing said so. Every
+# step here reads the checked-out tree only (no network, no container runtime,
+# no secrets), which also makes it safe on pull requests from forks.
+#
+# Deliberately NO `paths-ignore: ['**.md']`: the patch registries are markdown,
+# and a registry-only edit is exactly what check-patch-registry.sh must see.
+#
+# Not run here: scripts/check-did-localpart-vectors.sh. It compares against
+# siwx-oidc's fixture fetched over the network with `gh api`, so its result
+# depends on another repository's main, not on the pull request.
+name: Checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  patches:
+    name: Vendored patches
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      # Pinned by commit, not by a movable tag; the comment names the release.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Registry, Dockerfile and README agree on every patch
+        run: scripts/check-patch-registry.sh
+
+      - name: Hunk headers match their bodies
+        run: python3 scripts/check-patch-hunks.py

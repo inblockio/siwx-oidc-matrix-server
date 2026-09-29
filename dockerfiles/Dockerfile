@@ -20,22 +20,20 @@
 # SCHEMA_COMPAT_VERSION 84 at both tags), but 1.161 queues three new background
 # updates (9408-9410); roll back only once they have finished, see
 # patches/synapse/README.md "Rollback".
-FROM matrixdotorg/synapse:v1.161.0
-# apt-get (not the apt CLI, which is documented as script-unstable) with
-# --no-install-recommends so this layer stays deterministic in shape. Debian
-# security-repo package versions are not pinned here — pinning wget to an
-# exact Debian package version is impractical against a floating
-# `matrixdotorg/synapse` base (the base image's own apt sources rotate), so
-# this only removes the non-determinism we CAN control (the yq download
-# below, and unpinned recommends bloat).
-RUN apt-get update && apt-get install -y --no-install-recommends wget patch && apt-get clean
-# Pinned to yq v4.53.3 (resolved from the /releases/latest redirect at the
-# time this was written) with a SHA-256 check against the binary — was
-# `.../releases/latest/download/...`, which re-resolves to whatever is
-# newest on every image rebuild, churning the layer digest for a tool-fetch
-# reason unrelated to any actual dependency bump. Bump deliberately: update
-# both the version and the checksum together.
-RUN wget https://github.com/mikefarah/yq/releases/download/v4.53.3/yq_linux_amd64 -O /usr/bin/yq \
+#
+# Pinned by tag AND by the multi-arch index digest: the tag says which release,
+# the digest fixes the bytes (a re-pushed tag cannot change what we build on),
+# and it also fixes the Debian release the apt step below resolves against. A
+# bump changes both; resolve the digest with
+#   skopeo inspect --raw docker://docker.io/matrixdotorg/synapse:vX.Y.Z | sha256sum
+# and run the bump procedure in patches/synapse/README.md first.
+FROM matrixdotorg/synapse:v1.161.0@sha256:6b95dd129e35e97e8032cb759e5db4a516a5f7ef6c98d34d716fea1ae239b62a
+# yq, pinned by version and SHA-256 (was `.../releases/latest/download/...`,
+# which re-resolved to whatever was newest on every rebuild). Bump deliberately:
+# the version and the checksum change together. Fetched with curl, which the
+# base image already ships (its own HEALTHCHECK uses it), so no package manager
+# is involved.
+RUN curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.53.3/yq_linux_amd64 -o /usr/bin/yq \
     && echo "fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4  /usr/bin/yq" | sha256sum -c - \
     && chmod +x /usr/bin/yq
 # ---------------------------------------------------------------------------
@@ -43,9 +41,19 @@ RUN wget https://github.com/mikefarah/yq/releases/download/v4.53.3/yq_linux_amd6
 # ships without an entry there stating why, the evidence, and its retirement
 # condition.
 #
-# `patch`, not `git apply`: this base image ships neither `git` nor `patch`
-# (hence the apt line above), and the installed tree under site-packages is not
-# a git repository.
+# `patch`, not `git apply`: this base image ships neither `git` nor `patch`,
+# and the installed tree under site-packages is not a git repository.
+#
+# `patch` comes from apt and is NOT version-pinned, on purpose. Exact Debian
+# version pins break the build whenever the security archive supersedes that
+# version, and the digest-pinned base above already fixes the Debian release,
+# so the package floats only within that release and keeps getting its security
+# fixes. It is a build tool only: installed, used and purged in this ONE layer,
+# so no package from the floating index remains in the image, and what the
+# image carries is decided by the patch file (`--fuzz=0` applies it exactly or
+# fails), not by which `patch` build apt delivered. The cost: once that Debian
+# release leaves the mirrors, `apt-get update` fails and so does the build,
+# loudly. The fix then is a base-image bump, never an archive workaround.
 #
 # The synapse package directory is resolved at build time rather than
 # hard-coded as python3.13 — a base image that bumps its Python would otherwise
@@ -54,11 +62,14 @@ RUN wget https://github.com/mikefarah/yq/releases/download/v4.53.3/yq_linux_amd6
 # the build loudly if the patch no longer applies. That is the point: see rule 6
 # in the registry for why we do not COPY pre-patched files instead.
 COPY ./patches/synapse/msc4133-profile-field-write-policy.patch /tmp/synapse-msc4133-acl.patch
-RUN SYNAPSE_PKG="$(python -c 'import synapse, os; print(os.path.dirname(synapse.__file__))')" \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends patch \
+    && SYNAPSE_PKG="$(python -c 'import synapse, os; print(os.path.dirname(synapse.__file__))')" \
     && patch -p1 --forward --batch --fuzz=0 --verbose \
          -d "$(dirname "$SYNAPSE_PKG")" < /tmp/synapse-msc4133-acl.patch \
     && python -c 'import synapse.handlers.profile, synapse.config.experimental' \
-    && rm -f /tmp/synapse-msc4133-acl.patch
+    && apt-get purge -y patch \
+    && rm -rf /var/lib/apt/lists/* /tmp/synapse-msc4133-acl.patch
 
 COPY ./entrypoints/matrix_server.sh /matrix_server.sh
 ENTRYPOINT ["/matrix_server.sh"]

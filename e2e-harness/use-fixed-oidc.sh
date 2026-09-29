@@ -7,7 +7,7 @@
 #
 # WHY a binary mount (not a rebuilt image): this box builds deploy images via CI,
 # not locally, and the proven local pattern (see the long-lived `siwx-real-oidc`
-# container) is `docker.io/library/ubuntu:rolling` + the freshly-built
+# container) is a current Ubuntu image + the freshly-built
 # `target/debug/siwx-oidc` bind-mounted in and run directly. That is what this
 # script does, mirroring the EXISTING `siwx-e2eh-oidc` env/network/port verbatim
 # (captured live from the running container, so secrets/PEM never need hardcoding).
@@ -27,7 +27,10 @@
 #                   Must contain the working tree with the B1 fix and be buildable.
 #   CONTAINER       container to swap (default: siwx-e2eh-oidc)
 #   NET             network (default: siwx-e2eh-net)
-#   RUNNER_IMAGE    base image to run the binary in (default: docker.io/library/ubuntu:rolling)
+#   RUNNER_IMAGE    base image to run the binary in (default: Ubuntu 26.04, pinned
+#                   by digest below; was the moving `ubuntu:rolling`). The binary
+#                   is built on the host, so this image's glibc must be at least
+#                   the host's: bump it when the build host moves to a newer Ubuntu.
 #
 # Requires the e2eh stack to be UP (run `up.sh` first if not). It swaps ONLY the
 # oidc container; if that container does not exist it errors (bring the stack up).
@@ -37,7 +40,7 @@ set -euo pipefail
 SIWX_OIDC_SRC="${SIWX_OIDC_SRC:-$HOME/siwx-oidc-investigate}"
 CONTAINER="${CONTAINER:-siwx-e2eh-oidc}"
 NET="${NET:-siwx-e2eh-net}"
-RUNNER_IMAGE="${RUNNER_IMAGE:-docker.io/library/ubuntu:rolling}"
+RUNNER_IMAGE="${RUNNER_IMAGE:-docker.io/library/ubuntu:26.04@sha256:da6fc2be547864451aa253836dd926da33623312df4a9a243e35dc877c378a78}"
 BIN_REL="target/debug/siwx-oidc"
 BIN="${SIWX_OIDC_SRC}/${BIN_REL}"
 

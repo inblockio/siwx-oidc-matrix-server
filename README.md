@@ -70,24 +70,24 @@ their last update).
 
 | Component | Version / pin | Pinned in | Stock / patched / built |
 |---|---|---|---|
-| Synapse | `v1.161.0` (`matrixdotorg/synapse:v1.161.0`, tag only) | `dockerfiles/Dockerfile:23` | **Patched**: 1 source patch, plus config written by `entrypoints/matrix_server.sh`. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/synapse` |
-| Synapse image the stack runs | default `…/synapse:main` (**floating**); dev-staging default `…/synapse@sha256:2f1b6c17406c…` | `docker-compose.yml:14`, `docker-compose.dev-staging.yml:65` (`SYNAPSE_IMAGE_REF`) | Built here |
-| Element Web | `v1.12.29` (git tag of element-hq/element-web) | `dockerfiles/Dockerfile.element:17` (`ARG ELEMENT_WEB_TAG`) | **Built from source and patched**: 10 source patches, plus a runtime overlay |
-| Element Web image the stack runs | default `…/element-web:main` (**floating**); dev-staging default `…/element-web@sha256:8cea1873e574…` | `docker-compose.yml:103`, `docker-compose.dev-staging.yml:174` (`ELEMENT_IMAGE_REF`) | Built here |
+| Synapse | `v1.161.0` (`matrixdotorg/synapse:v1.161.0@sha256:6b95dd129e35…`, index digest) | `dockerfiles/Dockerfile:30` | **Patched**: 1 source patch, plus config written by `entrypoints/matrix_server.sh`. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/synapse` |
+| Synapse image the stack runs | default `…/synapse:sha-33a0c95@sha256:32abd6fa5e31…` (CI build of main at 33a0c95); dev-staging default `…/synapse@sha256:2f1b6c17406c…` | `docker-compose.yml:24`, `docker-compose.dev-staging.yml:65` (`SYNAPSE_IMAGE_REF`); `real-stack/Dockerfile.synapse:26` (same default, for the local real stack) | Built here |
+| Element Web | `v1.12.29` (git tag of element-hq/element-web; the build fails unless it resolves to commit `2d90d6b7b601…`) | `dockerfiles/Dockerfile.element:24-25` (`ARG ELEMENT_WEB_TAG`, `ARG ELEMENT_WEB_COMMIT`) | **Built from source and patched**: 10 source patches, plus a runtime overlay |
+| Element Web image the stack runs | default `…/element-web:sha-33a0c95@sha256:1761832069bd…` (CI build of main at 33a0c95); dev-staging default `…/element-web@sha256:8cea1873e574…` | `docker-compose.yml:115`, `docker-compose.dev-staging.yml:174` (`ELEMENT_IMAGE_REF`) | Built here |
 | Element Call | `0.24.0` (`@element-hq/element-call-embedded`) | Not pinned here: Element Web `v1.12.29`'s `apps/web/package.json` and `pnpm-lock.yaml` | Stock, embedded in the Element Web bundle (`element_call.use_exclusively` in `config/element-config.json`). Moves only with the Element Web tag |
 | matrix-js-sdk | `42.4.0` | Not pinned here: same, via the Element Web tag | Stock, bundled |
-| Element Web build toolchain | `node:24-bullseye`; pnpm `11.23.0` (upstream `devEngines`, via corepack); `pnpm install --frozen-lockfile` | `dockerfiles/Dockerfile.element:15`, `:155` | Stock |
-| Element Web serving base | `nginxinc/nginx-unprivileged:alpine-slim` (**floating**) | `dockerfiles/Dockerfile.element:183` | Stock, with our `config/element-nginx.conf` and security headers |
-| siwx-oidc | default `ghcr.io/inblockio/siwx-oidc:main` (**floating**) | `docker-compose.yml:73`, `docker-compose.dev-staging.yml:120` (`SIWX_OIDC_IMAGE_REF`) | First-party, built in [inblockio/siwx-oidc](https://github.com/inblockio/siwx-oidc) |
-| Redis | `8.10.2` (`redis:8.10.2@sha256:d5ac52db24d4…`) | `docker-compose.yml:52`, `docker-compose.dev-staging.yml:100` (`REDIS_IMAGE_REF`) | Stock, run with `--appendonly yes` |
-| LiveKit server | `v1.13.7` (`livekit/livekit-server:v1.13.7@sha256:6fd3b7088874…`) | `docker-compose.yml:133`, `docker-compose.dev-staging.yml:202` (`LIVEKIT_IMAGE_REF`) | Stock, configured by `config/livekit.yaml` (embedded TURN) |
-| lk-jwt-service | `0.7.0` (`ghcr.io/element-hq/lk-jwt-service:0.7.0@sha256:e0c7cecfa74e…`) | `docker-compose.yml:180`, `docker-compose.dev-staging.yml:262` (`LK_JWT_IMAGE_REF`) | Stock, configured |
-| Caddy | `v2.11.4` (`caddy:2.11.4-builder`, `caddy:2.11.4`, tags only) | `dockerfiles/Dockerfile.caddy-l4:116`, `:121` | **Custom build** with xcaddy and the two modules below. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/caddy-l4` |
-| Caddy module `layer4` (mholt/caddy-l4) | `v0.1.2` | `dockerfiles/Dockerfile.caddy-l4:118` | Stock module (TURN-TLS SNI split on :443) |
-| Caddy module `rate_limit` (mholt/caddy-ratelimit) | commit `5625512f24f6` (upstream has no tag after `v0.1.0`) | `dockerfiles/Dockerfile.caddy-l4:119` | Stock module at a commit (edge rate limit for siwx-oidc `GET /resolve`) |
+| Element Web build toolchain | `node:24.20.0-bullseye@sha256:25f3016fcdae…`; pnpm `11.23.0` (upstream `devEngines`, via corepack); `pnpm install --frozen-lockfile` | `dockerfiles/Dockerfile.element:22`, `:168` | Stock |
+| Element Web serving base | `nginxinc/nginx-unprivileged:1.31.6-alpine-slim@sha256:c81a27f28bc2…` | `dockerfiles/Dockerfile.element:198` | Stock, with our `config/element-nginx.conf` and security headers |
+| siwx-oidc | default `ghcr.io/inblockio/siwx-oidc:sha-40efae9@sha256:54739f4813bf…` (CI build of siwx-oidc main at 40efae9) | `docker-compose.yml:84`, `docker-compose.dev-staging.yml:120` (`SIWX_OIDC_IMAGE_REF`) | First-party, built in [inblockio/siwx-oidc](https://github.com/inblockio/siwx-oidc) |
+| Redis | `8.10.2` (`redis:8.10.2@sha256:d5ac52db24d4…`) | `docker-compose.yml:62`, `docker-compose.dev-staging.yml:100` (`REDIS_IMAGE_REF`) | Stock, run with `--appendonly yes` |
+| LiveKit server | `v1.13.7` (`livekit/livekit-server:v1.13.7@sha256:6fd3b7088874…`) | `docker-compose.yml:145`, `docker-compose.dev-staging.yml:202` (`LIVEKIT_IMAGE_REF`) | Stock, configured by `config/livekit.yaml` (embedded TURN) |
+| lk-jwt-service | `0.7.0` (`ghcr.io/element-hq/lk-jwt-service:0.7.0@sha256:e0c7cecfa74e…`) | `docker-compose.yml:192`, `docker-compose.dev-staging.yml:262` (`LK_JWT_IMAGE_REF`) | Stock, configured |
+| Caddy | `v2.11.4` (`caddy:2.11.4-builder@sha256:369218c81ca6…`, `caddy:2.11.4@sha256:0c994536bddb…`) | `dockerfiles/Dockerfile.caddy-l4:124`, `:129` | **Custom build** with xcaddy and the two modules below. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/caddy-l4` |
+| Caddy module `layer4` (mholt/caddy-l4) | `v0.1.2` | `dockerfiles/Dockerfile.caddy-l4:126` | Stock module (TURN-TLS SNI split on :443) |
+| Caddy module `rate_limit` (mholt/caddy-ratelimit) | commit `5625512f24f6` (upstream has no tag after `v0.1.0`) | `dockerfiles/Dockerfile.caddy-l4:127` | Stock module at a commit (edge rate limit for siwx-oidc `GET /resolve`) |
 | Caddy image the edge runs | `…/caddy-l4@sha256:1c9825f346b1…` (digest only) | `docker-compose.caddy-proxy.yml:72` (dev-staging). Production's Caddy is defined outside this repository; the `Caddyfile.production` header records the same digest | Built here |
-| yq (Synapse image) | `v4.53.3`, SHA-256 checked | `dockerfiles/Dockerfile:38-39` | Stock binary |
-| Debian `wget`, `patch` (Synapse image) | unpinned `apt-get install` (**floating**) | `dockerfiles/Dockerfile:31` | Stock |
+| yq (Synapse image) | `v4.53.3`, SHA-256 checked | `dockerfiles/Dockerfile:36-38` | Stock binary |
+| Debian `patch` (Synapse image build) | not version-pinned: floats within the Debian release (trixie) that the base digest fixes. Build tool only: installed, used and purged in one layer, so it is not in the image | `dockerfiles/Dockerfile:65-72` | Stock |
 | Database | SQLite at `/data/homeserver.db` (Synapse's generated default) | `entrypoints/matrix_server.sh:5` (`/start.py generate`) | Stock; not a separate service |
 
 Not part of the bundle: PostgreSQL (Synapse runs on SQLite), coturn (LiveKit's
@@ -101,34 +101,27 @@ defines it).
 A pin floats when the same reference can resolve to different bytes tomorrow. These
 do:
 
-- **`:main` defaults for the three first-party images**: `docker-compose.yml:14`,
-  `:73`, `:103`; `docker-compose.dev-staging.yml:120` (siwx-oidc); and the template
-  `.env.dev-staging.example:49`, `:50`, `:55`. A checkout run without `*_IMAGE_REF`
-  overrides pulls whatever `:main` is at that moment, and `start-matrix.sh` runs
-  `docker compose up --pull always`. Pin by digest in `.env` for anything that
-  matters.
-- **Base images by moving tag**: `node:24-bullseye` (`dockerfiles/Dockerfile.element:15`)
-  and `nginxinc/nginx-unprivileged:alpine-slim` (`dockerfiles/Dockerfile.element:183`).
-- **Unpinned packages**: `apt-get install` in `dockerfiles/Dockerfile:31` and
-  `real-stack/Dockerfile.synapse:11`; yq from `releases/latest` in
-  `real-stack/Dockerfile.synapse:12`.
-- **Local and test only**: `docker-compose.local.yml:43` (`redis`, no tag) and `:137`
-  (`caddy:2-alpine`); `docker-compose.e2e.yml:18` (`redis:7-alpine`), `:97`
-  (`livekit/livekit-server:v1.13.6`, tag without digest), `:170` and `:185`
-  (`caddy:2-alpine`), mirrored in `e2e-harness/up.sh:36`, `:81`, `:165`, `:173`;
-  `e2e-harness/av-check/run.sh:35` (`livekit-cli:latest`);
-  `e2e-harness/use-fixed-oidc.sh:40` (`ubuntu:rolling`).
+- **`:main` defaults for first-party images**: `docker-compose.dev-staging.yml:120`
+  (siwx-oidc) and the template `.env.dev-staging.example:49`, `:50`, `:55`. A stack
+  started from them pulls whatever `:main` is at that moment. `docker-compose.yml`
+  no longer floats: its defaults are the tag-plus-digest builds listed in the table
+  above, so `start-matrix.sh` (which runs `docker compose up --pull always`) starts
+  the same bytes every time. Pin by digest in `.env` to run anything newer.
+- **Build-time package**: Debian `patch` in the Synapse build
+  (`dockerfiles/Dockerfile:66`) floats on purpose, within the Debian release the
+  base digest fixes, and is purged before its layer ends.
 - **CI**: `.github/workflows/docker.yml` uses actions by major tag
   (`actions/checkout@v4`, `docker/login-action@v3`, `docker/metadata-action@v5`,
-  `docker/build-push-action@v6`) on `ubuntu-latest`.
+  `docker/build-push-action@v6`) on `ubuntu-latest`. `.github/workflows/checks.yml`
+  pins its one action by commit and runs on `ubuntu-24.04`.
 
-Pinned by tag only, without a digest: `matrixdotorg/synapse:v1.161.0`,
-`caddy:2.11.4-builder` / `caddy:2.11.4`, and the Element Web git tag `v1.12.29`,
-which is cloned by name and not checked against a commit. Release tags are
-conventionally immutable, but nothing here enforces it.
+The other image references in the Dockerfiles, compose files and `e2e-harness/`
+scripts are pinned by digest, with the version tag alongside wherever one exists
+(the local and test stacks included); the Element Web source tag is checked against
+its commit, and the yq download against its checksum.
 
 Production, per the repository's own records: its `.env` pins Redis as
-`redis:latest@sha256:aa049e68…` (`docker-compose.yml:44-51`). The tag reads `latest`,
+`redis:latest@sha256:aa049e68…` (`docker-compose.yml:54-61`). The tag reads `latest`,
 but the digest fixes the bytes, so a pull does not move it; the production `.env` is
 not in this repository, so confirm on the box. Production also carries a leftover
 watchtower container that no compose file here defines; per
@@ -142,7 +135,8 @@ carries vendored source patches, applied at image build time so that a patch tha
 stops applying fails the build instead of shipping silently. Every patch has a
 registry entry stating what it changes, why, the evidence, its upstream status and
 its retirement condition. The registries are the source of truth; the lists below
-only mirror them.
+only mirror them, and CI fails a pull request whose patches, registries, Dockerfiles
+and these lists disagree (see the maintainer rule below).
 
 **Synapse: 1 patch.** Registry: [`patches/synapse/README.md`](patches/synapse/README.md).
 Applied by `dockerfiles/Dockerfile` with `patch --fuzz=0`.
@@ -205,13 +199,18 @@ Caddy is not patched, but it is not the stock image either; see the Caddy rows u
 
 Whenever a pin or a patch changes, update this README and the matching registry
 **in the same commit**: the Dependencies table for a version or digest, and the
-lists above for a patch that is added, dropped, renamed or reordered. To check that
-every patch file has a registry entry (prints nothing when complete):
+lists above for a patch that is added, dropped, renamed or reordered.
+
+The patch half of this rule is checked. `scripts/check-patch-registry.sh` requires
+every `patches/*/*.patch` to have a numbered entry in its directory's registry, to be
+applied by the Dockerfile that owns that directory, and to be listed above, with the
+registry and the list in the Dockerfile's apply order. CI runs it together with
+`scripts/check-patch-hunks.py` on every pull request and every push to `main`
+(`.github/workflows/checks.yml`, the repository's first pull-request check). The pin
+half is not checked: a Dependencies row is updated by hand.
 
 ```bash
-for p in patches/*/*.patch; do
-  grep -qF "$(basename "$p")" "$(dirname "$p")/README.md" || echo "MISSING: $p"
-done
+scripts/check-patch-registry.sh    # one OK line per patch directory, or FAIL lines and exit 1
 ```
 
 ## Parameters

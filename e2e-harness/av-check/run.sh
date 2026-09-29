@@ -32,7 +32,8 @@ set -euo pipefail
 # -----------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/../../.env.e2e}"
-LK_IMAGE="${LK_IMAGE:-docker.io/livekit/livekit-cli:latest}"
+# Pinned by version and digest (was :latest, which moves under the check).
+LK_IMAGE="${LK_IMAGE:-docker.io/livekit/livekit-cli:v2.18.8@sha256:04eff828f8edd810b996c18456a6260ba0698a60f8ea309d0f015c2b09696413}"
 LK_NETWORK="${LK_NETWORK:-siwx-e2eh-net}"
 LK_WS_URL="${LK_WS_URL:-ws://siwx-e2eh-livekit:7880}"
 LK_CONTAINER="${LK_CONTAINER:-siwx-e2eh-livekit}"   # only used for a liveness check
