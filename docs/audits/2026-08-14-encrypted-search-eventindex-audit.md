@@ -15,8 +15,8 @@ Prod enablement: `features.feature_inblock_encrypted_search: true` in the
 bind-mounted `config/element-config.json`. Hostname allowlist is unchanged
 (still staging/localhost); the flag is the prod switch.
 
-This file is the blocking Phase-6 deliverable of
-`docs/2026-08-14-HANDOVER-encrypted-search-browser-eventindex.md`.
+This file is the blocking Phase-6 deliverable of the 2026-08-14
+encrypted-search implementation brief.
 
 ## Product choice (recorded)
 
@@ -209,7 +209,7 @@ data.
 
 ## Live staging
 
-Executed 2026-08-14 after recreating **element-web only** on dev-aquafire.
+Executed 2026-08-14 after recreating **element-web only** on dev-staging.
 
 | Item | Value |
 |---|---|
@@ -237,12 +237,12 @@ Executed 2026-08-14 after recreating **element-web only** on dev-aquafire.
 
 ## Prod promotion (2026-08-15)
 
-Explicit go-ahead. **Not** `deploy.sh --restart` (that would `compose down` the
-whole stack and override digest pins with floating tags).
+Explicit go-ahead. **Not** a full-stack redeploy (a `compose down` of the
+whole stack that overrides digest pins with floating tags).
 
 | Item | Value |
 |---|---|
-| Action | Recreate **element-web only** on `agentic.inblock.io` |
+| Action | Recreate **element-web only** on the production host |
 | New digest | `sha256:0013c05351ddcf0eb399d92e3f23e159cc7911e17034d05f55e2b1aeb964ecec` (staging-verified) |
 | Previous digest (rollback) | `sha256:aa878627328dfa5a2f085a25bf92c3791d386b03b6d3becc73fa6d932ee0ed20` |
 | Enablement | `features.feature_inblock_encrypted_search: true` in bind-mounted `config/element-config.json` |
@@ -260,7 +260,7 @@ auth_metadata, CORS, config pins homeserver — **all PASS**. Served
 Rollback (element-web only):
 
 ```bash
-# on agentic.inblock.io, /home/deploy/matrix/stack
+# on the production host, in the stack directory
 # restore ELEMENT_IMAGE_REF from .env.bak-ewsearch-20260814T222047Z
 # restore config/element-config.json from the matching bak (or set the flag false)
 docker compose pull element-web

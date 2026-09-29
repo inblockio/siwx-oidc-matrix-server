@@ -23,7 +23,7 @@
 #
 # Env:
 #   SIWX_OIDC_SRC   source tree to build + mount (default: the investigate tree
-#                   /home/waldknoten-01/siwx-oidc-investigate, where the fix lives).
+#                   ~/siwx-oidc-investigate, where the fix lives).
 #                   Must contain the working tree with the B1 fix and be buildable.
 #   CONTAINER       container to swap (default: siwx-e2eh-oidc)
 #   NET             network (default: siwx-e2eh-net)
@@ -34,7 +34,7 @@
 # =============================================================================
 set -euo pipefail
 
-SIWX_OIDC_SRC="${SIWX_OIDC_SRC:-/home/waldknoten-01/siwx-oidc-investigate}"
+SIWX_OIDC_SRC="${SIWX_OIDC_SRC:-$HOME/siwx-oidc-investigate}"
 CONTAINER="${CONTAINER:-siwx-e2eh-oidc}"
 NET="${NET:-siwx-e2eh-net}"
 RUNNER_IMAGE="${RUNNER_IMAGE:-docker.io/library/ubuntu:rolling}"

@@ -104,11 +104,11 @@
 	# --- MatrixRTC: LiveKit SFU -------------------------------------------------
 	# Port 7880 muxes WebSocket signaling AND the Twirp management API, which no
 	# upstream flag can split or disable, so the edge is the only place to
-	# restrict it (S3, 2026-08-01 av-hardening audit; Caddyfile.production
-	# carries the full rationale). Kept here so the harness exercises the same
-	# routing, though this stack's lk-jwt talks to the SFU directly and never
-	# crosses this edge — so a green harness does NOT validate the production
-	# hairpin, only that the block does not break ordinary SFU traffic.
+	# restrict it (S3, 2026-08-01 av-hardening audit). Kept here so the harness
+	# exercises the same routing as the production edge, though this stack's
+	# lk-jwt talks to the SFU directly and never crosses this edge — so a green
+	# harness does NOT validate the production hairpin, only that the block
+	# does not break ordinary SFU traffic.
 	@livekit_twirp_public {
 		not remote_ip private_ranges
 	}

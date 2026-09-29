@@ -40,12 +40,10 @@ jobs:
             dockerfile: dockerfiles/Dockerfile
           - image: element-web
             dockerfile: dockerfiles/Dockerfile.element
-          # caddy-l4: prod-graduation vehicle for TURN-TLS edge termination
-          # (docs/superpowers/plans/2026-08-03-turn-tls-edge-termination.md).
-          # dev-staging currently builds this image ON THE BOX (T1 predates
-          # CI adoption there); this job is what lets the portal Caddy on
-          # prod (and, eventually, dev-staging) pull a CI-built, digest-
-          # pinnable image instead of building locally.
+          # caddy-l4: Caddy with the layer4 module, the edge that terminates
+          # TURN-TLS on :443 by SNI (see dockerfiles/Dockerfile.caddy-l4).
+          # Publishing it here lets a deployment's edge pull a CI-built,
+          # digest-pinnable image instead of building it on the host.
           - image: caddy-l4
             dockerfile: dockerfiles/Dockerfile.caddy-l4
     steps:
@@ -79,48 +77,52 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
-  # Deploys the just-published `main` images to the dev-staging box
-  # (dev-aquafire, 207.154.209.103). Only fires on an actual push to `main`
-  # (not tag pushes or GitHub releases, both of which also satisfy the `on:
-  # push` trigger above) or an explicit manual dispatch OF `main`.
+  # Deploys the just-published `main` images to a dev-staging host. Only fires
+  # on an actual push to `main` (not tag pushes or GitHub releases, both of
+  # which also satisfy the `on: push` trigger above) or an explicit manual
+  # dispatch OF `main`.
   #
   # A dispatch of any other branch builds branch-tagged images only
   # (`:<branch>`, `:sha-<sha>`; `latest` is gated on the default branch and no
-  # rule emits `:main`), so a deploy from it could only re-converge the box on
+  # rule emits `:main`), so a deploy from it could only re-converge the host on
   # the `.env` pins it already has. It is therefore never wanted, and it would
-  # turn "build me a candidate image" into a touch of a box carrying real users
-  # the day DEV_STAGING_DEPLOY_KEY is configured. Stage a branch image by
-  # pinning its digest in the box's SYNAPSE_IMAGE_REF / ELEMENT_IMAGE_REF.
+  # turn "build me a candidate image" into a touch of a host carrying real users
+  # the day the deploy secrets are configured. Stage a branch image by pinning
+  # its digest in the host's SYNAPSE_IMAGE_REF / ELEMENT_IMAGE_REF.
   #
-  # The SSH key is a dedicated, restricted deploy key (see
-  # docs/2026-07-30-dev-staging-dev-aquafire.md, "CI auto-deploy — pending
-  # user actions"): the box's authorized_keys pins it to a forced command
-  # (`/home/dev/matrix-staging/ci-deploy.sh`) with no-pty/no-port-forwarding/
-  # no-agent-forwarding/no-X11-forwarding, so this key can never do anything
-  # on the box except run that one script — the `deploy` argument below is
-  # never seen by the server, it's just a readable label in the Actions log.
+  # DORMANT unless ALL FIVE secrets below are set. Without them (in a fork, or
+  # here while deploys are manual) the job skips cleanly (green), never red:
+  #   DEV_STAGING_DEPLOY_KEY   private half of a dedicated, restricted deploy key
+  #   DEV_DEPLOY_HOST          host name or IP address of the target
+  #   DEV_DEPLOY_PORT          the target's SSH port
+  #   DEV_DEPLOY_USER          the SSH user on the target
+  #   DEV_DEPLOY_KNOWN_HOSTS   the target's pinned known_hosts line(s)
+  # Host, port and user are secrets, not repository variables: variables are
+  # printed unmasked in the Actions log of a public repository.
   #
-  # The host key is pinned to a known_hosts line captured directly from the
-  # box (`ssh-keyscan -p 8022 207.154.209.103`) rather than trusted on first
-  # use, so a DNS hijack or MITM can't silently swap in a different host.
+  # The target's authorized_keys must pin the deploy key to a forced command
+  # (its deploy script) with no-pty,no-port-forwarding,no-agent-forwarding,
+  # no-X11-forwarding, so this key can never do anything on the target except
+  # run that one script. The `deploy` argument below is never seen by the
+  # server; it is only a readable label in the Actions log.
+  #
+  # The host key is pinned (captured once from the target with
+  # `ssh-keyscan -p <port> <host>` and stored in DEV_DEPLOY_KNOWN_HOSTS) rather
+  # than trusted on first use, so a DNS hijack or MITM cannot silently swap in
+  # a different host.
   deploy-dev-staging:
     name: Deploy to dev-staging
     needs: build-and-push
     if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
     steps:
-      # Secret-presence guard: DEV_STAGING_DEPLOY_KEY does not exist yet
-      # (pending PAT rotation, see docs/2026-07-30-dev-staging-dev-aquafire.md
-      # §9). Without this guard every push-to-main run of this job would go
-      # red. Since 2026-09-25 dev-staging does NOT auto-deploy at all (the
-      # box's matrix-staging-deploy.timer is retired; deploys are manual,
-      # digest-pinned .env edits), so a missing secret here is the intended
-      # steady state, not a failure — this job SKIPS
-      # cleanly (green) rather than erroring, and every step below is gated
-      # on the same condition.
-      - name: Check deploy key configured
+      # Secret-presence guard. A job-level `if:` cannot read `secrets`, so this
+      # step computes the gate once and every step below is gated on it. A
+      # missing secret is the intended steady state while deploys are manual,
+      # so the job skips instead of failing.
+      - name: Check deploy secrets configured
         id: check-secret
-        run: echo "ok=${{ secrets.DEV_STAGING_DEPLOY_KEY != '' }}" >> "$GITHUB_OUTPUT"
+        run: echo "ok=${{ secrets.DEV_STAGING_DEPLOY_KEY != '' && secrets.DEV_DEPLOY_HOST != '' && secrets.DEV_DEPLOY_PORT != '' && secrets.DEV_DEPLOY_USER != '' && secrets.DEV_DEPLOY_KNOWN_HOSTS != '' }}" >> "$GITHUB_OUTPUT"
 
       - name: Install deploy key
         if: steps.check-secret.outputs.ok == 'true'
@@ -130,29 +132,33 @@ jobs:
           printf '%s\n' "${{ secrets.DEV_STAGING_DEPLOY_KEY }}" > ~/.ssh/dev_staging_deploy_key
           chmod 600 ~/.ssh/dev_staging_deploy_key
 
-      - name: Pin dev-aquafire host key
+      - name: Pin the deploy target's host key
         if: steps.check-secret.outputs.ok == 'true'
+        env:
+          DEV_DEPLOY_KNOWN_HOSTS: ${{ secrets.DEV_DEPLOY_KNOWN_HOSTS }}
         run: |
           install -m 700 -d ~/.ssh
-          cat > ~/.ssh/dev_staging_known_hosts <<'EOF'
-          [207.154.209.103]:8022 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILz/wItQKuTDUzsdBpvqVETE9+CHHlKMgXh6rbimvWy0
-          EOF
+          printf '%s\n' "$DEV_DEPLOY_KNOWN_HOSTS" > ~/.ssh/dev_staging_known_hosts
 
-      - name: Deploy to dev-staging (forced command runs ci-deploy.sh)
+      - name: Deploy to dev-staging (forced command on the target)
         if: steps.check-secret.outputs.ok == 'true'
+        env:
+          DEV_DEPLOY_HOST: ${{ secrets.DEV_DEPLOY_HOST }}
+          DEV_DEPLOY_PORT: ${{ secrets.DEV_DEPLOY_PORT }}
+          DEV_DEPLOY_USER: ${{ secrets.DEV_DEPLOY_USER }}
         run: |
-          ssh -p 8022 \
+          ssh -p "$DEV_DEPLOY_PORT" \
             -i ~/.ssh/dev_staging_deploy_key \
             -o UserKnownHostsFile=~/.ssh/dev_staging_known_hosts \
             -o StrictHostKeyChecking=yes \
             -o BatchMode=yes \
-            dev@207.154.209.103 'deploy'
+            "$DEV_DEPLOY_USER@$DEV_DEPLOY_HOST" 'deploy'
 
       - name: Clean up deploy key
         if: always() && steps.check-secret.outputs.ok == 'true'
         run: rm -f ~/.ssh/dev_staging_deploy_key
 
-      - name: Deploy skipped (secret not configured)
+      - name: Deploy skipped (secrets not configured)
         if: steps.check-secret.outputs.ok != 'true'
         run: |
-          echo "::notice title=Push-model deploy skipped::DEV_STAGING_DEPLOY_KEY is not set in this repo, so the push-model CI deploy is dormant. dev-staging is deployed manually by digest-pinned .env edits (the matrix-staging-deploy.timer auto-pull was retired 2026-09-25). See docs/2026-07-30-dev-staging-dev-aquafire.md section 9." | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "::notice title=Push-model deploy skipped::DEV_STAGING_DEPLOY_KEY and the DEV_DEPLOY_HOST, DEV_DEPLOY_PORT, DEV_DEPLOY_USER and DEV_DEPLOY_KNOWN_HOSTS secrets are not all set in this repo, so the push-model CI deploy is dormant." | tee -a "$GITHUB_STEP_SUMMARY"

@@ -78,7 +78,9 @@
 set -euo pipefail
 
 # ---- tunable parameters -------------------------------------------------------
-STACK_DIR="${STACK_DIR:-/home/deploy/matrix/stack}"
+# The stack is the checkout this script lives in (scripts/..), wherever it was
+# invoked from. A systemd unit that runs <stack>/scripts/<this> needs no STACK_DIR.
+STACK_DIR="${STACK_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 VOL_PATH="${VOL_PATH:-/mnt/volume_matrix_service}"   # the bounded Matrix volume
 ROOT_PATH="${ROOT_PATH:-/}"                          # host root, alerted on too
 STATE_DIR="${STATE_DIRECTORY:-${STATE_DIR:-/var/lib/matrix-storage-controller}}"

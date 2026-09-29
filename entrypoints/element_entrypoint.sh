@@ -40,7 +40,7 @@ fi
 # owns login end to end (the same flow Element X mobile uses). Custom redirect/
 # callback/gate scripts are intentionally absent: running them alongside the
 # native flow caused the single-use ?code= to be exchanged twice (the callback
-# race). See docs/superpowers/plans/2026-05-29-native-oidc-callback-race-fix.md.
+# race).
 
 # Start nginx (Element Web's default server).
 exec nginx -g "daemon off;"

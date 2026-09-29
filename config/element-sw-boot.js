@@ -1,9 +1,6 @@
 /*
  * Service-worker media-auth boot shim (loaded from <head>, before any app
- * bundle). Independent guards for the 2026-07-31 media-download RCA
- * (docs/superpowers/plans/2026-07-31-ew-sw-boot-shim.md; guard E's
- * differential-probe spec is
- * docs/superpowers/plans/2026-07-31-sw-hardening-handover.md):
+ * bundle). Independent guards for the 2026-07-31 media-download RCA:
  *
  * (A) Early "userinfo" responder. Element Web's sw.js asks the page for
  *     {userId, deviceId, homeserver} via postMessage on EVERY media request,

@@ -10,7 +10,7 @@
 #
 # WHY THIS FILE EXISTS
 #   The siwx-oidc integration-test targets used to live in a dedicated worktree
-#   at /home/waldknoten-01/siwx-oidc-e2eh. That worktree was removed on
+#   at ~/siwx-oidc-e2eh. That worktree was removed on
 #   2026-08-02; the targets now live in the primary siwx-oidc checkout. Both
 #   adapters carried their own copy of the stale absolute default, so both
 #   silently `exit 2` with a ZERO-BYTE artifact — a harness that cannot judge,
