@@ -70,7 +70,7 @@ their last update).
 
 | Component | Version / pin | Pinned in | Stock / patched / built |
 |---|---|---|---|
-| Synapse | `v1.161.0` (`matrixdotorg/synapse:v1.161.0`, tag only) | `dockerfiles/Dockerfile:23` | **Patched**: 1 source patch, plus config written by `entrypoints/matrix_server.sh`. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/synapse` |
+| Synapse | `v1.161.0` (`matrixdotorg/synapse:v1.161.0@sha256:6b95dd129e35…`, index digest) | `dockerfiles/Dockerfile:30` | **Patched**: 1 source patch, plus config written by `entrypoints/matrix_server.sh`. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/synapse` |
 | Synapse image the stack runs | default `…/synapse:main` (**floating**); dev-staging default `…/synapse@sha256:2f1b6c17406c…` | `docker-compose.yml:14`, `docker-compose.dev-staging.yml:65` (`SYNAPSE_IMAGE_REF`) | Built here |
 | Element Web | `v1.12.29` (git tag of element-hq/element-web) | `dockerfiles/Dockerfile.element:17` (`ARG ELEMENT_WEB_TAG`) | **Built from source and patched**: 10 source patches, plus a runtime overlay |
 | Element Web image the stack runs | default `…/element-web:main` (**floating**); dev-staging default `…/element-web@sha256:8cea1873e574…` | `docker-compose.yml:103`, `docker-compose.dev-staging.yml:174` (`ELEMENT_IMAGE_REF`) | Built here |
@@ -86,8 +86,8 @@ their last update).
 | Caddy module `layer4` (mholt/caddy-l4) | `v0.1.2` | `dockerfiles/Dockerfile.caddy-l4:118` | Stock module (TURN-TLS SNI split on :443) |
 | Caddy module `rate_limit` (mholt/caddy-ratelimit) | commit `5625512f24f6` (upstream has no tag after `v0.1.0`) | `dockerfiles/Dockerfile.caddy-l4:119` | Stock module at a commit (edge rate limit for siwx-oidc `GET /resolve`) |
 | Caddy image the edge runs | `…/caddy-l4@sha256:1c9825f346b1…` (digest only) | `docker-compose.caddy-proxy.yml:72` (dev-staging). Production's Caddy is defined outside this repository; the `Caddyfile.production` header records the same digest | Built here |
-| yq (Synapse image) | `v4.53.3`, SHA-256 checked | `dockerfiles/Dockerfile:38-39` | Stock binary |
-| Debian `wget`, `patch` (Synapse image) | unpinned `apt-get install` (**floating**) | `dockerfiles/Dockerfile:31` | Stock |
+| yq (Synapse image) | `v4.53.3`, SHA-256 checked | `dockerfiles/Dockerfile:36-38` | Stock binary |
+| Debian `patch` (Synapse image build) | not version-pinned: floats within the Debian release (trixie) that the base digest fixes. Build tool only: installed, used and purged in one layer, so it is not in the image | `dockerfiles/Dockerfile:65-72` | Stock |
 | Database | SQLite at `/data/homeserver.db` (Synapse's generated default) | `entrypoints/matrix_server.sh:5` (`/start.py generate`) | Stock; not a separate service |
 
 Not part of the bundle: PostgreSQL (Synapse runs on SQLite), coturn (LiveKit's
@@ -109,9 +109,10 @@ do:
   matters.
 - **Base images by moving tag**: `node:24-bullseye` (`dockerfiles/Dockerfile.element:15`)
   and `nginxinc/nginx-unprivileged:alpine-slim` (`dockerfiles/Dockerfile.element:183`).
-- **Unpinned packages**: `apt-get install` in `dockerfiles/Dockerfile:31` and
-  `real-stack/Dockerfile.synapse:11`; yq from `releases/latest` in
-  `real-stack/Dockerfile.synapse:12`.
+- **Unpinned packages**: `apt-get install` in `real-stack/Dockerfile.synapse:11`;
+  yq from `releases/latest` in `real-stack/Dockerfile.synapse:12`. Debian `patch`
+  in the Synapse build (`dockerfiles/Dockerfile:66`) floats on purpose, within the
+  Debian release the base digest fixes, and is purged before its layer ends.
 - **Local and test only**: `docker-compose.local.yml:43` (`redis`, no tag) and `:137`
   (`caddy:2-alpine`); `docker-compose.e2e.yml:18` (`redis:7-alpine`), `:97`
   (`livekit/livekit-server:v1.13.6`, tag without digest), `:170` and `:185`
@@ -122,9 +123,9 @@ do:
   (`actions/checkout@v4`, `docker/login-action@v3`, `docker/metadata-action@v5`,
   `docker/build-push-action@v6`) on `ubuntu-latest`.
 
-Pinned by tag only, without a digest: `matrixdotorg/synapse:v1.161.0`,
-`caddy:2.11.4-builder` / `caddy:2.11.4`, and the Element Web git tag `v1.12.29`,
-which is cloned by name and not checked against a commit. Release tags are
+Pinned by tag only, without a digest: `caddy:2.11.4-builder` / `caddy:2.11.4`, and
+the Element Web git tag `v1.12.29`, which is cloned by name and not checked against a
+commit. Release tags are
 conventionally immutable, but nothing here enforces it.
 
 Production, per the repository's own records: its `.env` pins Redis as

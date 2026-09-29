@@ -72,7 +72,7 @@ The rules are the same as `patches/element-web/README.md`, and for the same reas
 
 | Build | Applies the patch? |
 |---|---|
-| `dockerfiles/Dockerfile` (the published `synapse` image; CI, dev-staging, prod) | **yes**, lines 54-59 |
+| `dockerfiles/Dockerfile` (the published `synapse` image; CI, dev-staging, prod) | **yes**, lines 64-72 |
 | `e2e-harness/images.sh` (local e2e harness) | **yes**: it builds `dockerfiles/Dockerfile` itself |
 | `real-stack/Dockerfile.synapse` (local real-stack image) | **no**: same `FROM` tag, no patch, and it fetches yq from `releases/latest`. Do not use it to test anything that depends on the DID field being protected; the startup guard in `entrypoints/matrix_server.sh` does not run there either, because that image has its own entrypoint (`real-stack/synapse_entrypoint.sh`) |
 | `scripts/did-field-guard-accept.sh` | **no, on purpose**: it bind-mounts the guarded entrypoint into a STOCK image to prove the guard refuses to start |
