@@ -127,27 +127,27 @@ rtc:
   port_range_start: 20100
   port_range_end: 20200
   use_external_ip: true
-  # If the LiveKit container is attached to more than one docker network (e.g.
-  # a compose-default net PLUS a shared reverse-proxy net so Caddy can reach
-  # :7880), STUN can succeed on one interface and fail with "context canceled"
-  # on the other — and LiveKit then advertises the OTHER network's private IP
-  # as if it were external. Exclude that subnet so it's never offered as an
-  # ICE candidate. See the troubleshooting entry below ("call connects, zero
-  # media").
-  ips:
-    excludes:
-      - "172.18.0.0/16"
+  # On a host where LiveKit sits on two docker networks, exclude the proxy
+  # network's subnet (host-specific, so not set in the shipped file). See the
+  # troubleshooting entry below ("call connects, zero media").
+  # ips:
+  #   excludes:
+  #     - "<subnet of portal-net>"
 room:
   auto_create: false
 logging:
   level: info
 turn:
-  enabled: true              # only with the caddy-l4 edge; see "Embedded TURN"
-  domain: turn.example.org
+  enabled: false             # true only with the caddy-l4 edge; see "Embedded TURN"
+  domain: turn.example.org   # your TURN host name
   external_tls: true
   tls_port: 5349
   udp_port: 3478
 ```
+
+The shipped file has TURN off and no `rtc.ips.excludes`: both depend on the host. Look
+the proxy network's subnet up with
+`docker network inspect portal-net -f '{{range .IPAM.Config}}{{.Subnet}}{{end}}'`.
 
 No `keys:` block: `LIVEKIT_KEYS` in the environment replaces file keys entirely,
 so a placeholder here is dead config that only invites someone to trust it.
@@ -347,9 +347,10 @@ if in-call key sharing is rate-limited, fix `rc_message` (values above).
 
 ## Embedded TURN
 
-**Status:** `config/livekit.yaml` enables embedded TURN via **TLS-edge
-termination (caddy-l4)**. Enable it only on a deployment whose edge carries
-the `layer4` wrapper described below. ~10-20% of real-world sessions need TURN
+**Status:** `config/livekit.yaml` ships with embedded TURN **off**. It is built for
+**TLS-edge termination (caddy-l4)**: enable it (`turn.enabled: true`, `turn.domain`
+set to your TURN host) only on a deployment whose edge carries the `layer4` wrapper
+described below. ~10-20% of real-world sessions need TURN
 (LiveKit guidance); before this, ICE-TCP on 7881 was the only
 UDP-hostile-network fallback.
 
@@ -525,8 +526,8 @@ the default never blocks a real client and no override is needed.
 ## Known limitations
 
 - **LiveKit built-in TURN** needs the caddy-l4 edge (see "Embedded TURN"
-  above). A deployment without it must set `turn.enabled: false`, and then
-  clients behind symmetric NAT or strict corporate firewalls may fail to
+  above). A deployment without it keeps the shipped `turn.enabled: false`, and
+  then clients behind symmetric NAT or strict corporate firewalls may fail to
   connect.
 - **No TURN for legacy calls**: the stack has no coturn. Legacy 1:1 VoIP calls
   (non-MatrixRTC) will fail behind NAT. This is acceptable because
@@ -539,8 +540,9 @@ the default never blocks a real client and no override is needed.
 ## Checklist for a new deployment
 
 1. `.env` has `LIVEKIT_KEY` and `LIVEKIT_SECRET` (`start-matrix.sh` writes them).
-2. `config/livekit.yaml`: set `turn.domain` to your TURN host name, or
-   `turn.enabled: false` if your edge cannot split `:443` by SNI.
+2. `config/livekit.yaml`: to enable TURN, set `turn.enabled: true` and `turn.domain` to
+   your TURN host name; leave it off if your edge cannot split `:443` by SNI. If LiveKit
+   is on two docker networks, add the proxy network's subnet to `rtc.ips.excludes`.
 3. Reverse proxy: `rtc_foci` in `.well-known/matrix/client`, the `/livekit/jwt` and
    `/livekit/sfu` routes, the Twirp restriction (see `Caddyfile.local`), and for TURN the
    `layer4` wrapper plus the certificate site for the TURN host.

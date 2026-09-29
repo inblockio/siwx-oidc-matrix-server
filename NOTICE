@@ -1,5 +1,6 @@
 siwx-oidc-matrix-server
 Copyright 2024-2026 inblock.io assets GmbH and contributors
+https://github.com/inblockio/siwx-oidc-matrix-server
 
 This product is licensed under the Apache License, Version 2.0. The full
 license text is in the LICENSE file. The patches and the brand assets
@@ -24,18 +25,49 @@ patches/synapse/msc4133-profile-field-write-policy.patch
     backports code from https://github.com/element-hq/synapse/pull/19980.
 
 patches/synapse/tests/test_msc4133_write_policy.py
-    AGPL-3.0-or-later, like the patch it tests. It is written to be copied
-    into Synapse's own test tree and run there, and it reuses the set-up
-    code of Synapse's tests/rest/client/test_profile.py.
+    AGPL-3.0-or-later, like the patch it tests, as its SPDX header says. It
+    is written to be copied into Synapse's own test tree and run there, and
+    it reuses the set-up code of Synapse's tests/rest/client/test_profile.py,
+    whose notice (Copyright 2014-2016 OpenMarket Ltd, Copyright (C) 2023 New
+    Vector, Ltd) its header reproduces.
 
 patches/element-web/*.patch
     Almost every existing file these patches change carries
     "SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR
     LicenseRef-Element-Commercial". The third option names Element's
     commercial license, which only Element can grant, so the changes to
-    these files, and the code files the patches add, are licensed
-    AGPL-3.0-only OR GPL-3.0-only. The added code files carry Element's
-    standard file header so that they can be proposed upstream unchanged.
+    these files are licensed AGPL-3.0-only OR GPL-3.0-only.
+
+    The patches also add thirteen code files that inblock.io assets GmbH
+    wrote. inblock.io assets GmbH licenses them under AGPL-3.0-only OR
+    GPL-3.0-only, except the two service-worker tests named further down,
+    which are AGPL-3.0-only:
+
+        apps/web/playwright/e2e/crypto/web-event-index.spec.ts
+        apps/web/src/vector/platform/BrowserEventIndexManager.ts
+        apps/web/src/vector/platform/BrowserEventIndexManager.test.ts
+        apps/web/src/vector/platform/eventIndexBounds.ts
+        apps/web/src/vector/platform/eventIndexBounds.test.ts
+            (browser-eventindex.patch)
+        apps/web/src/hooks/useAttestedDid.ts
+            (show-attested-did.patch)
+        apps/web/src/components/views/dialogs/invite/DMRoomTile.test.tsx
+        apps/web/src/utils/didLocalpart.ts
+        apps/web/src/utils/didLocalpart.test.ts
+        apps/web/src/utils/didProof.ts
+        apps/web/src/utils/didSearchMember.ts
+            (resolve-did-search.patch)
+        apps/web/src/serviceworker/serverSupport.test.ts
+            (sw-versions-no-cache-on-error.patch)
+        apps/web/src/serviceworker/mediaTokenRetry.test.ts
+            (sw-media-401-token-retry.patch)
+
+    Each of them carries Element Web's standard file header, "Copyright
+    2026 inblock.io" and "SPDX-License-Identifier: AGPL-3.0-only OR
+    GPL-3.0-only OR LicenseRef-Element-Commercial", so that it can be
+    proposed upstream unchanged. The header is not a statement of what
+    inblock.io assets GmbH grants: it does not offer Element's commercial
+    license, and this NOTICE states the grant.
 
     AUTHORS.rst, docs/labs.md and apps/web/src/i18n/strings/en_EN.json
     have no header and fall under Element Web's README, which offers the
@@ -44,6 +76,11 @@ patches/element-web/*.patch
 
     The following changes are licensed differently. None of them is part
     of the built web application: they are documentation and tests.
+
+    - docs/web-event-index.md, added by browser-eventindex.patch, has no
+      header. Like Element Web's own headerless files above, it is
+      licensed AGPL-3.0-or-later OR GPL-3.0-or-later, the licenses Element
+      Web's README offers.
 
     - docs/.vitepress/config.ts, changed by browser-eventindex.patch, is
       offered by Element under "AGPL-3.0-only OR
@@ -77,7 +114,10 @@ Brand assets
 
 The following files are logos and brand material of inblock.io assets
 GmbH. They are not licensed under the Apache License or under any other
-license. A deployment of this bundle must replace them with its own:
+license: all rights are reserved. The license labels of the images call
+them LicenseRef-inblockio-brand-assets, which means exactly this: the
+files listed here, with no license granted. A deployment of this bundle
+must replace them with its own:
 
     config/element-welcome-background.svg
     config/favicon.ico
@@ -150,13 +190,26 @@ scripts/turnprobe/main.go
 Upstream sources
 ----------------
 
-The patches apply to the upstream releases pinned in dockerfiles/Dockerfile
-(the FROM line) and dockerfiles/Dockerfile.element (ELEMENT_WEB_TAG). The
-images are built on those releases, and their source is not part of this
-repository:
+The images are built from these upstream projects, at the releases and
+commits pinned in dockerfiles/. Their source is not part of this
+repository.
 
-    Synapse       https://github.com/element-hq/synapse
-    Element Web   https://github.com/element-hq/element-web
+    Synapse           https://github.com/element-hq/synapse
+        AGPL-3.0-or-later. Pinned by the FROM line of dockerfiles/Dockerfile.
+    Element Web       https://github.com/element-hq/element-web
+        AGPL-3.0 or GPL-3.0 (see "Patches" above), or Element's commercial
+        license. Pinned by ELEMENT_WEB_TAG and ELEMENT_WEB_COMMIT in
+        dockerfiles/Dockerfile.element.
+    Caddy             https://github.com/caddyserver/caddy
+        Apache-2.0. Copyright 2015 Matthew Holt and The Caddy Authors.
+    caddy-l4          https://github.com/mholt/caddy-l4
+        Apache-2.0. Copyright 2020 Matthew Holt.
+    caddy-ratelimit   https://github.com/mholt/caddy-ratelimit
+        Apache-2.0. Copyright 2021 Matthew Holt.
+        Caddy and both modules are pinned in dockerfiles/Dockerfile.caddy-l4.
+    yq                https://github.com/mikefarah/yq
+        MIT. Copyright (c) 2017 Mike Farah. Pinned, with its checksum, in
+        dockerfiles/Dockerfile; the synapse image ships its LICENSE.
 
 Upstream pull requests that a patch backports or mirrors:
 
@@ -167,5 +220,48 @@ Upstream pull requests that a patch backports or mirrors:
     patches/element-web/sw-versions-no-cache-on-error.patch
         https://github.com/element-hq/element-web/pull/35242
 
-Container images built from this repository contain these upstream
-programs and other third-party software, each under its own license.
+
+Container images
+----------------
+
+The images built from this repository (synapse, element-web and
+caddy-l4) contain the upstream programs above and other third-party
+software, each under its own license. The Caddy and yq binaries are
+statically linked Go programs that include Go modules by other authors;
+`go version -m <binary>` lists them. Every image carries this NOTICE
+and LICENSE in /usr/share/licenses/siwx-oidc-matrix-server/, and:
+
+    synapse       /usr/share/licenses/yq/LICENSE. Its Debian base lists
+                  its packages' licenses in /usr/share/doc/*/copyright.
+    element-web   /usr/share/licenses/element-web/ (Element Web's
+                  LICENSE-AGPL-3.0 and LICENSE-GPL-3.0, from the upstream
+                  checkout) and /usr/share/licenses/alpine/.
+    caddy-l4      /usr/share/licenses/alpine/.
+
+Corresponding source. The source of an image is the upstream release its
+Dockerfile pins plus this repository's patches/, dockerfiles/ and the
+other files the Dockerfile copies, at the commit that the image's
+org.opencontainers.image.revision label names:
+https://github.com/inblockio/siwx-oidc-matrix-server/tree/<revision>.
+
+Alpine packages. The element-web image is built on
+nginxinc/nginx-unprivileged:1.31.6-alpine-slim, which is Alpine Linux
+3.24.2, and the caddy-l4 image on caddy:2.11.4, which is Alpine Linux
+3.23.6. Their Alpine packages, BusyBox (GPL-2.0-only) among them, are
+built from the aports repository; the release tags and source archives
+are:
+
+    Alpine Linux 3.24.2
+        https://gitlab.alpinelinux.org/alpine/aports/-/tree/v3.24.2
+        https://distfiles.alpinelinux.org/distfiles/v3.24/
+    Alpine Linux 3.23.6
+        https://gitlab.alpinelinux.org/alpine/aports/-/tree/v3.23.6
+        https://distfiles.alpinelinux.org/distfiles/v3.23/
+
+Each package's aports origin and commit are recorded in the image's
+/lib/apk/db/installed (fields o: and c:). The texts of the licenses these
+packages declare are in /usr/share/licenses/alpine/, taken from SPDX
+license-list-data v3.29.0. The nginx package in the element-web image is
+NGINX's own build (https://github.com/nginx/pkg-oss), not an aports
+package; its license is in /usr/share/licenses/nginx/COPYRIGHT. tzdata and
+mailcap declare themselves public domain and have no license text.

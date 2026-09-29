@@ -29,7 +29,7 @@ redis (persistence, AOF-enabled)
 ## How login works (end to end)
 
 1. User opens Element at `https://{CLIENT_HOST}`
-2. Element reads `m.authentication.issuer` from config.json, discovers OIDC at `{issuer}/.well-known/openid-configuration`
+2. Element takes the homeserver from config.json (`default_server_config`) and asks it for its auth metadata (`GET /_matrix/client/v1/auth_metadata`, or the MSC2965 unstable path on servers older than spec v1.15); Synapse answers with siwx-oidc's discovery document, which names the issuer and its endpoints
 3. Element starts authorization_code + PKCE flow: redirects to `{issuer}/authorize`
 4. siwx-oidc serves the login UI (wallet connect or passkey)
 5. User signs CAIP-122 challenge with wallet (or authenticates via WebAuthn passkey)
@@ -83,10 +83,10 @@ start-matrix.sh
 
 - **First boot vs every boot**: `homeserver.yaml` is generated once; the first-boot keys (server name, listener, retention, server notices) change only by editing the file inside the `matrix_data` volume. Delegated auth, MatrixRTC and the DID-field denylist are rewritten on every boot. AGENTS.md has the full table.
 - **Env prefix**: the stack uses siwx-oidc's legacy `SIWEOIDC_` prefix; siwx-oidc still reads it and prefers `SIWXOIDC_` when both are set.
-- **Signing key lifecycle**: P-256 PEM generated once by start-matrix.sh, stored in .env. If lost, all issued tokens become invalid.
+- **Signing key lifecycle**: P-256 PEM generated once by start-matrix.sh, stored in .env. Access and refresh tokens are opaque Redis entries, so a new key signs no one out; it breaks verification of ID tokens signed with the old key and of every published `io.inblock.did` proof, until each user's next sign-in, unless the old public key is listed in `SIWXOIDC_RETIRED_SIGNING_KEYS_PEM`.
 - **Shared secret**: `MAS_SHARED_SECRET` must match between Synapse config and siwx-oidc config. Mismatch causes 401 on every introspection call, breaking all auth.
 - **Network topology**: siwx-oidc and Synapse communicate on the Docker `default` network. The `portal-net` external network connects to the reverse proxy.
-- **Reverse proxy routing**: The proxy must route `/_matrix/client/v3/{login,logout,logout/all,refresh,delete_devices}` and `/_matrix/client/v3/devices/*` to siwx-oidc (not Synapse); Synapse does not serve login, logout or refresh under delegated auth. All other `/_matrix/*` routes go to Synapse, except `/_synapse/admin/*` and `/_synapse/mas/*`, which the proxy must not expose. `Caddyfile.local` has the routes.
+- **Reverse proxy routing**: The proxy must route `/_matrix/client/v3/{login,logout,logout/all,refresh,delete_devices}` and `DELETE /_matrix/client/v3/devices/{id}` to siwx-oidc (not Synapse); Synapse does not serve login, logout or refresh under delegated auth. Only `DELETE` goes to siwx-oidc on `devices/*`: `GET` and `PUT` of a device stay on Synapse, which siwx-oidc would answer with 405. All other `/_matrix/*` routes go to Synapse, except `/_synapse/admin/*` and `/_synapse/mas/*`, which the proxy must not expose. `Caddyfile.local` has the routes.
 
 ## Common mistakes
 
@@ -94,7 +94,7 @@ start-matrix.sh
 |---|---|
 | Editing matrix_server.sh expecting it to take effect | Nothing changes until the Synapse image is rebuilt (the entrypoint is baked in); first-boot keys never change on an existing volume |
 | Mismatched MAS_SHARED_SECRET between services | All auth fails with 401 |
-| Deleting .env and recreating (new signing key) | All existing tokens invalidated |
+| Deleting .env and recreating (new signing key and secrets) | Published DID proofs stop verifying until each user signs in again; the new `MAS_SHARED_SECRET` needs both Synapse and siwx-oidc recreated |
 | Not routing login/logout/refresh to siwx-oidc | Element login fails silently or shows "M_UNKNOWN" |
 | Using `--reset` without understanding it | Destroys all data, users, and keys |
 | Exposing siwx-oidc port to host | Security risk; should stay Docker-internal |

@@ -45,20 +45,25 @@ jobs:
         # the repository's own license (Apache-2.0) on all three, which is
         # wrong for an image that ships AGPL Synapse or Element Web. The
         # expressions name what this repository puts in the image, not every
-        # package of the base image.
+        # package of the base image (those are listed, with their license
+        # texts, under /usr/share/licenses/ in the image; see NOTICE,
+        # "Container images").
         include:
           # Synapse with our patch (AGPL-3.0-or-later), our entrypoint
           # (Apache-2.0), yq (MIT).
           - image: synapse
             dockerfile: dockerfiles/Dockerfile
             licenses: 'AGPL-3.0-or-later AND Apache-2.0 AND MIT'
-          # Element Web with our patches (AGPL-3.0-only OR GPL-3.0-only), our
-          # overlay (Apache-2.0), the nginx skeleton in
-          # config/element-nginx.conf (BSD-2-Clause), and the brand assets,
-          # which are not licensed (NOTICE, "Brand assets").
+          # Element Web with our patches (AGPL-3.0-only OR GPL-3.0-only; the
+          # en_EN.json strings they add are AGPL-3.0-or-later OR
+          # GPL-3.0-or-later), our overlay (Apache-2.0), the nginx skeleton in
+          # config/element-nginx.conf (BSD-2-Clause), the Nord theme in
+          # config/element-config.json (Unlicense), and the brand assets,
+          # which are not licensed (NOTICE defines
+          # LicenseRef-inblockio-brand-assets under "Brand assets").
           - image: element-web
             dockerfile: dockerfiles/Dockerfile.element
-            licenses: '(AGPL-3.0-only OR GPL-3.0-only) AND Apache-2.0 AND BSD-2-Clause AND LicenseRef-inblockio-brand-assets'
+            licenses: '(AGPL-3.0-only OR GPL-3.0-only) AND (AGPL-3.0-or-later OR GPL-3.0-or-later) AND Apache-2.0 AND BSD-2-Clause AND Unlicense AND LicenseRef-inblockio-brand-assets'
           # caddy-l4: Caddy with the layer4 module, the edge that terminates
           # TURN-TLS on :443 by SNI (see dockerfiles/Dockerfile.caddy-l4).
           # Publishing it here lets a deployment's edge pull a CI-built,
@@ -157,12 +162,16 @@ jobs:
         id: check-secret
         run: echo "ok=${{ secrets.DEV_STAGING_DEPLOY_KEY != '' && secrets.DEV_DEPLOY_HOST != '' && secrets.DEV_DEPLOY_PORT != '' && secrets.DEV_DEPLOY_USER != '' && secrets.DEV_DEPLOY_KNOWN_HOSTS != '' }}" >> "$GITHUB_OUTPUT"
 
+      # Through env:, never interpolated into the script: an expression inside
+      # `run:` is pasted into the shell source before it runs.
       - name: Install deploy key
         if: steps.check-secret.outputs.ok == 'true'
+        env:
+          DEV_STAGING_DEPLOY_KEY: ${{ secrets.DEV_STAGING_DEPLOY_KEY }}
         run: |
           install -m 700 -d ~/.ssh
           umask 077
-          printf '%s\n' "${{ secrets.DEV_STAGING_DEPLOY_KEY }}" > ~/.ssh/dev_staging_deploy_key
+          printf '%s\n' "$DEV_STAGING_DEPLOY_KEY" > ~/.ssh/dev_staging_deploy_key
           chmod 600 ~/.ssh/dev_staging_deploy_key
 
       - name: Pin the deploy target's host key

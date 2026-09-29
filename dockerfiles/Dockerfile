@@ -1,7 +1,7 @@
 # Minimum version: v1.157.0. The stable matrix_authentication_service block
 # exists since v1.136.0 (2025-08-12); v1.157.0 is the first release that
 # REQUIRES it, because it removed experimental_features.msc3861.
-# Pinned to v1.159.0 (2026-08-30). This bump was FORCED: 1.157.2 is a security
+# Moved to v1.159.0 on 2026-08-30. That bump was FORCED: 1.157.2 is a security
 # release (6 high / 3 moderate / 2 low) with no backport to 1.156.x, and 1.157.0
 # removed experimental_features.msc3861 outright — so taking the security fix
 # required migrating the entrypoint to the stable matrix_authentication_service
@@ -30,12 +30,17 @@
 FROM matrixdotorg/synapse:v1.161.0@sha256:6b95dd129e35e97e8032cb759e5db4a516a5f7ef6c98d34d716fea1ae239b62a
 # yq, pinned by version and SHA-256 (was `.../releases/latest/download/...`,
 # which re-resolved to whatever was newest on every rebuild). Bump deliberately:
-# the version and the checksum change together. Fetched with curl, which the
-# base image already ships (its own HEALTHCHECK uses it), so no package manager
-# is involved.
+# the version, the binary's checksum and the LICENSE's (below) change together.
+# Fetched with curl, which the base image already ships (its own HEALTHCHECK
+# uses it), so no package manager is involved.
 RUN curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.53.3/yq_linux_amd64 -o /usr/bin/yq \
     && echo "fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4  /usr/bin/yq" | sha256sum -c - \
     && chmod +x /usr/bin/yq
+# yq is MIT-licensed, and MIT requires its notice in every copy of the binary:
+# the LICENSE of the same release tag, checked like the binary. A remote ADD
+# gets mode 0600, hence --chmod.
+ADD --chmod=0644 --checksum=sha256:697db34dabb21562fe84487a2ccd031fbd45382b89c2cbdec8ef31682c486040 \
+    https://raw.githubusercontent.com/mikefarah/yq/v4.53.3/LICENSE /usr/share/licenses/yq/LICENSE
 # ---------------------------------------------------------------------------
 # Vendored Synapse patches. patches/synapse/README.md is the registry: no patch
 # ships without an entry there stating why, the evidence, and its retirement

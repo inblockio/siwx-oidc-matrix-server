@@ -76,9 +76,9 @@ services:
     # Built by the separate siwx-oidc repo, so it is versioned independently of
     # synapse + element-web. SIWX_OIDC_IMAGE_REF is a FULL image ref (not a
     # bare tag, which the old SIWX_OIDC_TAG was) so that a digest-only
-    # `ghcr.io/inblockio/siwx-oidc@sha256:…` pin is expressible — the promoted
-    # digests are tagged `:dev` on GHCR while `:main` resolves elsewhere
-    # (builds are not reproducible), so a tag name would misdescribe the bytes.
+    # `ghcr.io/inblockio/siwx-oidc@sha256:…` pin is expressible. CI builds are
+    # not reproducible, and a branch tag such as `:main` moves with every
+    # build, so a tag name alone can misdescribe the bytes a deployment runs.
     # Default: immutable, like SYNAPSE_IMAGE_REF above. The build siwx-oidc's CI
     # published from its main at 40efae9 (2026-09-29).
     image: ${SIWX_OIDC_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc:sha-40efae9@sha256:54739f4813bfa5dcfb104cdfdf1fedd4c7b7ff7a4c307059128cf047a30ba12f}
@@ -99,6 +99,12 @@ services:
       SIWEOIDC_SUPPORTED_DID_METHODS: '["pkh","key"]'
       SIWEOIDC_MATRIX_SERVER_NAME: ${MATRIX_HOST}
       RUST_LOG: ${RUST_LOG}
+      # Opt-ins, off when empty (set them in .env; see .env.example). The
+      # three names exist in siwx-oidc builds from 2026-09-30 on; an older
+      # build ignores the two URIs and also reads an empty ENS URL as off.
+      SIWXOIDC_ENS_API_URL: ${SIWXOIDC_ENS_API_URL:-}
+      SIWXOIDC_OP_TOS_URI: ${SIWXOIDC_OP_TOS_URI:-}
+      SIWXOIDC_OP_POLICY_URI: ${SIWXOIDC_OP_POLICY_URI:-}
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:${SIWEOIDC_PORT}/.well-known/openid-configuration"]
       interval: 10s
@@ -155,7 +161,8 @@ services:
       # firewall must allow 20100:20200/udp before this is rolled out. The
       # range moved here from 50100-50200, which sat inside the ephemeral range.
       - "20100-20200:20100-20200/udp"
-      # Embedded TURN (the `turn:` block in config/livekit.yaml lists what the
+      # Embedded TURN, used only when `turn.enabled` is true in
+      # config/livekit.yaml (off by default; its `turn:` block lists what the
       # edge needs). UDP leg only: TURN-TLS terminates at the edge
       # (caddy-l4 SNI split on 443 → plaintext TURN to container port 5349
       # over the proxy network), so 5349 must NOT be host-published. ufw must

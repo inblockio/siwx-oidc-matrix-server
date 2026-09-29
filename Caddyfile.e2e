@@ -3,10 +3,10 @@
 # Single public entrypoint on :18080. HTTP only, no TLS, no DNS. Models on:
 #   - Caddyfile.local           — .well-known/matrix/client (issuer + rtc_foci),
 #                                 /livekit/jwt + /livekit/sfu reverse proxies.
-#   - the running siwx-real-caddy — the MSC3861 method-route split that forwards
-#                                 the CS-API endpoints siwx-oidc owns
-#                                 (src/axum_lib.rs route table) to siwx-oidc,
-#                                 while Synapse 404s them under delegated auth.
+#   - siwx-oidc's route table (src/axum_lib.rs) — the client-server API
+#                                 endpoints siwx-oidc serves go to siwx-oidc,
+#                                 because Synapse does not serve them under
+#                                 delegated auth.
 #
 # Topology (podman network siwx-e2eh-net):
 #   - siwx-oidc       : siwx-e2eh-oidc:8081
@@ -53,8 +53,8 @@
 
 	# --- MSC3861-owned endpoints → siwx-e2eh-oidc -------------------------------
 	# Endpoints siwx-oidc registers (login flow, logout, logout/all, refresh,
-	# delete_devices, devices/{id}). Synapse 404s them under MSC3861; the edge
-	# routes them to siwx-oidc, exactly as the real stack / prod does.
+	# delete_devices, DELETE devices/{id}). Synapse does not serve login, logout
+	# or refresh under delegated auth, so the edge routes them to siwx-oidc.
 	handle /_matrix/client/v3/login {
 		import public_cors
 		reverse_proxy siwx-e2eh-oidc:8081 {
@@ -79,8 +79,13 @@
 			import strip_upstream_cors
 		}
 	}
-	# Prefix-match also covers DELETE /_matrix/client/v3/devices/{device_id}.
-	handle /_matrix/client/v3/devices/* {
+	# DELETE /_matrix/client/v3/devices/{device_id} only. siwx-oidc registers no
+	# other method there, so GET and PUT on a device stay on Synapse.
+	@siwx_device_delete {
+		method DELETE
+		path /_matrix/client/v3/devices/*
+	}
+	handle @siwx_device_delete {
 		import public_cors
 		reverse_proxy siwx-e2eh-oidc:8081 {
 			import strip_upstream_cors
@@ -105,10 +110,10 @@
 	# Port 7880 muxes WebSocket signaling AND the Twirp management API, which no
 	# upstream flag can split or disable, so the edge is the only place to
 	# restrict it (S3, 2026-08-01 av-hardening audit). Kept here so the harness
-	# exercises the same routing as the production edge, though this stack's
-	# lk-jwt talks to the SFU directly and never crosses this edge — so a green
-	# harness does NOT validate the production hairpin, only that the block
-	# does not break ordinary SFU traffic.
+	# exercises the same routing as Caddyfile.local, though this stack's lk-jwt
+	# talks to the SFU directly and never crosses this edge — so a green harness
+	# does NOT validate a deployment's lk-jwt hairpin, only that the block does
+	# not break ordinary SFU traffic.
 	@livekit_twirp_public {
 		not remote_ip private_ranges
 	}
@@ -129,7 +134,7 @@
 		reverse_proxy siwx-e2eh-livekit:7880
 	}
 
-	# SEC-0003 parity: never expose Synapse admin / MAS provisioning at the edge.
+	# SEC-0003: never expose Synapse admin / MAS provisioning at the edge.
 	handle /_synapse/admin/* {
 		respond 404
 	}

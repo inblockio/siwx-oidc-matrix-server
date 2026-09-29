@@ -19,7 +19,8 @@ The Synapse and Element Web images built here are **not stock**: see
 > maintain it for third-party deployments**: the maintainers maintain it for their own
 > use, and interfaces may change without notice. There are no tagged releases yet; `main`
 > is what runs. Contributions and security reports are welcome and handled best-effort;
-> see [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). Rules for
+> see [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). **No CLA** is
+> required: contributions are licensed under Apache-2.0 per its §5. Rules for
 > contributors and coding agents: [AGENTS.md](AGENTS.md).
 
 ## Table of Contents
@@ -61,7 +62,9 @@ The Synapse and Element Web images built here are **not stock**: see
   `Caddyfile.local`), PostgreSQL (Synapse runs on SQLite), coturn (LiveKit's embedded TURN
   is used instead), and MAS.
 - **Brand assets are not licensed.** The inblock.io logos, favicons and welcome background
-  in `config/` must be replaced by a deployment (see [License](#license)).
+  in `config/`, and the logo at the repository root, are not licensed for reuse. The ones
+  in `config/` go into the Element image, so a deployment must replace them (see
+  [License](#license)).
 
 ## Quick Start
 
@@ -84,6 +87,12 @@ siwx-oidc, and the `/_synapse/admin/*` and `/_synapse/mas/*` paths it must not e
 has a hostname-based Caddy example. For a local, HTTP-only stack with Caddy included, use
 `docker-compose.local.yml` (see its header).
 
+Calls go through LiveKit. Its embedded TURN is **off** in `config/livekit.yaml`, so
+clients behind symmetric NAT or strict firewalls cannot join a call. Enabling it needs an
+edge that splits `:443` by SNI (the `caddy-l4` image), a DNS record for the TURN host,
+3478/udp open, and `turn.enabled: true` with your `turn.domain` in `config/livekit.yaml`;
+the `/siwx-matrix-setup` skill has the steps.
+
 ## Services
 
 | Service | Image (default in `docker-compose.yml`) | Purpose |
@@ -92,7 +101,7 @@ has a hostname-based Caddy example. For a local, HTTP-only stack with Caddy incl
 | `siwx-oidc` | `ghcr.io/inblockio/siwx-oidc` | OIDC provider (passkey, wallet and agent-key sign-in); takes the place of MAS as Synapse's auth service |
 | `redis` | `redis:8.10.2` | Session and token store for siwx-oidc |
 | `element-web` | `ghcr.io/inblockio/siwx-oidc-matrix-server/element-web`, built from source by `dockerfiles/Dockerfile.element` (Element Web + 10 patches) | Web client |
-| `livekit` | `livekit/livekit-server` | MatrixRTC SFU for Element Call, with embedded TURN |
+| `livekit` | `livekit/livekit-server` | MatrixRTC SFU for Element Call; embedded TURN is off by default |
 | `lk-jwt-service` | `ghcr.io/element-hq/lk-jwt-service` | Issues LiveKit access tokens to Matrix users |
 
 The reverse proxy is not a service in `docker-compose.yml`. The maintainers' deployments
@@ -121,13 +130,14 @@ deployment is known to run a different version.
 | Element Web serving base | `nginxinc/nginx-unprivileged:1.31.6-alpine-slim@sha256:c81a27f28bc2…` | `dockerfiles/Dockerfile.element` (runtime `FROM`) | Stock, with our `config/element-nginx.conf` and security headers |
 | siwx-oidc | default `ghcr.io/inblockio/siwx-oidc:sha-40efae9@sha256:54739f4813bf…` (CI build of siwx-oidc main at 40efae9) | `docker-compose.yml` (`SIWX_OIDC_IMAGE_REF`) | First-party, built in [inblockio/siwx-oidc](https://github.com/inblockio/siwx-oidc) |
 | Redis | `8.10.2` (`redis:8.10.2@sha256:d5ac52db24d4…`) | `docker-compose.yml` (`REDIS_IMAGE_REF`) | Stock, run with `--appendonly yes` |
-| LiveKit server | `v1.13.7` (`livekit/livekit-server:v1.13.7@sha256:6fd3b7088874…`) | `docker-compose.yml` (`LIVEKIT_IMAGE_REF`) | Stock, configured by `config/livekit.yaml` (embedded TURN) |
+| LiveKit server | `v1.13.7` (`livekit/livekit-server:v1.13.7@sha256:6fd3b7088874…`) | `docker-compose.yml` (`LIVEKIT_IMAGE_REF`) | Stock, configured by `config/livekit.yaml` (embedded TURN, off by default) |
 | lk-jwt-service | `0.7.0` (`ghcr.io/element-hq/lk-jwt-service:0.7.0@sha256:e0c7cecfa74e…`) | `docker-compose.yml` (`LK_JWT_IMAGE_REF`) | Stock, configured |
 | Caddy | `v2.11.4` (`caddy:2.11.4-builder@sha256:369218c81ca6…`, `caddy:2.11.4@sha256:0c994536bddb…`) | `dockerfiles/Dockerfile.caddy-l4` (builder and final `FROM`) | **Custom build** with xcaddy and the two modules below. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/caddy-l4` |
 | Caddy module `layer4` (mholt/caddy-l4) | `v0.1.2` | `dockerfiles/Dockerfile.caddy-l4` (`xcaddy build`) | Stock module (TURN-TLS SNI split on :443) |
 | Caddy module `rate_limit` (mholt/caddy-ratelimit) | commit `5625512f24f6` (upstream has no tag after `v0.1.0`) | `dockerfiles/Dockerfile.caddy-l4` (`xcaddy build`) | Stock module at a commit (edge rate limit for siwx-oidc `GET /resolve`) |
 | Caddy image an edge runs | a CI build of `caddy-l4`, pinned by digest | Not in this repository: the edge is configured per deployment | Built here |
-| yq (Synapse image) | `v4.53.3`, SHA-256 checked | `dockerfiles/Dockerfile` (`yq` download step) | Stock binary |
+| yq (Synapse image) | `v4.53.3`, SHA-256 checked, binary and `LICENSE` | `dockerfiles/Dockerfile` (`yq` download step and the `ADD` of its `LICENSE`) | Stock binary |
+| License texts (Element and caddy-l4 images) | SPDX license-list-data `v3.29.0`, one SHA-256 per text | `dockerfiles/Dockerfile.element`, `dockerfiles/Dockerfile.caddy-l4` (`alpine_licenses` stage) | Stock texts; which ones is checked against the base image's packages at build time |
 | Debian `patch` (Synapse image build) | not version-pinned: floats within the Debian release (trixie) that the base digest fixes. Build tool only: installed, used and purged in one layer, so it is not in the image | `dockerfiles/Dockerfile` (patch step) | Stock |
 | Database | SQLite at `/data/homeserver.db` (Synapse's generated default) | `entrypoints/matrix_server.sh` (`/start.py generate`) | Stock; not a separate service |
 
@@ -150,15 +160,14 @@ do:
 - **Build-time package**: Debian `patch` in the Synapse build (`dockerfiles/Dockerfile`)
   floats on purpose, within the Debian release the base digest fixes, and is purged
   before its layer ends.
-- **CI**: `.github/workflows/docker.yml` uses actions by major tag
-  (`actions/checkout@v4`, `docker/login-action@v3`, `docker/metadata-action@v5`,
-  `docker/build-push-action@v6`) on `ubuntu-latest`. `.github/workflows/checks.yml`
-  pins its one action by commit and runs on `ubuntu-24.04`.
+- **CI runner image**: both workflows run on `ubuntu-24.04`, which GitHub updates within
+  that release. Every action they use is pinned by commit, with the release named in a
+  comment, so the actions themselves do not float.
 
 The other image references in the Dockerfiles, compose files and `e2e-harness/`
 scripts are pinned by digest, with the version tag alongside wherever one exists
 (the local and test stacks included); the Element Web source tag is checked against
-its commit, and the yq download against its checksum.
+its commit, and the yq download and the license texts against their checksums.
 
 ## Upstream deviations (patches)
 
@@ -282,6 +291,18 @@ Hostname for the siwx-oidc OIDC provider (e.g., `siwx-oidc.example.com`).
 
 Port for the siwx-oidc service. Default: `8081`.
 
+#### Opt-ins set in `.env` (no flag)
+
+`docker-compose.yml` passes three more siwx-oidc settings through from `.env`. Each is
+off when unset or empty; they need a siwx-oidc build from 2026-09-30 on. See
+`.env.example` and siwx-oidc's
+[configuration reference](https://github.com/inblockio/siwx-oidc/blob/main/docs/configuration.md).
+
+- `SIWXOIDC_ENS_API_URL`: an ENS API that puts Ethereum users' ENS names in the `name`
+  claim. Setting it sends each Ethereum user's address to that service.
+- `SIWXOIDC_OP_TOS_URI`, `SIWXOIDC_OP_POLICY_URI`: your terms of service and privacy
+  policy, advertised in OIDC discovery. Unset, discovery leaves them out.
+
 ### Matrix
 
 #### --MATRIX_HOST **Required**
@@ -330,8 +351,14 @@ chmod 600 .env
 ### OIDC signing key
 
 An EC P-256 signing key is auto-generated on first run and stored in `.env`
-(never as a separate file on disk). Do not delete it; tokens become invalid
-if the key changes.
+(never as a separate file on disk). Back it up with `.env`. Access and refresh tokens are
+opaque entries in Redis, so a new key signs no one out. What a key change breaks: ID
+tokens signed with the old key no longer verify against siwx-oidc's JWKS, and neither
+does any `io.inblock.did` proof already published in a user's profile, until that user's
+next sign-in publishes a new one. To keep the old proofs verifiable, list the old key's
+public half in `SIWXOIDC_RETIRED_SIGNING_KEYS_PEM` (siwx-oidc,
+[Key rotation](https://github.com/inblockio/siwx-oidc/blob/main/docs/configuration.md#key-rotation)). `docker-compose.yml` does not pass that variable through: add it to
+the `siwx-oidc` service's `environment`, for example in `docker-compose.override.yml`.
 
 ### Reverse proxy
 
@@ -421,16 +448,26 @@ they contain and sets out two exceptions in full:
 
 - **Patches.** The `.patch` files under `patches/` change Synapse and Element Web, so
   each change takes the license of the upstream file it changes: AGPL-3.0-or-later for
-  Synapse (and for the test in `patches/synapse/tests/`), and for the Element Web code
-  the image ships, AGPL-3.0-only OR GPL-3.0-only.
+  Synapse (and for the test in `patches/synapse/tests/`, which carries Synapse's notice for
+  the set-up code it reuses), and for the Element Web code the image ships,
+  AGPL-3.0-only OR GPL-3.0-only.
 - **Brand assets.** The inblock.io logos, favicons and welcome background are not
   licensed. A deployment must replace them with its own.
 
-**AGPL and network use (not legal advice).** A deployment of this bundle serves
-modified AGPL-3.0 programs to its users over a network: Synapse, and Element Web when
-it is used under the AGPL. Section 13 of the AGPL then requires the operator to offer
-those users the Corresponding Source of the modified programs. The patches and
-Dockerfiles published here are those modifications, which is likely what meets that
-obligation for inblock.io's own deployment. If you run this bundle, link your users to
-the source you run (for example from the client's About page), and check your
+**Images.** Each image ships this repository's LICENSE and NOTICE, and the license texts
+of what it adds: yq's in the Synapse image, Element Web's AGPL-3.0 and GPL-3.0 texts in
+the Element image, and the texts of every license its Alpine packages declare in the
+Element and caddy-l4 images (a build step fails when those disagree). NOTICE, "Container
+images", names the Alpine releases and their source. An image's corresponding source is
+the upstream release its Dockerfile pins plus this repository at the commit its
+`org.opencontainers.image.revision` label names.
+
+**AGPL and conveying (not legal advice).** A deployment of this bundle serves modified
+AGPL-3.0 programs to its users over a network: Synapse, and Element Web when it is used
+under the AGPL. Section 13 of the AGPL then requires the operator to offer those users
+the Corresponding Source of the modified programs. Element Web is also *conveyed*: its
+JavaScript is sent to every browser that loads it, so the source obligations for
+conveying apply to it under either license, AGPL-3.0 or GPL-3.0. The patches and
+Dockerfiles published here are the modifications. If you run this bundle, link your
+users to the source you run (for example from the client's About page), and check your
 obligations with counsel.

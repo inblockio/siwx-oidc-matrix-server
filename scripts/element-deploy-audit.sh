@@ -14,8 +14,7 @@
 #   element-deploy-audit.sh <element-origin> <matrix-origin> [--server-name <name>]
 #
 # Example:
-#   element-deploy-audit.sh https://dev.element.inblock.io https://dev.matrix.inblock.io
-#   element-deploy-audit.sh https://element.inblock.io https://matrix.inblock.io
+#   element-deploy-audit.sh https://element.example.org https://matrix.example.org
 #
 # Dependencies: curl, grep, awk (POSIX-ish). jq is used opportunistically for
 # the MSC1929 JSON check if present on PATH; a grep-level fallback covers its
@@ -32,7 +31,7 @@ FAIL_COUNT=0
 
 usage() {
     echo "Usage: $0 <element-origin> <matrix-origin> [--server-name <name>]" >&2
-    echo "Example: $0 https://dev.element.inblock.io https://dev.matrix.inblock.io" >&2
+    echo "Example: $0 https://element.example.org https://matrix.example.org" >&2
     exit 2
 }
 

@@ -39,12 +39,35 @@ Then runs `docker compose up --pull always -d`.
 
 The reverse proxy must handle three hostnames with specific routing rules.
 `Caddyfile.local` is the complete, tested route set (HTTP-only, one port per service);
-the example below is its hostname-based shape, trimmed. Use `Caddyfile.local` for the
-MatrixRTC (`/livekit/*`), QR-login rendezvous and CORS details.
+the example below is its hostname-based shape, trimmed, and `caddy adapt` accepts it as
+written. Take the MatrixRTC (`/livekit/*`) and QR-login rendezvous routes from
+`Caddyfile.local`.
 
 ### Caddy example
 
 ```caddyfile
+# Snippets from Caddyfile.local. siwx-oidc sets its own CORS headers; the proxy
+# strips them and sets them once, because two Access-Control-Allow-Origin
+# headers make browsers reject the response.
+(strip_upstream_cors) {
+    header_down -Access-Control-Allow-Origin
+    header_down -Access-Control-Allow-Methods
+    header_down -Access-Control-Allow-Headers
+    header_down -Access-Control-Allow-Credentials
+    header_down -Access-Control-Expose-Headers
+    header_down -Access-Control-Max-Age
+    header_down -Vary
+}
+
+(public_cors) {
+    @cors_preflight method OPTIONS
+    header Access-Control-Allow-Origin "*"
+    header Access-Control-Allow-Methods "GET, HEAD, POST, PUT, DELETE, OPTIONS"
+    header Access-Control-Allow-Headers "X-Requested-With, Content-Type, Authorization, Date"
+    header Access-Control-Max-Age "86400"
+    respond @cors_preflight 204
+}
+
 matrix.example.com {
     # Matrix well-known endpoints
     handle /.well-known/matrix/server {
@@ -56,12 +79,26 @@ matrix.example.com {
         respond `{"m.homeserver": {"base_url": "https://matrix.example.com"}, "m.authentication": {"issuer": "https://siwx-oidc.example.com/", "account": "https://siwx-oidc.example.com/account"}}`
     }
 
-    # Client auth and device routes -> siwx-oidc (Synapse does not serve these
-    # under delegated auth). Caddyfile.local also adds CORS for them.
-    @siwx path /_matrix/client/v3/login /_matrix/client/v3/logout /_matrix/client/v3/logout/all /_matrix/client/v3/refresh /_matrix/client/v3/delete_devices /_matrix/client/v3/devices/*
+    # Client auth routes -> siwx-oidc (Synapse does not serve these under
+    # delegated auth).
+    @siwx path /_matrix/client/v3/login /_matrix/client/v3/logout /_matrix/client/v3/logout/all /_matrix/client/v3/refresh /_matrix/client/v3/delete_devices
     handle @siwx {
+        import public_cors
         reverse_proxy siwx-oidc:8081 {
-            import strip_upstream_cors   # snippet from Caddyfile.local
+            import strip_upstream_cors
+        }
+    }
+
+    # Device deletion -> siwx-oidc. It serves only DELETE on this path, so GET
+    # and PUT of a device must fall through to Synapse.
+    @siwx_device_delete {
+        method DELETE
+        path /_matrix/client/v3/devices/*
+    }
+    handle @siwx_device_delete {
+        import public_cors
+        reverse_proxy siwx-oidc:8081 {
+            import strip_upstream_cors
         }
     }
 
@@ -80,6 +117,7 @@ matrix.example.com {
 }
 
 siwx-oidc.example.com {
+    import public_cors
     reverse_proxy siwx-oidc:8081 {
         import strip_upstream_cors
     }
@@ -101,7 +139,23 @@ element.example.com {
   make browsers reject the response
 - Matrix API endpoints on `matrix.example.com` need CORS for `element.example.com`
 
-## Step 3: Verify
+## Step 3: Calls (LiveKit and TURN)
+
+Calls need the `/livekit/jwt` and `/livekit/sfu` routes from `Caddyfile.local` in the
+proxy, and 7881/tcp and 20100-20200/udp open in the host firewall; the
+`/matrix-rtc-transport-specialist` skill has the rest. `config/livekit.yaml` ships with
+LiveKit's embedded TURN **off**, so clients behind symmetric NAT or strict firewalls
+cannot connect. To enable TURN:
+
+1. Run the edge on the `caddy-l4` image built here, with the `layer4` SNI split on `:443`
+   and a certificate site for the TURN host (the `/matrix-rtc-transport-specialist` skill,
+   "Embedded TURN", has the Caddyfile).
+2. Add a DNS record for the TURN host, e.g. `turn.example.com`, pointing at the server.
+3. In `config/livekit.yaml` set `turn.enabled: true` and `turn.domain` to that host.
+4. Allow 3478/udp in the host firewall. Never publish 5349; only the edge reaches it.
+5. `docker compose up -d --force-recreate livekit`.
+
+## Step 4: Verify
 
 ```bash
 # OIDC discovery
@@ -117,7 +171,7 @@ curl -s https://matrix.example.com/_matrix/client/versions | jq .
 curl -sI https://element.example.com/
 ```
 
-## Step 4: First login
+## Step 5: First login
 
 1. Open `https://element.example.com`
 2. Element discovers the OIDC provider and redirects to `siwx-oidc.example.com`
@@ -125,7 +179,7 @@ curl -sI https://element.example.com/
 4. Sign the CAIP-122 challenge
 5. siwx-oidc provisions the user in Synapse and redirects back to Element
 
-## Step 5: Admin promotion (optional)
+## Step 6: Admin promotion (optional)
 
 ```bash
 # After the target user has logged in at least once:
@@ -155,6 +209,8 @@ docker compose pull && docker compose up -d
 - [ ] `.env` generated (check with `ls -la .env`)
 - [ ] Reverse proxy routes configured (especially login/logout/refresh to siwx-oidc, and
       `/_synapse/admin/*` and `/_synapse/mas/*` not exposed)
+- [ ] Calls: firewall open for 7881/tcp and 20100-20200/udp; TURN enabled only with the
+      caddy-l4 edge (3478/udp open)
 - [ ] OIDC discovery returns valid JSON
 - [ ] `.well-known/matrix/client` returns `m.authentication.issuer`
 - [ ] Element loads and redirects to OIDC login
