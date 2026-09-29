@@ -135,8 +135,8 @@ patches; the table now lists every entry.
 | 6 | `browser-eventindex` | A `BrowserEventIndexManager` implementing `BaseEventIndexManager` so E2EE room search works in hosted Element Web, with a **non-blocking** load so a large index cannot delay app start, bounded crawl/memory/disk budgets, a chunked encrypted store, and a streamed cold scan for what is on disk outside the resident window. Upstream PR #34718 plus increments A, B, C, D-core and E, which lead it. | **yes, via `features.feature_web_event_index: true`** (renamed on prod 2026-09-13) |
 | 7 | `show-attested-did` | Shows the provider-attested DID (`io.inblock.did`) under the MXID in the member panel and in All settings -> Account. | yes, ungated (i18n key `did_label_unsigned` served) |
 | 8 | `resolve-did-search` | A DID typed into Spotlight or the invite/DM dialog resolves to the user's MXID. Depends on 7. | yes, ungated (by build provenance; no surviving string marker) |
-| 9 | `sw-versions-no-cache-on-error` | The service worker never caches a failed `/versions` check, retries it anonymously, and shares one check per server. | **no** (dev-staging test deploy only, 2026-09-28) |
-| 10 | `sw-media-401-token-retry` | A media request that 401s with the stored token waits (5 s bound) for the app's refresh and retries once. | **no** (dev-staging test deploy only, 2026-09-28) |
+| 9 | `sw-versions-no-cache-on-error` | The service worker never caches a failed `/versions` check, retries it anonymously, and shares one check per server. | **no**: dev only (main 2e9eb93, pinned on dev 2026-09-28). Release notes and procedure: `docs/2026-09-28-PENDING-PROMOTION-element-sw-media-auth.md` |
+| 10 | `sw-media-401-token-retry` | A media request that 401s with the stored token waits (5 s bound) for the app's refresh and retries once. | **no**: dev only, ships together with 9 (same doc) |
 
 Entry 6 is the only gated one. **Its gate is now the same everywhere**, which it
 was not before 2026-09-13:
