@@ -7,6 +7,11 @@ promotion; all now built from `main`), and it applies exactly the patches listed
 `git apply --verbose` so **a patch that stops applying fails the image build loudly** —
 never silently at runtime.
 
+**License.** The patches in this directory are not Apache-2.0 like the rest of the
+repository. Each change is licensed like the Element Web file it changes, which for the
+code the image ships means AGPL-3.0-only OR GPL-3.0-only. A docs file, an Apache-2.0 test
+and two tests that adapt an AGPL-only harness differ; [`NOTICE`](../../NOTICE) lists them.
+
 Rules of this registry:
 
 1. **No patch without an entry here.** Every entry states *what*, *why*, the *evidence*
