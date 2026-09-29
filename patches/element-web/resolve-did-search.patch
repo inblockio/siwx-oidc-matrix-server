@@ -136,7 +136,7 @@ index 28a6e6e..7204b4d 100644
          return (
              <RichItem
 diff --git a/apps/web/src/components/views/dialogs/spotlight/SpotlightDialog.tsx b/apps/web/src/components/views/dialogs/spotlight/SpotlightDialog.tsx
-index 0726b93..ef9c4d0 100644
+index 0726b93..d9e6776 100644
 --- a/apps/web/src/components/views/dialogs/spotlight/SpotlightDialog.tsx
 +++ b/apps/web/src/components/views/dialogs/spotlight/SpotlightDialog.tsx
 @@ -55,6 +55,8 @@ import { type ViewRoomPayload } from "../../../../dispatcher/payloads/ViewRoomPa
@@ -183,7 +183,36 @@ index 0726b93..ef9c4d0 100644
          }
  
          return [
-@@ -708,6 +722,12 @@ const SpotlightDialog: React.FC<IProps> = ({ initialText = "", initialFilter = n
+@@ -449,12 +463,18 @@ const SpotlightDialog: React.FC<IProps> = ({ initialText = "", initialFilter = n
+             const lcQuery = trimmedQuery.toLowerCase();
+             const normalizedQuery = normalize(trimmedQuery);
+ 
++            // A DID search hit names a user whose DM (if we have one) matches
++            // nothing in the query text: the DID is in no room name or member
++            // name. Upstream's MXID lookup never needs this, because an MXID is
++            // in the DM's member list. See utils/didLocalpart.ts.
++            const didHitUserId = profile?.did_match ? profile.user_id : undefined;
+             possibleResults.forEach((entry) => {
+                 if (isRoomResult(entry)) {
+                     // If the room is a DM with a user that is part of the user directory search results,
+                     // we can assume the user is a relevant result, so include the DM with them too.
+                     const userId = DMRoomMap.shared().getUserIdForRoomId(entry.room.roomId);
+-                    if (!userDirectorySearchResults.some((user) => user.userId === userId)) {
++                    const isDidHitDm = !!didHitUserId && userId === didHitUserId;
++                    if (!isDidHitDm && !userDirectorySearchResults.some((user) => user.userId === userId)) {
+                         if (
+                             !entry.room.normalizedName?.includes(normalizedQuery) &&
+                             !entry.room.getCanonicalAlias()?.toLowerCase().includes(lcQuery) &&
+@@ -512,7 +532,7 @@ const SpotlightDialog: React.FC<IProps> = ({ initialText = "", initialFilter = n
+         }
+ 
+         return results;
+-    }, [cli, trimmedQuery, filter, possibleResults, userDirectorySearchResults, memberComparator]);
++    }, [cli, trimmedQuery, filter, possibleResults, userDirectorySearchResults, profile, memberComparator]);
+ 
+     const numResults = sum(Object.values(results).map((it) => it.length));
+     useWebSearchMetrics(numResults, query.length, true);
+@@ -708,6 +728,12 @@ const SpotlightDialog: React.FC<IProps> = ({ initialText = "", initialFilter = n
                              className="mx_SpotlightDialog_result_details"
                          >
                              {result.member.userId}
@@ -196,6 +225,44 @@ index 0726b93..ef9c4d0 100644
                          </div>
                      </Option>
                  );
+@@ -816,8 +842,18 @@ const SpotlightDialog: React.FC<IProps> = ({ initialText = "", initialFilter = n
+             );
+         }
+ 
++        // Upstream shows Suggestions only under Filter.People. A DID hit is the
++        // exception: it is found by the lookup that also runs with NO filter
++        // (see the searchProfileInfo call above), and it lands in Suggestions
++        // like every member result. Hiding that section would hide the only
++        // result a DID search can have, so without a filter the section shows
++        // just the DID hits and nothing else upstream would not show.
++        const shownSuggestions =
++            filter === Filter.People
++                ? results[Section.Suggestions]
++                : results[Section.Suggestions].filter((result) => isMemberResult(result) && !!result.didMatch);
+         let suggestionsSection: JSX.Element | undefined;
+-        if (results[Section.Suggestions].length && filter === Filter.People) {
++        if (shownSuggestions.length) {
+             suggestionsSection = (
+                 <div
+                     className="mx_SpotlightDialog_section mx_SpotlightDialog_results"
+@@ -825,7 +861,7 @@ const SpotlightDialog: React.FC<IProps> = ({ initialText = "", initialFilter = n
+                     aria-labelledby="mx_SpotlightDialog_section_suggestions"
+                 >
+                     <h4 id="mx_SpotlightDialog_section_suggestions">{_t("common|suggestions")}</h4>
+-                    <div>{results[Section.Suggestions].slice(0, SECTION_LIMIT).map(resultMapper)}</div>
++                    <div>{shownSuggestions.slice(0, SECTION_LIMIT).map(resultMapper)}</div>
+                 </div>
+             );
+         }
+@@ -1047,7 +1083,7 @@ const SpotlightDialog: React.FC<IProps> = ({ initialText = "", initialFilter = n
+         let noResultsSection: JSX.Element | undefined;
+         const hasResults =
+             !!results[Section.People].length ||
+-            (filter === Filter.People && !!results[Section.Suggestions].length) ||
++            !!shownSuggestions.length ||
+             !!results[Section.Rooms].length ||
+             !!results[Section.Spaces].length ||
+             !!results[Section.PublicRoomsAndSpaces].length ||
 diff --git a/apps/web/src/hooks/useAttestedDid.ts b/apps/web/src/hooks/useAttestedDid.ts
 index 22a15bb..8550365 100644
 --- a/apps/web/src/hooks/useAttestedDid.ts
@@ -2123,3 +2190,118 @@ index 0000000..a7c5e16
 +        ? _t("user_info|did_search_unverified_unpublished")
 +        : _t("user_info|did_search_unverified_unchecked");
 +}
+diff --git a/apps/web/test/unit-tests/components/views/dialogs/SpotlightDialog-test.tsx b/apps/web/test/unit-tests/components/views/dialogs/SpotlightDialog-test.tsx
+index 01b3aea..d54c2dd 100644
+--- a/apps/web/test/unit-tests/components/views/dialogs/SpotlightDialog-test.tsx
++++ b/apps/web/test/unit-tests/components/views/dialogs/SpotlightDialog-test.tsx
+@@ -35,6 +35,7 @@ import SdkConfig from "../../../../../src/SdkConfig";
+ import { Action } from "../../../../../src/dispatcher/actions";
+ import { MetaSpace } from "../../../../../src/stores/spaces";
+ import { SDKContextClass } from "../../../../../src/contexts/SDKContextClass.ts";
++import { resolveDid } from "../../../../../src/utils/didLocalpart";
+ 
+ jest.useFakeTimers();
+ 
+@@ -51,6 +52,14 @@ jest.mock("../../../../../src/dispatcher/dispatcher", () => ({
+     dispatch: jest.fn(),
+ }));
+ 
++// DID search: the lookup itself is covered in utils/didLocalpart.test.ts. Here
++// it is stubbed so these tests pin only how Spotlight SHOWS a hit.
++jest.mock("../../../../../src/utils/didLocalpart", () => ({
++    // @ts-ignore
++    ...jest.requireActual("../../../../../src/utils/didLocalpart"),
++    resolveDid: jest.fn(),
++}));
++
+ interface IUserChunkMember {
+     user_id: string;
+     display_name?: string;
+@@ -504,6 +513,87 @@ describe("Spotlight Dialog", () => {
+         });
+     });
+ 
++    describe("DID search", () => {
++        const did = "did:pkh:eip155:1:0x7a760ea15d76f935c8646b449af488c2b0021734";
++        const didUserId = "@37rb2h7bdij3o1qm:example.tld";
++
++        beforeEach(() => {
++            mocked(resolveDid).mockReset();
++            mocked(mockedClient.getProfileInfo).mockImplementation(async (userId) =>
++                userId === didUserId || userId === testDMUserId
++                    ? { displayname: "Dora Did", avatar_url: undefined }
++                    : Promise.reject(new Error("M_NOT_FOUND")),
++            );
++        });
++
++        async function renderAndSettle(props: { initialFilter?: Filter }): Promise<Element> {
++            render(<SpotlightDialog initialText={did} onFinished={() => null} {...props} />);
++            // search is debounced
++            jest.advanceTimersByTime(200);
++            await flushPromisesWithFakeTimers();
++            return document.querySelector("#mx_SpotlightDialog_content")!;
++        }
++
++        it.each([
++            ["with no filter selected", {}],
++            ["with the people filter", { initialFilter: Filter.People }],
++        ])("shows a verified hit %s", async (_label, props) => {
++            mocked(resolveDid).mockResolvedValue({ userId: didUserId, verification: "verified" });
++            const content = await renderAndSettle(props);
++            await waitFor(() => {
++                const hit = [...content.querySelectorAll("li.mx_SpotlightDialog_option")].find((o) =>
++                    o.textContent?.includes("Dora Did"),
++                );
++                expect(hit).toBeDefined();
++                expect(hit).toHaveTextContent(didUserId);
++                expect(hit).toHaveTextContent("DID verified");
++            });
++            expect(content.querySelector("#mx_SpotlightDialog_button_noResults")).toBeNull();
++            expect(resolveDid).toHaveBeenCalledWith(mockedClient, did, expect.anything());
++        });
++
++        it("marks an unverified hit with no filter selected", async () => {
++            mocked(resolveDid).mockResolvedValue({
++                userId: didUserId,
++                verification: "unverified",
++                reason: "unpublished",
++            });
++            const content = await renderAndSettle({});
++            await waitFor(() => {
++                expect(content).toHaveTextContent("Dora Did");
++                expect(content).toHaveTextContent("DID unverified: not yet published");
++            });
++        });
++
++        it("with no filter selected, adds no suggestions besides the DID hit", async () => {
++            // A room member whose name happens to contain the query would be a
++            // Suggestion under the People filter; without a filter upstream
++            // shows no Suggestions, and that must stay true for everything but
++            // the DID hit.
++            const member = new RoomMember(testRoom.roomId, "@lookalike:example.tld");
++            member.name = member.rawDisplayName = did;
++            mocked(testRoom.getJoinedMembers).mockReturnValue([member]);
++            mocked(resolveDid).mockResolvedValue({ userId: didUserId, verification: "verified" });
++            const content = await renderAndSettle({});
++            await waitFor(() => expect(content).toHaveTextContent("Dora Did"));
++            expect(content).not.toHaveTextContent("@lookalike:example.tld");
++        });
++
++        it("shows the existing DM when the DID names someone we already have a DM with", async () => {
++            mocked(testDM.getJoinedMemberCount).mockReturnValue(2);
++            mocked(resolveDid).mockResolvedValue({ userId: testDMUserId, verification: "verified" });
++            const content = await renderAndSettle({});
++            await waitFor(() => expect(content).toHaveTextContent(testDM.name));
++            expect(content.querySelector("#mx_SpotlightDialog_button_noResults")).toBeNull();
++        });
++
++        it("shows no results when the DID names nobody", async () => {
++            mocked(resolveDid).mockResolvedValue(null);
++            const content = await renderAndSettle({});
++            await waitFor(() => expect(content.querySelector("#mx_SpotlightDialog_button_noResults")).not.toBeNull());
++        });
++    });
++
+     it("should start a DM when clicking a person", async () => {
+         render(
+             <SpotlightDialog

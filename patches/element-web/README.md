@@ -959,7 +959,11 @@ A tag bump must try every patch in this file's order.
 - **One upstream behaviour change beyond the DID path:** Spotlight's profile lookup is
   gated on `filter === Filter.People`, which is right for an MXID but would hide the only
   result a DID has, so the gate is widened by `|| looksLikeDid(trimmedQuery)`. MXIDs keep
-  upstream's behaviour exactly.
+  upstream's behaviour exactly. The hit lands in Spotlight's Suggestions section, which
+  upstream renders only under the People filter, so with NO filter the section is shown
+  holding the DID hit alone (fixed 2026-09-29: before that the lookup ran but its result
+  was never rendered). A DID naming someone we already have a DM with shows that DM,
+  which upstream would drop because the DID is in no room or member name.
 - **Failure behaviour:** never throws. No extended-profile support, no such user, an
   absent or malformed field, a network error — all resolve to "no result", and a DID that
   names nobody is reported as a successful empty search, not an error.
@@ -1034,6 +1038,12 @@ A tag bump must try every patch in this file's order.
   `didLocalpart`, `useProfileInfo`, `InviteDialog` and `DMRoomTile`; `tsc --noEmit` adds
   no errors; oxlint/oxfmt clean; `pnpm --filter element-web build` succeeds. No
   `e2e/element/` leg yet: like entry 7 it needs a lab account with a published DID.
+- **Spotlight coverage (2026-09-29):** 6 jest cases in `SpotlightDialog-test.tsx`
+  (verified hit with no filter and with People, unverified marker with no filter, no
+  other Suggestions leak in with no filter, existing DM shown, no-results). The Spotlight
+  jest suite does not load at v1.12.29 as shipped (`content-type@3` is ESM and missing
+  from `transformIgnorePatterns`); run it with a local config that adds `content-type`
+  to that allowlist: 37/37 with the fix, 4 of the new cases fail without it.
 
 ## Runtime-stage deltas (not `.patch` files, still upstream deviations)
 
