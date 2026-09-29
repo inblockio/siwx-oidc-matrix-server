@@ -115,10 +115,10 @@ do:
   `docker/build-push-action@v6`) on `ubuntu-latest`. `.github/workflows/checks.yml`
   pins its one action by commit and runs on `ubuntu-24.04`.
 
-Everything else is pinned by name and content: images by version tag plus digest
-(the local and test stacks too: `docker-compose.local.yml`, `docker-compose.e2e.yml`
-and the scripts in `e2e-harness/`), the Element Web source tag by its commit, and
-downloads by checksum.
+The other image references in the Dockerfiles, compose files and `e2e-harness/`
+scripts are pinned by digest, with the version tag alongside wherever one exists
+(the local and test stacks included); the Element Web source tag is checked against
+its commit, and the yq download against its checksum.
 
 Production, per the repository's own records: its `.env` pins Redis as
 `redis:latest@sha256:aa049e68…` (`docker-compose.yml:54-61`). The tag reads `latest`,
