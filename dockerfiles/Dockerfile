@@ -1,4 +1,6 @@
-# Minimum version: v1.157.0 (stable matrix_authentication_service integration).
+# Minimum version: v1.157.0. The stable matrix_authentication_service block
+# exists since v1.136.0 (2025-08-12); v1.157.0 is the first release that
+# REQUIRES it, because it removed experimental_features.msc3861.
 # Pinned to v1.159.0 (2026-08-30). This bump was FORCED: 1.157.2 is a security
 # release (6 high / 3 moderate / 2 low) with no backport to 1.156.x, and 1.157.0
 # removed experimental_features.msc3861 outright — so taking the security fix

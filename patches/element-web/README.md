@@ -38,16 +38,23 @@ Rules of this registry:
 4. **Tag-bump procedure** (do this for every `ELEMENT_WEB_TAG` change):
    ```bash
    git clone --depth 1 --branch <newtag> https://github.com/element-hq/element-web.git /tmp/ewcheck
-   for p in $(grep -oE 'patches/element-web/[a-z-]+\.patch' dockerfiles/Dockerfile.element); do
+   for p in $(grep -oE 'patches/element-web/[a-z0-9-]+\.patch' dockerfiles/Dockerfile.element); do
      git -C /tmp/ewcheck apply "$PWD/$p" && echo "OK $p" || { echo "FAIL $p"; break; }
    done
    ```
    Apply IN DOCKERFILE ORDER (several patches touch `en_EN.json`; order is load-bearing).
+   The character class must admit digits: until 2026-09-29 it read `[a-z-]+`, which
+   silently skipped entry 10 (`sw-media-401-token-retry.patch`), so the loop reported
+   nine OKs and never tried the tenth. Check that it prints one line per numbered entry.
    For each failing patch, consult its retirement condition **before** forward-porting:
    an upstream-defect patch that no longer applies often means upstream changed that
    code — check whether they fixed it, and if so DROP the patch, don't port it by reflex.
 5. **Non-`.patch` deltas count too.** The runtime stage of Dockerfile.element also
    modifies the served app; those deltas are listed at the bottom of this file.
+6. **The repo README mirrors this list.** Its "Upstream deviations (patches)" section
+   carries one line per entry, and its "Dependencies" table carries `ELEMENT_WEB_TAG`.
+   Adding, dropping or renumbering a patch, or bumping the tag, updates the README in
+   the same commit.
 
 ---
 
@@ -165,11 +172,11 @@ configured.
 
 **One Dockerfile, all ten patches.** `dockerfiles/Dockerfile.element` applies every
 numbered patch below, in this file's order. Entries 9 (`sw-versions-no-cache-on-error`)
-and 10 (`sw-media-401-token-retry`), both 2026-09-28, touch only the service worker, live
-on branch `fix/ew-sw-versions-401-poison` until merged, and are not on prod; **10 depends
-on 9** and must stay after it. Entries 7
-(`show-attested-did`) and 8 (`resolve-did-search`) were added 2026-09-11 and are
-the newest; entries 1-6 are the set the paragraphs below describe. **8 depends on
+and 10 (`sw-media-401-token-retry`), both 2026-09-28, are the newest. They touch only the
+service worker, were merged to `main` from branch `fix/ew-sw-versions-401-poison` in
+`2e9eb93`, and are not on prod yet (see the table above); **10 depends on 9** and must
+stay after it. Entries 7 (`show-attested-did`) and 8 (`resolve-did-search`) were added
+2026-09-11; entries 1-6 are the set the paragraphs below describe. **8 depends on
 7** and must stay after it — see its Order note.
 
 This section used to describe a split: the `dev` Dockerfile applied all six
@@ -859,8 +866,10 @@ A tag bump must try every patch in this file's order.
   rendering, this patch should be **dropped**, not ported.
 - **Retirement:** upstream renders custom profile fields generically, OR the
   `io.inblock.did` contract is retired.
-- **Order:** applied LAST in `Dockerfile.element`. Its `en_EN.json` hunk was generated
-  against the tree with entries 1-6 already applied; moving it earlier breaks that hunk.
+- **Order:** applied SEVENTH in `Dockerfile.element` (it was last until entries 8-10
+  landed). Its `en_EN.json` hunk was generated against the tree with entries 1-6
+  already applied; moving it earlier breaks that hunk. Entry 8 depends on it and must
+  follow it.
 - **Coverage:** none yet in `e2e/element/` — both rows render from a profile field, so a
   leg needs an account with a published DID on the lab stack. **This is a rule-2
   exception and it should be closed**: add a leg that opens the member panel for a
@@ -1252,7 +1261,8 @@ A tag bump must try every patch in this file's order.
 | `sw-boot.js` head shim | `config/element-sw-boot.js` + build-time `sed` (fail-loud grep) | service-worker media-auth boot ordering (2026-07-31 download RCA); guard (E)'s canary waits for the app to be `SYNCING` since 2026-09-28, because its probe hit the SW with an expired stored token and triggered the entry-9 poisoning; after 120 s without `SYNCING` it warns and runs anyway (safe with entries 9 and 10). The gate needs `window.mxMatrixClientPeg` in the bundle, which the Dockerfile greps for. Its 8 s timer is coupled to entry 10's 5 s wait |
 | Per-build `sw.js` stamp | Dockerfile `RUN` (bundle hash + build UTC) | byte-identical sw.js across deploys let a wedged SW survive every deploy (2026-07-31 incident); stamp forces eviction |
 | inblock.io overlay | `config/element-config.json`, theme CSS, logos/favicons, welcome background | branding + deployment config (`force_verification`, `sso_redirect_options.immediate`) |
-| Entrypoint templating | `entrypoints/element_entrypoint.sh` | `%%MATRIX_BASE_URL%%`/`%%MATRIX_HOST%%`/`%%CLIENT_HOST%%` substitution at container start |
+| Entrypoint templating and `index.html` edits | `entrypoints/element_entrypoint.sh` (runs at every container start) | `%%MATRIX_BASE_URL%%`/`%%MATRIX_HOST%%`/`%%CLIENT_HOST%%` substitution in `config.json` (the `permalink_prefix` key is deleted when `CLIENT_HOST` is empty); copies the inblock.io favicons over Element's `vector-icons/*.png`; injects `<link rel="stylesheet" href="element-theme-overrides.css">` into `index.html` `<head>` (idempotent) |
+| Config and entrypoint bind-mounted at runtime | `docker-compose.yml:110-112`, `docker-compose.dev-staging.yml:181-183` | the running container uses the HOST's `config/element-config.json` (as `/app/config.json.src`) and `entrypoints/element_entrypoint.sh`, not the copies baked into the image, so a config change needs no rebuild. It also means the image digest alone does not describe what a box serves |
 | CI content marker labels | Dockerfile `LABEL io.inblock.dev-branch-ci-test*` | proves branch CI builds distinct images (S5 check) |
 
 **History note:** the patch stack and the two "honesty" patches were validated against a
@@ -1297,7 +1307,8 @@ patch renames the database, so the marker to grep is now `element-eventindex`
 `feature_inblock_encrypted_search` and `still_indexing` will find nothing in a
 build made from the current patch, and finding them instead proves the image is
 an OLD one. The row above is left as the record of what was checked on the
-artifact that is still serving prod.
+artifact that served prod until the 2026-09-25 promotion replaced it (see "What runs
+on prod today").
 
 **Trap for whoever repeats this:** the EventIndex code is emitted into
 `bundles/<hash>/init.js`, **not** `bundle.js`. Grepping only `bundle.js` returns zero
