@@ -360,6 +360,11 @@ openwitness.org {
     reverse_proxy timestamp:8080
 }
 
+www.openwitness.org {
+    import hsts
+    redir https://openwitness.org{uri} permanent
+}
+
 timestamps.inblock.io {
     import hsts
     redir https://openwitness.org{uri} permanent
