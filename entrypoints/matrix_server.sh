@@ -38,7 +38,7 @@ yq -i ".serve_server_wellknown = false" /data/homeserver.yaml
 # ---------------------------------------------------------------------------
 # RETENTION — the knob is now REAL, and it is DELIBERATELY OFF.
 #
-# What was wrong (memory: synapse-retention-silent-noop):
+# What was wrong:
 #   yq -i ".retention.default_policy.allowed_lifetime_max = ${MATRIX_MESSAGE_LIFETIME}"
 # `allowed_lifetime_max` is a TOP-LEVEL retention key: it CLAMPS what a room's
 # own m.room.retention event may request. It is not a key Synapse reads inside
@@ -53,16 +53,16 @@ yq -i ".serve_server_wellknown = false" /data/homeserver.yaml
 #
 # THE KEY THAT ACTUALLY DELETES MESSAGES is `retention.default_policy.max_lifetime`.
 # It is left UNSET here on purpose: turning it on has real, irreversible purge
-# blast radius and is Tim's call, not the entrypoint's default. Enabling it
+# blast radius and is the operator's call, not a default here. Enabling it
 # needs a measured blast-radius number first.
 #
 # TWO THINGS HAD TO CHANGE, not one. Fixing this template alone does NOT reach
 # dev-staging or prod: this whole block sits inside the first-boot guard, so it
-# only ever runs on a fresh volume (plan D20 — the retention keys are "frozen").
+# only ever runs on a fresh volume (the retention keys are "frozen").
 # An existing deployment keeps its wrong config until someone either hand-edits
-# it or the guard is replaced by the one-shot versioned migration proposed in
-# the plan's escalation #2. This change makes NEW deployments correct and
-# honest; it changes NOTHING on any existing box, which is exactly the intent.
+# it or the first-boot guard is replaced by a one-shot, versioned migration.
+# This change makes NEW deployments correct and honest; it changes NOTHING on
+# any existing box, which is exactly the intent.
 #
 #   MATRIX_RETENTION_ENABLED         default "false" -> nothing is ever purged
 #   MATRIX_RETENTION_MAX_LIFETIME    the purging knob; only read when enabled

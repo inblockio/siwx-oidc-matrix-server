@@ -27,7 +27,7 @@
 #   notice "<msg>"  send a one-off server-notice to the admin (for testing/manual use)
 #
 # -----------------------------------------------------------------------------
-# AUTHENTICATION (rewritten 2026-08-30 for Synapse 1.159 — plan H5)
+# AUTHENTICATION (rewritten 2026-08-30 for Synapse 1.159)
 # -----------------------------------------------------------------------------
 # Synapse 1.157.0 REMOVED the msc3861 `admin_token` mechanism. Before that, this
 # script bearer'd MAS_SHARED_SECRET straight at /_synapse/admin/v1/*. On 1.157+

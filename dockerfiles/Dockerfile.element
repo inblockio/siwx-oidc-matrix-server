@@ -85,7 +85,7 @@ RUN git apply --verbose /tmp/ew-checkcode.patch
 # config carries the new key; prod's bind-mounted config must be renamed too.
 #
 # Since 2026-09-13 this patch carries increments that are AHEAD of PR #34718
-# (Tim's decision). As of 2026-09-14 there are FIVE: A, the non-blocking
+# (a maintainer decision). As of 2026-09-14 there are FIVE: A, the non-blocking
 # initEventIndex, so a large index cannot block app start; B, batched writes /
 # O(1) getStats / sorted vocabulary / folded-text memo; C, the crawl window and
 # room cap (a shouldCrawl hook in the SHARED indexing/EventIndex.ts), the
