@@ -29,7 +29,7 @@ redis (persistence, AOF-enabled)
 ## How login works (end to end)
 
 1. User opens Element at `https://{CLIENT_HOST}`
-2. Element reads `m.authentication.issuer` from config.json, discovers OIDC at `{issuer}/.well-known/openid-configuration`
+2. Element takes the homeserver from config.json (`default_server_config`) and asks it for its auth metadata (`GET /_matrix/client/v1/auth_metadata`, or the MSC2965 unstable path on servers older than spec v1.15); Synapse answers with siwx-oidc's discovery document, which names the issuer and its endpoints
 3. Element starts authorization_code + PKCE flow: redirects to `{issuer}/authorize`
 4. siwx-oidc serves the login UI (wallet connect or passkey)
 5. User signs CAIP-122 challenge with wallet (or authenticates via WebAuthn passkey)
