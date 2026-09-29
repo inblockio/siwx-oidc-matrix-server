@@ -24,7 +24,7 @@ Sibling checkouts it uses: siwx-oidc at `SIWX_OIDC_DIR` (default
 
 ## Images
 
-Two images are built locally; everything else is pulled by pinned tag or
+Two images are built locally; everything else is pulled by version tag plus
 digest. Both local images are **derived from source and built automatically
 when missing**. `e2e-harness/images.sh` is the single place that decides them.
 

@@ -110,15 +110,14 @@ do:
 - **Build-time package**: Debian `patch` in the Synapse build
   (`dockerfiles/Dockerfile:66`) floats on purpose, within the Debian release the
   base digest fixes, and is purged before its layer ends.
-- **Local and test only**: `docker-compose.local.yml:43` (`redis`, no tag) and `:137`
-  (`caddy:2-alpine`); `docker-compose.e2e.yml:18` (`redis:7-alpine`), `:97`
-  (`livekit/livekit-server:v1.13.6`, tag without digest), `:170` and `:185`
-  (`caddy:2-alpine`), mirrored in `e2e-harness/up.sh:36`, `:81`, `:165`, `:173`;
-  `e2e-harness/av-check/run.sh:35` (`livekit-cli:latest`);
-  `e2e-harness/use-fixed-oidc.sh:40` (`ubuntu:rolling`).
 - **CI**: `.github/workflows/docker.yml` uses actions by major tag
   (`actions/checkout@v4`, `docker/login-action@v3`, `docker/metadata-action@v5`,
   `docker/build-push-action@v6`) on `ubuntu-latest`.
+
+Everything else is pinned by name and content: images by version tag plus digest
+(the local and test stacks too: `docker-compose.local.yml`, `docker-compose.e2e.yml`
+and the scripts in `e2e-harness/`), the Element Web source tag by its commit, and
+downloads by checksum.
 
 Production, per the repository's own records: its `.env` pins Redis as
 `redis:latest@sha256:aa049e68…` (`docker-compose.yml:54-61`). The tag reads `latest`,
