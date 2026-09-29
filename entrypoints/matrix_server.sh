@@ -28,10 +28,9 @@ yq -i "del(.listeners[1])" /data/homeserver.yaml
 # rc_delayed_event_mgmt, rc_message, matrix_rtc.transports) used to live here,
 # first-boot-only. It is now applied by apply_matrixrtc_config() in the
 # always-run section below the first-boot guard, so template changes reach
-# already-provisioned deployments too (T7,
-# docs/superpowers/plans/2026-08-01-av-hardening-config.md; see
-# docs/2026-06-11-call-drop-analysis.md for the incident where rc_message had
-# to be hand-applied live with yq because this block was first-boot-only).
+# already-provisioned deployments too. It moved after a call-drop incident
+# (2026-06-11) where rc_message had to be hand-applied live with yq because
+# this block was first-boot-only.
 
 #federation via well-known delegation (Caddy serves .well-known on port 443)
 yq -i ".serve_server_wellknown = false" /data/homeserver.yaml
@@ -55,8 +54,7 @@ yq -i ".serve_server_wellknown = false" /data/homeserver.yaml
 # THE KEY THAT ACTUALLY DELETES MESSAGES is `retention.default_policy.max_lifetime`.
 # It is left UNSET here on purpose: turning it on has real, irreversible purge
 # blast radius and is Tim's call, not the entrypoint's default. Enabling it
-# needs a measured blast-radius number first — see
-# docs/superpowers/plans/2026-08-30-dev-stack-upgrade.md (R10).
+# needs a measured blast-radius number first.
 #
 # TWO THINGS HAD TO CHANGE, not one. Fixing this template alone does NOT reach
 # dev-staging or prod: this whole block sits inside the first-boot guard, so it
@@ -112,10 +110,9 @@ fi
 # /start.py generate on first boot (above), AND on every later restart
 # against an already-generated homeserver.yaml. Before this restructure, this
 # block lived only inside the first-boot guard, so a template change here
-# would silently never reach an existing deployment — see
-# docs/2026-06-11-call-drop-analysis.md, where rc_message had to be
-# hand-applied live with yq plus a manual restart. T7,
-# docs/superpowers/plans/2026-08-01-av-hardening-config.md.
+# would silently never reach an existing deployment: in the 2026-06-11
+# call-drop incident, rc_message had to be hand-applied live with yq plus a
+# manual restart.
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 # Delegated auth via the STABLE Matrix Authentication Service integration —
