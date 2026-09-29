@@ -1038,6 +1038,21 @@ A tag bump must try every patch in this file's order.
   `didLocalpart`, `useProfileInfo`, `InviteDialog` and `DMRoomTile`; `tsc --noEmit` adds
   no errors; oxlint/oxfmt clean; `pnpm --filter element-web build` succeeds. No
   `e2e/element/` leg yet: like entry 7 it needs a lab account with a published DID.
+- **Stale profile cache (2026-09-29):** matrix-js-sdk's `getExtendedProfileProperty` is
+  cache-first: the first read of `io.inblock.did` is written through to the client store
+  (IndexedDB) and every later read returns that copy, which only an MSC4429 sync update
+  for a sync-filter key would refresh (this key is not one). So a DID removed, rebound or
+  deactivated after the first search kept answering from the cache. The candidate read
+  now uses `getExtendedProfile` (never cached), and writes the fresh answer back over any
+  cached copy: a changed value overwrites it, a missing field is removed from the cached
+  profile (the whole entry when nothing else is left), a 404 `M_NOT_FOUND` account loses
+  its cached profile. Only when the homeserver cannot answer (network, 5xx, unreachable
+  peer) is the cached copy read, and a cached copy whose proof is REJECTED is evicted.
+  No js-sdk patch needed. Not covered: `useAttestedDid` (entry 7) still reads cache-first,
+  so a user-info panel opened with no DID search in between can show a stale DID; a DID
+  search for that user corrects it. 9 vitest cases (mock client modelled on js-sdk's
+  cache-first read); disabling the fresh read fails 9, the reject eviction 1, the 404
+  eviction 1.
 - **Spotlight coverage (2026-09-29):** 6 jest cases in `SpotlightDialog-test.tsx`
   (verified hit with no filter and with People, unverified marker with no filter, no
   other Suggestions leak in with no filter, existing DM shown, no-results). The Spotlight

@@ -436,10 +436,10 @@ index ef0a821..93fdeec 100644
          "disinvite_button_space": "Disinvite from space",
 diff --git a/apps/web/src/utils/didLocalpart.test.ts b/apps/web/src/utils/didLocalpart.test.ts
 new file mode 100644
-index 0000000..51efc5a
+index 0000000..cc6d2ef
 --- /dev/null
 +++ b/apps/web/src/utils/didLocalpart.test.ts
-@@ -0,0 +1,791 @@
+@@ -0,0 +1,946 @@
 +/**
 +Copyright 2026 inblock.io
 +
@@ -448,7 +448,7 @@ index 0000000..51efc5a
 +*/
 +
 +import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
-+import { type MatrixClient } from "matrix-js-sdk/src/matrix";
++import { type MatrixClient, MatrixError } from "matrix-js-sdk/src/matrix";
 +
 +import {
 +    canonicaliseDid,
@@ -719,12 +719,48 @@ index 0000000..51efc5a
 +            vi.useRealTimers();
 +        });
 +
-+        /** `fields`: userId -> the published io.inblock.did object. Anything else 404s. */
++        type TestClient = MatrixClient & {
++            getExtendedProfile: ReturnType<typeof vi.fn>;
++            getExtendedProfileProperty: ReturnType<typeof vi.fn>;
++            /** The client-side profile cache (IndexedDB in Element), inspectable. */
++            cache: Map<string, Record<string, unknown>>;
++        };
++
++        /**
++         * `fields`: userId -> the published io.inblock.did object, as the SERVER
++         * holds it. `accounts`: users that exist without the field. Anyone else
++         * is a 404 `M_NOT_FOUND`. `profileError`: the server cannot answer any
++         * profile read (e.g. a federated peer is down). `cached`: what the
++         * client's profile cache already holds, modelled on matrix-js-sdk:
++         * `getExtendedProfileProperty` is cache-first and writes through, and
++         * `getExtendedProfile` never touches the cache.
++         */
 +        function mockClient(opts: {
 +            authMetadata?: Record<string, unknown> | Error;
 +            fields?: Record<string, unknown>;
-+        }): MatrixClient & { getExtendedProfileProperty: ReturnType<typeof vi.fn> } {
++            accounts?: string[];
++            profileError?: Error;
++            cached?: Record<string, Record<string, unknown>>;
++        }): TestClient {
 +            const fields = opts.fields ?? {};
++            const cache = new Map(Object.entries(opts.cached ?? {}));
++            const notFound = (): MatrixError =>
++                new MatrixError({ errcode: "M_NOT_FOUND", error: "Profile not found" }, 404);
++            async function serverValue(userId: string): Promise<unknown> {
++                const value = fields[userId];
++                if (value && typeof value === "object" && "sign" in value) {
++                    const did = (value as { sign: string }).sign;
++                    const onPeer = userId.endsWith(`:${PEER}`);
++                    const proof = await mint({
++                        key: onPeer ? keys.peer : keys.own,
++                        iss: onPeer ? PEER_ISSUER : ISSUER,
++                        sub: did,
++                        mxid: userId,
++                    });
++                    return { did, proof };
++                }
++                return value;
++            }
 +            return {
 +                getDomain: () => OWN,
 +                doesServerSupportExtendedProfiles: vi.fn().mockResolvedValue(true),
@@ -732,23 +768,30 @@ index 0000000..51efc5a
 +                    if (opts.authMetadata instanceof Error) throw opts.authMetadata;
 +                    return opts.authMetadata ?? { issuer: ISSUER };
 +                }),
++                getExtendedProfile: vi.fn(async (userId: string) => {
++                    if (opts.profileError) throw opts.profileError;
++                    if (userId in fields)
++                        return { displayname: "someone", [DID_PROFILE_FIELD]: await serverValue(userId) };
++                    if (opts.accounts?.includes(userId)) return { displayname: "someone" };
++                    throw notFound();
++                }),
 +                getExtendedProfileProperty: vi.fn(async (userId: string, key: string) => {
-+                    if (key !== DID_PROFILE_FIELD || !(userId in fields)) throw new Error("M_NOT_FOUND");
-+                    const value = fields[userId];
-+                    if (value && typeof value === "object" && "sign" in value) {
-+                        const did = (value as { sign: string }).sign;
-+                        const onPeer = userId.endsWith(`:${PEER}`);
-+                        const proof = await mint({
-+                            key: onPeer ? keys.peer : keys.own,
-+                            iss: onPeer ? PEER_ISSUER : ISSUER,
-+                            sub: did,
-+                            mxid: userId,
-+                        });
-+                        return { did, proof };
-+                    }
++                    const stored = cache.get(userId);
++                    if (stored?.[key] !== undefined) return stored[key];
++                    if (opts.profileError) throw opts.profileError;
++                    if (key !== DID_PROFILE_FIELD || !(userId in fields)) return undefined;
++                    const value = await serverValue(userId);
++                    cache.set(userId, { ...stored, [key]: value });
 +                    return value;
 +                }),
-+            } as unknown as MatrixClient & { getExtendedProfileProperty: ReturnType<typeof vi.fn> };
++                store: {
++                    getUserProfile: async (userId: string) => cache.get(userId),
++                    storeUserProfiles: async (profiles: Map<string, Record<string, unknown>>) =>
++                        profiles.forEach((profile, userId) => cache.set(userId, profile)),
++                    removeUserProfiles: async (userIds: string[]) => userIds.forEach((id) => cache.delete(id)),
++                },
++                cache,
++            } as unknown as TestClient;
 +        }
 +
 +        type Route = { status?: number; body?: unknown; hang?: boolean; cors?: boolean };
@@ -817,7 +860,7 @@ index 0000000..51efc5a
 +                `${ADVERTISED}?did=${encodeURIComponent(KEY_UPPER)}`,
 +            ]);
 +            // Verified through the homeserver, and only that one account.
-+            expect(client.getExtendedProfileProperty).toHaveBeenCalledTimes(1);
++            expect(client.getExtendedProfile).toHaveBeenCalledTimes(1);
 +        });
 +
 +        it("falls back to {issuer}/resolve for our own server when nothing is advertised", async () => {
@@ -839,6 +882,7 @@ index 0000000..51efc5a
 +                },
 +            });
 +            await expect(resolveDidToUserId(client, KEY_UPPER, { fetchFn })).resolves.toBeNull();
++            expect(client.getExtendedProfile).not.toHaveBeenCalled();
 +            expect(client.getExtendedProfileProperty).not.toHaveBeenCalled();
 +        });
 +
@@ -992,6 +1036,117 @@ index 0000000..51efc5a
 +                await expect(
 +                    resolveDidToUserId(client, `${KEY_UPPER}@${PEER}`, { fetchFn, remoteResolvers: true }),
 +                ).resolves.toBe(`@${modern}:${PEER}`);
++            });
++        });
++
++        describe("the client's profile cache (stale io.inblock.did)", () => {
++            // matrix-js-sdk keeps every looked-up field in the client store and
++            // answers later reads from it; the search must not trust that copy.
++            const own = (): string => `@${modern}:${OWN}`;
++            const RESOLVER_DOWN: Record<string, Route> = { [`${ISSUER}resolve`]: { status: 503, body: {} } };
++            const ownResolverNames = (userId: string): Record<string, Route> => ({
++                [`${ISSUER}resolve`]: { body: { did: KEY_UPPER, mxid: userId, exists: true, attested: true } },
++            });
++            /** A cached copy that verified when it was cached. */
++            const genuineCopy = async (userId: string): Promise<Record<string, unknown>> => ({
++                did: KEY_UPPER,
++                proof: await mint({ key: keys.own, iss: ISSUER, sub: KEY_UPPER, mxid: userId }),
++            });
++
++            it("reads the field FRESH, never from the cache, when the server answers", async () => {
++                const client = mockClient({
++                    fields: { [own()]: published(KEY_UPPER) },
++                    cached: { [own()]: { [DID_PROFILE_FIELD]: { did: KEY_UPPER, proof: "stale.junk.copy" } } },
++                });
++                await expect(resolveDid(client, KEY_UPPER, { fetchFn: mockFetch(RESOLVER_DOWN) })).resolves.toEqual({
++                    userId: own(),
++                    verification: "verified",
++                });
++                expect(client.getExtendedProfile).toHaveBeenCalledWith(own());
++                expect(client.getExtendedProfileProperty).not.toHaveBeenCalled();
++                // The fresh value overwrote the stale copy.
++                const cached = client.cache.get(own())?.[DID_PROFILE_FIELD] as { proof?: string };
++                expect(cached.proof).not.toBe("stale.junk.copy");
++            });
++
++            it("field REMOVED server-side: no result, and the cached field is evicted (other keys kept)", async () => {
++                const client = mockClient({
++                    accounts: [own()],
++                    cached: { [own()]: { [DID_PROFILE_FIELD]: await genuineCopy(own()), "m.tz": "Europe/Berlin" } },
++                });
++                await expect(resolveDid(client, KEY_UPPER, { fetchFn: mockFetch(RESOLVER_DOWN) })).resolves.toBeNull();
++                expect(client.cache.get(own())).toEqual({ "m.tz": "Europe/Berlin" });
++            });
++
++            it("field REMOVED, nothing else cached: the whole cache entry goes", async () => {
++                const client = mockClient({
++                    accounts: [own()],
++                    cached: { [own()]: { [DID_PROFILE_FIELD]: await genuineCopy(own()) } },
++                });
++                await expect(resolveDid(client, KEY_UPPER, { fetchFn: mockFetch(RESOLVER_DOWN) })).resolves.toBeNull();
++                expect(client.cache.has(own())).toBe(false);
++            });
++
++            it("field removed but our resolver names the account: fresh state is 'not yet published'", async () => {
++                const client = mockClient({
++                    accounts: [own()],
++                    cached: { [own()]: { [DID_PROFILE_FIELD]: await genuineCopy(own()) } },
++                });
++                await expect(
++                    resolveDid(client, KEY_UPPER, { fetchFn: mockFetch(ownResolverNames(own())) }),
++                ).resolves.toEqual({ userId: own(), verification: "unverified", reason: "unpublished" });
++                expect(client.cache.has(own())).toBe(false);
++            });
++
++            it("field CHANGED server-side: the fresh value decides and overwrites the cached one", async () => {
++                const client = mockClient({
++                    fields: { [own()]: published(KEY_LOWER) },
++                    cached: { [own()]: { [DID_PROFILE_FIELD]: await genuineCopy(own()) } },
++                });
++                await expect(resolveDid(client, KEY_UPPER, { fetchFn: mockFetch(RESOLVER_DOWN) })).resolves.toBeNull();
++                expect((client.cache.get(own())?.[DID_PROFILE_FIELD] as { did: string }).did).toBe(KEY_LOWER);
++            });
++
++            it("account GONE (404 M_NOT_FOUND): no result, and its cached profile is evicted", async () => {
++                const client = mockClient({
++                    cached: { [own()]: { [DID_PROFILE_FIELD]: await genuineCopy(own()), displayname: "old" } },
++                });
++                await expect(resolveDid(client, KEY_UPPER, { fetchFn: mockFetch(RESOLVER_DOWN) })).resolves.toBeNull();
++                expect(client.cache.has(own())).toBe(false);
++            });
++
++            it("server cannot answer: falls back to a cached copy that still verifies", async () => {
++                const client = mockClient({
++                    profileError: new MatrixError({ errcode: "M_UNKNOWN", error: "peer unreachable" }, 502),
++                    cached: { [own()]: { [DID_PROFILE_FIELD]: await genuineCopy(own()) } },
++                });
++                await expect(resolveDid(client, KEY_UPPER, { fetchFn: mockFetch(RESOLVER_DOWN) })).resolves.toEqual({
++                    userId: own(),
++                    verification: "verified",
++                });
++                expect(client.cache.has(own())).toBe(true);
++            });
++
++            it("server cannot answer: a cached copy that no longer verifies is hidden AND evicted", async () => {
++                // Bound to another MXID: what a stale copy looks like after the
++                // account was re-provisioned under a different localpart.
++                const replayed = await mint({ key: keys.own, iss: ISSUER, sub: KEY_UPPER, mxid: "@other:own.example" });
++                const client = mockClient({
++                    profileError: new MatrixError({ errcode: "M_UNKNOWN", error: "peer unreachable" }, 502),
++                    cached: { [own()]: { [DID_PROFILE_FIELD]: { did: KEY_UPPER, proof: replayed }, "m.tz": "UTC" } },
++                });
++                await expect(resolveDid(client, KEY_UPPER, { fetchFn: mockFetch(RESOLVER_DOWN) })).resolves.toBeNull();
++                expect(client.cache.get(own())).toEqual({ "m.tz": "UTC" });
++            });
++
++            it("writes nothing into a cache that held no copy", async () => {
++                const client = mockClient({ fields: { [own()]: published(KEY_UPPER) } });
++                await expect(
++                    resolveDid(client, KEY_UPPER, { fetchFn: mockFetch(RESOLVER_DOWN) }),
++                ).resolves.toMatchObject({
++                    verification: "verified",
++                });
++                expect(client.cache.size).toBe(0);
 +            });
 +        });
 +
@@ -1233,10 +1388,10 @@ index 0000000..51efc5a
 +});
 diff --git a/apps/web/src/utils/didLocalpart.ts b/apps/web/src/utils/didLocalpart.ts
 new file mode 100644
-index 0000000..b24fc13
+index 0000000..e82df16
 --- /dev/null
 +++ b/apps/web/src/utils/didLocalpart.ts
-@@ -0,0 +1,602 @@
+@@ -0,0 +1,703 @@
 +/**
 +Copyright 2026 inblock.io
 +
@@ -1244,7 +1399,7 @@ index 0000000..b24fc13
 +Please see LICENSE files in the repository root for full details.
 +*/
 +
-+import { type MatrixClient } from "matrix-js-sdk/src/matrix";
++import { type MatrixClient, type SyncUserProfile } from "matrix-js-sdk/src/matrix";
 +
 +import { clearIssuerKeysCache, fetchPublicJson, PromiseCache, type ProofVerdict, verifyDidProof } from "./didProof";
 +
@@ -1818,6 +1973,9 @@ index 0000000..b24fc13
 +        if (verdict.kind === "verified") return { userId, verification: "verified" };
 +        if (verdict.kind === "unchecked") return { userId, verification: "unverified", reason: "unchecked" };
 +        // Rejected: hidden. The next formula candidate may still be genuine.
++        // A value that no longer verifies must not outlive this search in the
++        // client's profile cache either (see readDidField).
++        await forgetCachedDidField(client, userId);
 +    }
 +    return null;
 +}
@@ -1825,18 +1983,116 @@ index 0000000..b24fc13
 +/** Stands in when there is no global fetch: every key lookup is then "unchecked". */
 +const rejectingFetch: typeof fetch = () => Promise.reject(new Error("no fetch available"));
 +
-+/** The `{did, proof?}` object in `userId`'s profile, or null when absent or malformed. */
-+async function readDidField(client: MatrixClient, userId: string): Promise<{ did: string; proof?: string } | null> {
++type DidField = { did: string; proof?: string };
++
++/** The `{did, proof?}` object in a raw profile value, or null when absent or malformed. */
++function parseDidField(raw: unknown): DidField | null {
++    if (!isRecord(raw) || typeof raw.did !== "string") return null;
++    // `proof` is absent (not null, not "") when the provider's key is
++    // ephemeral; anything that is not a non-empty string counts as absent.
++    return typeof raw.proof === "string" && raw.proof ? { did: raw.did, proof: raw.proof } : { did: raw.did };
++}
++
++/** The homeserver saying the profile does not exist: no such account, or a deactivated one. */
++function isProfileNotFound(e: unknown): boolean {
++    return isRecord(e) && e.httpStatus === 404 && e.errcode === "M_NOT_FOUND";
++}
++
++/**
++ * The `{did, proof?}` object in `userId`'s profile, or null when absent or
++ * malformed. Read FRESH from the homeserver whenever it answers.
++ *
++ * # Why not `getExtendedProfileProperty`
++ *
++ * matrix-js-sdk's `getExtendedProfileProperty` is cache-first: the first read
++ * of a key writes the value through to the client store (IndexedDB in Element)
++ * and every later read returns that copy without asking the server again. Only
++ * a sync `profile_updates` entry (MSC4429, for keys in the sync filter, which
++ * this one is not) ever refreshes it. So a DID that was unpublished, rebound or
++ * deactivated after the first search would keep answering from the cache
++ * forever. `getExtendedProfile` bypasses that cache (it returns the whole
++ * profile, which the cache cannot), so it is the read that decides.
++ *
++ * # Keeping the cache honest
++ *
++ * The cached copy is also what other surfaces read (`useAttestedDid`), so a
++ * fresh answer is written back over it: a changed value overwrites the cached
++ * one, a field the server no longer has is removed from the cached profile, and
++ * an account the server no longer knows (404 `M_NOT_FOUND`) loses its cached
++ * profile altogether. The cache is consulted only when the homeserver cannot
++ * answer at all (network error, 5xx, an unreachable federated peer), and then
++ * the candidate still has to pass proof verification; a cached value that
++ * fails it is evicted by the caller ({@link forgetCachedDidField}).
++ */
++async function readDidField(client: MatrixClient, userId: string): Promise<DidField | null> {
++    let profile: Record<string, unknown>;
 +    try {
-+        const raw = await client.getExtendedProfileProperty(userId, DID_PROFILE_FIELD);
-+        if (!isRecord(raw) || typeof raw.did !== "string") return null;
-+        // `proof` is absent (not null, not "") when the provider's key is
-+        // ephemeral; anything that is not a non-empty string counts as absent.
-+        return typeof raw.proof === "string" && raw.proof ? { did: raw.did, proof: raw.proof } : { did: raw.did };
++        profile = await client.getExtendedProfile(userId);
++    } catch (e) {
++        if (isProfileNotFound(e)) {
++            await forgetCachedProfile(client, userId);
++            return null;
++        }
++        // The homeserver could not answer: the cached copy is all there is.
++        try {
++            return parseDidField(await client.getExtendedProfileProperty(userId, DID_PROFILE_FIELD));
++        } catch {
++            // The overwhelmingly common case: no such user, or a user with no
++            // published DID. Not worth a log line per keystroke.
++            return null;
++        }
++    }
++    const raw = isRecord(profile) ? profile[DID_PROFILE_FIELD] : undefined;
++    await syncCachedDidField(client, userId, raw);
++    return parseDidField(raw);
++}
++
++/**
++ * Bring a cached copy of `userId`'s DID field in line with what the server
++ * just said (`fresh === undefined`: the server has no such field). Writes only
++ * where a cached copy exists; never throws.
++ */
++async function syncCachedDidField(client: MatrixClient, userId: string, fresh: unknown): Promise<void> {
++    try {
++        const store = client.store;
++        const cached = await store?.getUserProfile(userId);
++        if (!cached || cached[DID_PROFILE_FIELD] === undefined) return;
++        if (fresh === undefined) {
++            await forgetCachedDidField(client, userId);
++        } else {
++            // Read off the wire as JSON, so it is JSON: the cast only restates that.
++            const value = fresh as SyncUserProfile[string];
++            await store.storeUserProfiles(new Map([[userId, { ...cached, [DID_PROFILE_FIELD]: value }]]));
++        }
 +    } catch {
-+        // The overwhelmingly common case: no such user, or a user with no
-+        // published DID. Not worth a log line per keystroke.
-+        return null;
++        // A cache we cannot write is a cache we will read past next time anyway.
++    }
++}
++
++/** Drop the DID field from `userId`'s cached profile (the whole entry when nothing else is left). */
++async function forgetCachedDidField(client: MatrixClient, userId: string): Promise<void> {
++    try {
++        const store = client.store;
++        const cached = await store?.getUserProfile(userId);
++        if (!cached || cached[DID_PROFILE_FIELD] === undefined) return;
++        const { [DID_PROFILE_FIELD]: _dropped, ...rest } = cached;
++        if (Object.keys(rest).length) {
++            await store.storeUserProfiles(new Map([[userId, rest]]));
++        } else {
++            await store.removeUserProfiles([userId]);
++        }
++    } catch {
++        // See syncCachedDidField.
++    }
++}
++
++/** Drop `userId`'s whole cached profile: the homeserver says the account does not exist. */
++async function forgetCachedProfile(client: MatrixClient, userId: string): Promise<void> {
++    try {
++        const store = client.store;
++        if (await store?.getUserProfile(userId)) await store.removeUserProfiles([userId]);
++    } catch {
++        // See syncCachedDidField.
 +    }
 +}
 diff --git a/apps/web/src/utils/didProof.ts b/apps/web/src/utils/didProof.ts
