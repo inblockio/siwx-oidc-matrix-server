@@ -24,7 +24,7 @@ Rules of this registry:
    - **UPSTREAM-TRACKED** — a feature we are actively trying to get merged upstream.
      Also an interim carrier. The vendored patch and the upstream PR must be kept in
      sync; drifting them splits our deployment from what reviewers are reading.
-     **One sanctioned exception exists today** (Tim, 2026-09-13): entry 6's vendored
+     **One sanctioned exception exists today** (a maintainer decision, 2026-09-13): entry 6's vendored
      patch deliberately LEADS PR #34718 by the non-blocking-load work, because prod
      needed that before upstream was ready to receive it. A deliberate lead is only
      allowed when it is (a) recorded in the entry, (b) pinned to a named provenance
@@ -117,7 +117,7 @@ filing is worth repeating.
 | FAILURE | Closed unmerged, explicitly rejected, **or** no maintainer engagement for 3 months. |
 | AMBIGUOUS | Maintainers want a substantially different implementation. Engagement works but costs more than one PR's worth; re-decide, do not auto-file. |
 
-**Exception (Tim, 2026-09-28): entry 9 is filed now** (issue #35241, PR #35242). This policy gates only entries
+**Exception (a maintainer decision, 2026-09-28): entry 9 is filed now** (issue #35241, PR #35242). This policy gates only entries
 2, 3 and 4 on #34718; entry 9 (`sw-versions-no-cache-on-error`) is a defect that breaks
 all media for users on servers that enforce authenticated media, and filing it was
 ordered explicitly. Entry 10 is not covered by this exception (see its entry).
@@ -444,7 +444,7 @@ A tag bump must try every patch in this file's order.
   `test.slow()` for the 30s `searchUntilFound` poll. Verified: all eight
   patches still apply in Dockerfile order to a pristine v1.12.26 tree, and
   `node --test scripts/browser-eventindex-invariants.mjs` is 12/12.
-- **NOW CARRIES THE NON-BLOCKING LOAD, AHEAD OF UPSTREAM (Tim's decision,
+- **NOW CARRIES THE NON-BLOCKING LOAD, AHEAD OF UPSTREAM (a maintainer decision,
   2026-09-13).** The vendored patch is no longer a mirror of the PR head. It is
   regenerated from an integration branch on our fork that merges the PR head with
   the non-blocking-load work, because prod could not ship with encrypted search
@@ -614,7 +614,7 @@ A tag bump must try every patch in this file's order.
   - **What operators and users will see, and it is the thing to announce:**
     1. **Every existing browser database is RESET once on first load.** Schema v2
        is not converted to v3 — it is dropped and re-crawled, bounded by C's crawl
-       window and room cap, exactly as the first enablement was (Tim's original
+       window and room cap, exactly as the first enablement was (the maintainers' original
        ruling; the window is what makes it affordable). Nothing is lost, the
        homeserver is the source of truth. **Visibly:** search coverage restarts
        from the crawl window, and the coverage date in the search warning
@@ -754,8 +754,8 @@ A tag bump must try every patch in this file's order.
 
   **Open reviewer-side question worth chasing:** on 2026-08-28 the maintainer
   (t3chguy) reported "I don't see any messages whatsoever" with a screenshot
-  while testing, and Tim replied suspecting a federation delivery problem on his
-  side. That is the SAME symptom class as the MSC4284 policy-server refusal
+  while testing, and the PR's author replied suspecting a federation delivery problem
+  on our side. That is the SAME symptom class as the MSC4284 policy-server refusal
   tracked in the maintainers' notes (our sends to policy-server
   rooms are refused with a bare 400). If a reviewer cannot see test messages,
   they cannot evaluate a *search* feature — so unblocking the federation issue
@@ -914,7 +914,7 @@ A tag bump must try every patch in this file's order.
 - **What a match proves: the proof is verified in the browser (2026-09-28).** The
   field alone is only as good as the homeserver's write ACL (`patches/synapse/`), which
   holds for our own server by construction and for a peer only when it runs this stack.
-  So, per Tim's decision of 2026-09-28, Element now verifies the ES256 compact JWS in
+  So, per a maintainer decision of 2026-09-28, Element now verifies the ES256 compact JWS in
   the field's `proof` member itself (`src/utils/didProof.ts`, a port of
   `siwx-oidc-auth`'s `verify_did_assertion`; wire contract in siwx-oidc
   `src/did_assertion.rs`):
@@ -948,7 +948,7 @@ A tag bump must try every patch in this file's order.
   | REJECTED | proof present and fails any check: malformed, bad signature, `sub`/`mxid`/`iss` mismatch, unknown `kid` on a reachable JWKS | no |
   | no proof, formula or remote hit | field without `proof`, or no field, on anything but an own-server `/resolve` hit | no |
 
-  The unverified-unpublished row is Tim's decision 1 (2026-09-28) and applies to
+  The unverified-unpublished row is maintainer decision 1 (2026-09-28) and applies to
   own-server resolver hits ONLY: the formula is a guess and a remote resolver is another
   organisation's word, so neither names an account on its own. The published `did`
   member must still match the searched DID in every row, so a lying resolver still
@@ -967,7 +967,7 @@ A tag bump must try every patch in this file's order.
   `.well-known/matrix/client`, `auth_metadata`, discovery document and JWKS from the
   searcher's browser (the peer learns the searcher's IP and that someone looked up one
   of its users shortly before, but not which DID). The remote RESOLVER (which would
-  receive the DID) stays off by default (Tim's decision 2). For this to verify rather
+  receive the DID) stays off by default (maintainer decision 2). For this to verify rather
   than show "unverified", the peer's `/jwk` and discovery must admit the searcher's
   origin in CORS; for our own issuer on prod that is branch `feat/public-jwks-cors`
   (ACAO `*` on those two paths only; today prod already admits `element.inblock.io`,
@@ -1156,7 +1156,7 @@ A tag bump must try every patch in this file's order.
   "After upgrade to 1.12.27, media not loading"). Neither names this mechanism. The
   missing `response.ok` check was already on our own list on 2026-07-31 (a
   service-worker hardening handover, not published) and was not acted on then.
-- **Upstream status:** Filing ordered by Tim 2026-09-28, explicit exception: the
+- **Upstream status:** Filing ordered by a maintainer decision, 2026-09-28, explicit exception: the
   2026-09-01 filing policy gates only entries 2/3/4 on #34718. Issue:
   [element-web#35241](https://github.com/element-hq/element-web/issues/35241) (filed
   2026-09-28). PR:
