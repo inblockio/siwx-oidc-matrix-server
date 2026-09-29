@@ -155,7 +155,7 @@ FROM caddy:2.11.4@sha256:0c994536bddb66445885237f1a5dcc1916bccea922661c76b4e9fc2
 COPY --from=builder /usr/bin/caddy /usr/bin/caddy
 # Published from this repository like the Synapse and Element images, so it
 # carries the same LICENSE and NOTICE at the same path.
-COPY LICENSE NOTICE /usr/share/licenses/siwx-oidc-matrix-server/
+COPY --chmod=0644 LICENSE NOTICE /usr/share/licenses/siwx-oidc-matrix-server/
 # The base image's Alpine packages carry their own licenses (stage
 # alpine_licenses); the check keeps texts, packages and NOTICE in step.
 COPY --from=alpine_licenses /alpine/ /usr/share/licenses/alpine/

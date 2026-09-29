@@ -81,7 +81,7 @@ COPY ./entrypoints/matrix_server.sh /matrix_server.sh
 # LICENSE and NOTICE travel with the image. It redistributes this repository's
 # files (Apache-2.0 §4(a) and (d)), and NOTICE states the license of the patch
 # applied above and where the upstream source lives.
-COPY LICENSE NOTICE /usr/share/licenses/siwx-oidc-matrix-server/
+COPY --chmod=0644 LICENSE NOTICE /usr/share/licenses/siwx-oidc-matrix-server/
 
 ENTRYPOINT ["/matrix_server.sh"]
 

@@ -156,7 +156,7 @@ deletes and then re-creates a device ID, so sign-in cannot leave a stale signatu
    a current build
 2. Check whether something else deletes and re-creates devices with the same ID (a
    script, an admin tool, a client that reuses a device ID after logout)
-3. Use the nuclear reset below to clear the state
+3. Use the identity reset below (GENERATION MISMATCH → Fix) to clear the state
 
 ### GENERATION MISMATCH
 
@@ -207,23 +207,21 @@ if len(versions) > 1:
 SCRIPT
 ```
 
-**Fix (nuclear reset):**
+**Fix (reset the cryptographic identity through the client):** in Element, use the
+"Reset identity" / "Reset cryptographic identity" action in the encryption settings.
+Element asks the homeserver for permission, and the homeserver sends the user to
+siwx-oidc's `/account?action=org.matrix.cross_signing_reset` (MSC4312). After the user
+re-authenticates there, siwx-oidc calls `allow_cross_signing_reset`, and the client
+uploads a fresh set of cross-signing keys and a new recovery key in one go. This is the
+supported path: Synapse replaces the keys itself, so its caches stay consistent.
 
-```bash
-cat << 'SCRIPT' | docker compose exec -T matrix_synapse python3 -
-import sqlite3
-db = sqlite3.connect("/data/homeserver.db")
-USER = "@LOCALPART:matrix.example.org"  # <-- replace
-
-r1 = db.execute("DELETE FROM e2e_cross_signing_signatures WHERE user_id = ?", (USER,))
-r2 = db.execute("DELETE FROM e2e_cross_signing_keys WHERE user_id = ?", (USER,))
-print(f"Deleted {r1.rowcount} sigs, {r2.rowcount} cross-signing keys")
-db.commit()
-SCRIPT
-docker compose restart matrix_synapse
-```
-
-After reset: user must log out, clear browser data, log back in, and choose "Set up encryption" (NOT "Enter recovery key"). This creates a fresh generation 1 with a new recovery key.
+**Last resort only (operator, with a backup):** never write to `homeserver.db` while
+Synapse is running. Synapse caches cross-signing state, and a live write can leave the
+database and the caches disagreeing. If the client-side reset is impossible, stop
+Synapse first (`docker compose stop matrix_synapse`), back up the database file, delete
+the user's rows from `e2e_cross_signing_signatures` and `e2e_cross_signing_keys`, then
+start Synapse again. The user then signs in and chooses "Set up encryption" (not "Enter
+recovery key") to create a fresh generation with a new recovery key.
 
 ### STALE DEVICE KEYS
 

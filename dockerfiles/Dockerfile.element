@@ -268,11 +268,11 @@ COPY entrypoints/element_entrypoint.sh /docker-entrypoint.sh
 # files (Apache-2.0 §4(a) and (d)); NOTICE states the license of the patches
 # built into the bundle, and it carries the BSD notice that the nginx skeleton
 # in config/element-nginx.conf requires in a binary distribution.
-COPY LICENSE NOTICE /usr/share/licenses/siwx-oidc-matrix-server/
+COPY --chmod=0644 LICENSE NOTICE /usr/share/licenses/siwx-oidc-matrix-server/
 # Element Web's own license texts, from the upstream checkout the bundle was
 # built from. The bundle is sent to every browser that loads it, so it is
 # conveyed, and its license travels with it.
-COPY --from=builder /src/LICENSE-AGPL-3.0 /src/LICENSE-GPL-3.0 /usr/share/licenses/element-web/
+COPY --chmod=0644 --from=builder /src/LICENSE-AGPL-3.0 /src/LICENSE-GPL-3.0 /usr/share/licenses/element-web/
 # The base image's Alpine packages carry their own licenses (stage
 # alpine_licenses); the check keeps texts, packages and NOTICE in step.
 COPY --from=alpine_licenses /alpine/ /usr/share/licenses/alpine/
