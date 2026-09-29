@@ -209,7 +209,7 @@ data.
 
 ## Live staging
 
-Executed 2026-08-14 after recreating **element-web only** on dev-aquafire.
+Executed 2026-08-14 after recreating **element-web only** on dev-staging.
 
 | Item | Value |
 |---|---|
@@ -242,7 +242,7 @@ whole stack that overrides digest pins with floating tags).
 
 | Item | Value |
 |---|---|
-| Action | Recreate **element-web only** on `agentic.inblock.io` |
+| Action | Recreate **element-web only** on the production host |
 | New digest | `sha256:0013c05351ddcf0eb399d92e3f23e159cc7911e17034d05f55e2b1aeb964ecec` (staging-verified) |
 | Previous digest (rollback) | `sha256:aa878627328dfa5a2f085a25bf92c3791d386b03b6d3becc73fa6d932ee0ed20` |
 | Enablement | `features.feature_inblock_encrypted_search: true` in bind-mounted `config/element-config.json` |
