@@ -17,7 +17,8 @@
 //            (LIVE_STOP_SW=1 stops the SW first via CDP, == browser idle termination)
 //   hard     shift-reload (uncontrolled page) and check guard (B) re-attaches the SW
 //   loggedout  logged-out page: redirect to the OP, no page errors, no canary probe
-// Env: ELEMENT_URL, SIWX_ORIGIN (default dev), TOKEN_DELAY_MS (delay the /token
+// Env: ELEMENT_URL and SIWX_ORIGIN (required: the Element Web origin and the
+// siwx-oidc origin of the deployment under test), TOKEN_DELAY_MS (delay the /token
 // response: reproduces the prod ordering where the refresh lands after load+3 s),
 // TRACE_SYNC=1, PRE_WAIT_S. Arms: noshim aborts sw-boot.js, noE disables only
 // guard (E). Reopening a profile <30 s after its last close hits Element's own
@@ -52,11 +53,14 @@ const { chromium } = await import(path.join(E2E, "element/node_modules/playwrigh
 const { makeWallet, injectMockWallet } = await import(path.join(E2E, "browser/wallet-helper.mjs"));
 import zlib from "node:zlib";
 
-const ELEMENT_URL = process.env.ELEMENT_URL || "https://dev.element.inblock.io";
-const SIWX_ORIGIN = process.env.SIWX_ORIGIN || "https://dev.siwx.inblock.io";
+// No default target: this script signs in and creates accounts, rooms and
+// uploads, so it runs only against a deployment that is named explicitly.
+const ELEMENT_URL = process.env.ELEMENT_URL;
+const SIWX_ORIGIN = process.env.SIWX_ORIGIN;
 const [mode, profileDir, arm, label = mode] = process.argv.slice(2);
-if (!mode || !profileDir || !["shim", "noshim", "noE"].includes(arm)) {
-    console.error("usage: element-sw-media-repro.mjs setup|reopen|fresh|live|hard|loggedout <profileDir> shim|noshim|noE [label]");
+if (!ELEMENT_URL || !SIWX_ORIGIN || !mode || !profileDir || !["shim", "noshim", "noE"].includes(arm)) {
+    console.error("usage: ELEMENT_URL=https://element.example.org SIWX_ORIGIN=https://siwx-oidc.example.org \\\n" +
+        "  element-sw-media-repro.mjs setup|reopen|fresh|live|hard|loggedout <profileDir> shim|noshim|noE [label]");
     process.exit(2);
 }
 fs.mkdirSync(profileDir, { recursive: true });
