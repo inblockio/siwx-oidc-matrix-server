@@ -373,3 +373,25 @@ https://github.com/element-hq/element-meta/discussions/2556
 Open contribution requests (new integrations, features, and services) are
 tracked in the [request-for-contribution](https://github.com/inblockio/request-for-contribution)
 repo. Browse open requests there if you want to help or propose new work.
+
+## License
+
+The files in this repository are licensed under the
+[Apache License, Version 2.0](LICENSE). [NOTICE](NOTICE) lists the third-party material
+they contain and sets out two exceptions in full:
+
+- **Patches.** The `.patch` files under `patches/` change Synapse and Element Web, so
+  each change takes the license of the upstream file it changes: AGPL-3.0-or-later for
+  Synapse (and for the test in `patches/synapse/tests/`), and for the Element Web code
+  the image ships, AGPL-3.0-only OR GPL-3.0-only.
+- **Brand assets.** The inblock.io logos, favicons and welcome background are not
+  licensed. A deployment must replace them with its own.
+
+**AGPL and network use (not legal advice).** A deployment of this bundle serves
+modified AGPL-3.0 programs to its users over a network: Synapse, and Element Web when
+it is used under the AGPL. Section 13 of the AGPL then requires the operator to offer
+those users the Corresponding Source of the modified programs. The patches and
+Dockerfiles published here are those modifications, which is likely what meets that
+obligation for inblock.io's own deployment. If you run this bundle, link your users to
+the source you run (for example from the client's About page), and check your
+obligations with counsel.

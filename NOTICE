@@ -1,0 +1,171 @@
+siwx-oidc-matrix-server
+Copyright 2024-2026 inblock.io assets GmbH and contributors
+
+This product is licensed under the Apache License, Version 2.0. The full
+license text is in the LICENSE file. The patches and the brand assets
+described below are exceptions: the Apache License does not cover them.
+
+
+Patches to upstream projects
+----------------------------
+
+The .patch files under patches/ modify Synapse and Element Web, which are
+not licensed under the Apache License. Each change in a patch is licensed
+under the license of the upstream file it changes, and a file that a patch
+adds is licensed as stated below. The registries patches/synapse/README.md
+and patches/element-web/README.md are this project's own documentation
+and fall under the Apache License. The upstream licenses below were read
+from Synapse v1.161.0 and Element Web v1.12.29.
+
+patches/synapse/msc4133-profile-field-write-policy.patch
+    AGPL-3.0-or-later. It changes synapse/config/experimental.py and
+    synapse/handlers/profile.py, whose headers license them under the GNU
+    Affero General Public License, version 3 or any later version. It
+    backports code from https://github.com/element-hq/synapse/pull/19980.
+
+patches/synapse/tests/test_msc4133_write_policy.py
+    AGPL-3.0-or-later, like the patch it tests. It is written to be copied
+    into Synapse's own test tree and run there, and it reuses the set-up
+    code of Synapse's tests/rest/client/test_profile.py.
+
+patches/element-web/*.patch
+    Almost every existing file these patches change carries
+    "SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR
+    LicenseRef-Element-Commercial". The third option names Element's
+    commercial license, which only Element can grant, so the changes to
+    these files, and the code files the patches add, are licensed
+    AGPL-3.0-only OR GPL-3.0-only. The added code files carry Element's
+    standard file header so that they can be proposed upstream unchanged.
+
+    AUTHORS.rst, docs/labs.md and apps/web/src/i18n/strings/en_EN.json
+    have no header and fall under Element Web's README, which offers the
+    same licenses in their "or any later version" form. Changes to them
+    are licensed AGPL-3.0-or-later OR GPL-3.0-or-later.
+
+    The following changes are licensed differently. None of them is part
+    of the built web application: they are documentation and tests.
+
+    - docs/.vitepress/config.ts, changed by browser-eventindex.patch, is
+      offered by Element under "AGPL-3.0-only OR
+      LicenseRef-Element-Commercial" only. That change is AGPL-3.0-only.
+
+    - apps/web/src/indexing/EventIndex.test.ts, changed by
+      browser-eventindex.patch, is licensed under the Apache License,
+      Version 2.0, with the notice:
+
+          Copyright 2025 The Matrix.org Foundation C.I.C.
+
+      That change is licensed under the Apache License, Version 2.0.
+
+    - apps/web/src/serviceworker/serverSupport.test.ts, added by
+      sw-versions-no-cache-on-error.patch, and
+      apps/web/src/serviceworker/mediaTokenRetry.test.ts, added by
+      sw-media-401-token-retry.patch, adapt the test harness of
+      apps/web/src/serviceworker/index.test.ts from
+      https://github.com/element-hq/element-web/pull/34955, which is
+      licensed "AGPL-3.0-only OR LicenseRef-Element-Commercial" with the
+      notice:
+
+          Copyright 2026 Element Creations Ltd.
+
+      These two files are therefore AGPL-3.0-only. Their headers do not
+      say so yet.
+
+
+Brand assets
+------------
+
+The following files are logos and brand material of inblock.io assets
+GmbH. They are not licensed under the Apache License or under any other
+license. A deployment of this bundle must replace them with its own:
+
+    config/element-welcome-background.svg
+    config/favicon.ico
+    config/favicon-24.png
+    config/favicon-120.png
+    config/favicon-144.png
+    config/favicon-152.png
+    config/favicon-180.png
+    config/favicon-512.png
+    config/favicon-1024.png
+    config/inblockio_logo_dark.png
+    inblockio Logo birdstyle icon round.png
+
+config/element-config.json refers to these files and uses the inblock.io
+name in its branding settings (brand, branding, element_call.brand and the
+"inblock.io Dark" and "inblock.io Light" theme names). Section 6 of the
+Apache License grants no right to use that name. Replace those values too.
+
+
+Third-party material in this repository
+---------------------------------------
+
+config/element-config.json
+    The custom theme "Nord dark theme" is copied unchanged from
+    https://github.com/aaronraimist/element-themes
+    (Nord/Nord Dark/Nord Dark.json), which is released into the public
+    domain under the Unlicense. It is credited here as a courtesy.
+
+config/element-nginx.conf
+    The skeleton of the server block (the listen, server_name,
+    "location /", error_page and "location = /50x.html" directives and
+    the comment above error_page) is taken from nginx's stock
+    default.conf, which the nginxinc/nginx-unprivileged base image ships.
+    Its source is alpine/alpine/nginx.default.conf in
+    https://github.com/nginx/pkg-oss, used under the following license:
+
+        Copyright (C) 2011-2024 F5, Inc.
+        All rights reserved.
+
+        Redistribution and use in source and binary forms, with or without
+        modification, are permitted provided that the following conditions
+        are met:
+        1. Redistributions of source code must retain the above copyright
+           notice, this list of conditions and the following disclaimer.
+        2. Redistributions in binary form must reproduce the above copyright
+           notice, this list of conditions and the following disclaimer in the
+           documentation and/or other materials provided with the distribution.
+
+        THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+        ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+        IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+        ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+        FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+        DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+        OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+        HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+        LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+        OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+        SUCH DAMAGE.
+
+scripts/turnprobe/main.go
+    Reimplements the TURN credential derivation of LiveKit
+    (pkg/service/turn.go at v1.12.0, https://github.com/livekit/livekit),
+    which is licensed under the Apache License, Version 2.0, with the
+    notice:
+
+        Copyright 2023 LiveKit, Inc.
+
+
+Upstream sources
+----------------
+
+The patches apply to the upstream releases pinned in dockerfiles/Dockerfile
+(the FROM line) and dockerfiles/Dockerfile.element (ELEMENT_WEB_TAG). The
+images are built on those releases, and their source is not part of this
+repository:
+
+    Synapse       https://github.com/element-hq/synapse
+    Element Web   https://github.com/element-hq/element-web
+
+Upstream pull requests that a patch backports or mirrors:
+
+    patches/synapse/msc4133-profile-field-write-policy.patch
+        https://github.com/element-hq/synapse/pull/19980
+    patches/element-web/browser-eventindex.patch
+        https://github.com/element-hq/element-web/pull/34718
+    patches/element-web/sw-versions-no-cache-on-error.patch
+        https://github.com/element-hq/element-web/pull/35242
+
+Container images built from this repository contain these upstream
+programs and other third-party software, each under its own license.

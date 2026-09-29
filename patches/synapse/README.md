@@ -6,6 +6,11 @@ source for the Synapse image, and it applies exactly the patches listed here wit
 `patch --forward --batch --fuzz=0`, so **a patch that stops applying fails the image
 build loudly** — never silently at runtime.
 
+**License.** The patch and its test in this directory are licensed AGPL-3.0-or-later,
+not Apache-2.0 like the rest of the repository: the patch changes two Synapse files whose
+headers license them AGPL-3.0-or-later, and the test only runs inside Synapse's own test
+tree. See [`NOTICE`](../../NOTICE) at the repository root.
+
 The rules are the same as `patches/element-web/README.md`, and for the same reason:
 
 1. **No patch without an entry here.** Every entry states *what*, *why*, the
