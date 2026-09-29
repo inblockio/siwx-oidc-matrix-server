@@ -23,10 +23,27 @@
 #   scripts/did-field-guard-accept.sh
 #   scripts/did-field-guard-accept.sh --patched IMG --stock IMG
 #
+# PATCHED defaults to the e2e harness's Synapse, built from
+# dockerfiles/Dockerfile on demand (e2e-harness/images.sh).
+#
 # The STOCK image is load-bearing, not a convenience: case 4 is the one that
-# proves a deployment which pinned an unpatched digest is refused. Any
-# unpatched matrixdotorg/synapse:v1.159.0-based image will do
-# (`--stock matrixdotorg/synapse:v1.159.0` works if you can pull it).
+# proves a deployment which pinned an unpatched digest is refused. By default
+# the script builds it from two things the repository already pins, so it
+# cannot drift from what ships: the upstream image in dockerfiles/Dockerfile's
+# FROM line (same Synapse version, same digest), plus /usr/bin/yq copied out
+# of the PATCHED image. The entrypoint needs yq and upstream Synapse ships
+# none, so plain `matrixdotorg/synapse` fails at the yq write instead of at the
+# patch check. The result lacks the patch; nothing else it lacks (the baked
+# entrypoint, LICENSE, NOTICE) is read by any case, since every case mounts
+# the working-tree entrypoint. `--stock IMG` takes any unpatched Synapse image
+# with yq at /usr/bin/yq instead.
+#
+# Env:
+#   PATCHED_IMAGE / STOCK_IMAGE   same as --patched / --stock
+#   STOCK_TAG                     tag for the built stock image
+#                                 (default localhost/siwx-did-guard-stock:<vX.Y.Z>)
+#   SIWX_ACCEPT_SCRATCH           fixture directory
+#                                 (default ~/.cache/siwx-did-field-guard-accept)
 #
 # Exit code: non-zero if any case FAILs.
 
@@ -37,15 +54,18 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Default PATCHED image = the e2e harness's Synapse (dockerfiles/Dockerfile,
 # resolved and built on demand by e2e-harness/images.sh, below). It used to be
 # the hand-built `siwx-real-synapse:local` tag, which was deleted in an image
-# cleanup on 2026-09-25 and could not be reproduced from its name.
+# cleanup on 2026-09-25 and could not be reproduced from its name. The STOCK
+# default had the same flaw (a hand-built `siwx-real-synapse:mas159`); it is
+# now built below from the Dockerfile's own pins.
 PATCHED_IMAGE="${PATCHED_IMAGE:-}"
-STOCK_IMAGE="${STOCK_IMAGE:-localhost/siwx-real-synapse:mas159}"
+STOCK_IMAGE="${STOCK_IMAGE:-}"
+STOCK_TAG="${STOCK_TAG:-}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --patched) PATCHED_IMAGE="$2"; shift 2 ;;
     --stock)   STOCK_IMAGE="$2";   shift 2 ;;
-    -h|--help) sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,/^$/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -66,6 +86,26 @@ fi
 # belongs to no process. The cache dir is disk everywhere that matters.
 SCRATCH="${SIWX_ACCEPT_SCRATCH:-${XDG_CACHE_HOME:-$HOME/.cache}/siwx-did-field-guard-accept}"
 mkdir -p "${SCRATCH}"
+
+# Default STOCK image: upstream Synapse at the digest dockerfiles/Dockerfile
+# builds on, plus the PATCHED image's yq. Rebuilt on every run, which costs one
+# cached layer, so it always follows the current FROM line and PATCHED image.
+if [ -z "${STOCK_IMAGE}" ]; then
+  STOCK_BASE="$(sed -n 's#^FROM[[:space:]]\{1,\}\(matrixdotorg/synapse:[^[:space:]]*\).*#\1#p' \
+                  "${REPO_ROOT}/dockerfiles/Dockerfile" | head -1)"
+  [ -n "${STOCK_BASE}" ] || { echo "cannot read the matrixdotorg/synapse FROM line of dockerfiles/Dockerfile" >&2; exit 2; }
+  STOCK_VER="${STOCK_BASE#matrixdotorg/synapse:}"; STOCK_VER="${STOCK_VER%%@*}"
+  STOCK_IMAGE="${STOCK_TAG:-localhost/siwx-did-guard-stock:${STOCK_VER}}"
+  STOCK_CTX="${SCRATCH}/stock-build"
+  mkdir -p "${STOCK_CTX}"
+  # docker.io/ spelled out: podman resolves short names by configuration, and
+  # a build must not depend on which registry that picks.
+  printf 'FROM docker.io/%s\nCOPY --from=%s /usr/bin/yq /usr/bin/yq\n' \
+    "${STOCK_BASE}" "${PATCHED_IMAGE}" > "${STOCK_CTX}/Containerfile"
+  echo "[fixture] building ${STOCK_IMAGE}: docker.io/${STOCK_BASE} + yq from ${PATCHED_IMAGE}"
+  "${RT}" build -q -t "${STOCK_IMAGE}" -f "${STOCK_CTX}/Containerfile" "${STOCK_CTX}" >/dev/null \
+    || { echo "could not build the stock Synapse image" >&2; exit 2; }
+fi
 
 PASS_COUNT=0
 FAIL_COUNT=0
