@@ -136,7 +136,8 @@ deployment is known to run a different version.
 | Caddy module `layer4` (mholt/caddy-l4) | `v0.1.2` | `dockerfiles/Dockerfile.caddy-l4` (`xcaddy build`) | Stock module (TURN-TLS SNI split on :443) |
 | Caddy module `rate_limit` (mholt/caddy-ratelimit) | commit `5625512f24f6` (upstream has no tag after `v0.1.0`) | `dockerfiles/Dockerfile.caddy-l4` (`xcaddy build`) | Stock module at a commit (edge rate limit for siwx-oidc `GET /resolve`) |
 | Caddy image an edge runs | a CI build of `caddy-l4`, pinned by digest | Not in this repository: the edge is configured per deployment | Built here |
-| yq (Synapse image) | `v4.53.3`, SHA-256 checked | `dockerfiles/Dockerfile` (`yq` download step) | Stock binary |
+| yq (Synapse image) | `v4.53.3`, SHA-256 checked, binary and `LICENSE` | `dockerfiles/Dockerfile` (`yq` download step and the `ADD` of its `LICENSE`) | Stock binary |
+| License texts (Element and caddy-l4 images) | SPDX license-list-data `v3.29.0`, one SHA-256 per text | `dockerfiles/Dockerfile.element`, `dockerfiles/Dockerfile.caddy-l4` (`alpine_licenses` stage) | Stock texts; which ones is checked against the base image's packages at build time |
 | Debian `patch` (Synapse image build) | not version-pinned: floats within the Debian release (trixie) that the base digest fixes. Build tool only: installed, used and purged in one layer, so it is not in the image | `dockerfiles/Dockerfile` (patch step) | Stock |
 | Database | SQLite at `/data/homeserver.db` (Synapse's generated default) | `entrypoints/matrix_server.sh` (`/start.py generate`) | Stock; not a separate service |
 
@@ -166,7 +167,7 @@ do:
 The other image references in the Dockerfiles, compose files and `e2e-harness/`
 scripts are pinned by digest, with the version tag alongside wherever one exists
 (the local and test stacks included); the Element Web source tag is checked against
-its commit, and the yq download against its checksum.
+its commit, and the yq download and the license texts against their checksums.
 
 ## Upstream deviations (patches)
 
@@ -452,6 +453,14 @@ they contain and sets out two exceptions in full:
   AGPL-3.0-only OR GPL-3.0-only.
 - **Brand assets.** The inblock.io logos, favicons and welcome background are not
   licensed. A deployment must replace them with its own.
+
+**Images.** Each image ships this repository's LICENSE and NOTICE, and the license texts
+of what it adds: yq's in the Synapse image, Element Web's AGPL-3.0 and GPL-3.0 texts in
+the Element image, and the texts of every license its Alpine packages declare in the
+Element and caddy-l4 images (a build step fails when those disagree). NOTICE, "Container
+images", names the Alpine releases and their source. An image's corresponding source is
+the upstream release its Dockerfile pins plus this repository at the commit its
+`org.opencontainers.image.revision` label names.
 
 **AGPL and network use (not legal advice).** A deployment of this bundle serves
 modified AGPL-3.0 programs to its users over a network: Synapse, and Element Web when

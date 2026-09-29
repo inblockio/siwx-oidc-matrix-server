@@ -125,9 +125,39 @@ FROM caddy:2.11.4-builder@sha256:369218c81ca6d6af249981221b3a5c764d886dd5b058f51
 RUN xcaddy build \
     --with github.com/mholt/caddy-l4@v0.1.2 \
     --with github.com/mholt/caddy-ratelimit@5625512f24f6f59d6f64fb3aafe5eecff0b286db
+# ---------------------------------------------------------------------------
+# License texts for the Alpine packages of the caddy:2.11.4 base below
+# (Alpine 3.23.6), busybox's GPL-2.0-only among them. Canonical texts from SPDX
+# license-list-data v3.29.0, each checked against its SHA-256 as it is
+# downloaded. The set is not chosen here: dockerfiles/check-alpine-licenses.sh,
+# run at the end of the final stage, fails the build when an installed package
+# declares a license with no text below, when a text below is declared by no
+# package, or when NOTICE does not name the Alpine release. So a base bump that
+# changes the licenses stops the build until this list (and NOTICE) follows.
+# This list is the L: lines of /lib/apk/db/installed in the pinned base.
+# A remote ADD gets mode 0600, hence --chmod.
+# ---------------------------------------------------------------------------
+FROM scratch AS alpine_licenses
+ARG SPDX_TEXT=https://raw.githubusercontent.com/spdx/license-list-data/v3.29.0/text
+ADD --chmod=0644 --checksum=sha256:074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff ${SPDX_TEXT}/Apache-2.0.txt /alpine/Apache-2.0.txt
+ADD --chmod=0644 --checksum=sha256:f32fb3b417a194167cfad068223fc975ba96c5960513a10f66a3c28720aec1df ${SPDX_TEXT}/BSD-2-Clause.txt /alpine/BSD-2-Clause.txt
+ADD --chmod=0644 --checksum=sha256:5a93d5831e1297ab10fe643e1a631e83be392896da14ee2951285a79012df69d ${SPDX_TEXT}/BSD-3-Clause.txt /alpine/BSD-3-Clause.txt
+ADD --chmod=0644 --checksum=sha256:272d1239bdcef73bb98bac206168ca1040bd4a31296755fadfb7515bcea18df3 ${SPDX_TEXT}/curl.txt /alpine/curl.txt
+ADD --chmod=0644 --checksum=sha256:aaf135472f81c5b4a0dca9367e5bb5e9750032b5bebe5442b36e4c0a47430df3 ${SPDX_TEXT}/GPL-2.0-only.txt /alpine/GPL-2.0-only.txt
+ADD --chmod=0644 --checksum=sha256:aaf135472f81c5b4a0dca9367e5bb5e9750032b5bebe5442b36e4c0a47430df3 ${SPDX_TEXT}/GPL-2.0-or-later.txt /alpine/GPL-2.0-or-later.txt
+ADD --chmod=0644 --checksum=sha256:996af0513df21f7496288951c41428a03c174e9e4a9d63665c57d670f845ccb1 ${SPDX_TEXT}/LGPL-3.0-or-later.txt /alpine/LGPL-3.0-or-later.txt
+ADD --chmod=0644 --checksum=sha256:b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5 ${SPDX_TEXT}/MIT.txt /alpine/MIT.txt
+ADD --chmod=0644 --checksum=sha256:66a3107d5ad6a058aab753eaac2047ccb2ed0e39465dd0fe5844da3e300d5172 ${SPDX_TEXT}/MPL-2.0.txt /alpine/MPL-2.0.txt
+ADD --chmod=0644 --checksum=sha256:bfb1112d49db5b1daecdfef24bd7e2f3ea0bafb33aa67aa0ab51e2bf8407c03d ${SPDX_TEXT}/Zlib.txt /alpine/Zlib.txt
+
 # ---- final stage ----
 FROM caddy:2.11.4@sha256:0c994536bddb66445885237f1a5dcc1916bccea922661c76b4e9fc24061f9b52
 COPY --from=builder /usr/bin/caddy /usr/bin/caddy
 # Published from this repository like the Synapse and Element images, so it
 # carries the same LICENSE and NOTICE at the same path.
 COPY LICENSE NOTICE /usr/share/licenses/siwx-oidc-matrix-server/
+# The base image's Alpine packages carry their own licenses (stage
+# alpine_licenses); the check keeps texts, packages and NOTICE in step.
+COPY --from=alpine_licenses /alpine/ /usr/share/licenses/alpine/
+RUN --mount=type=bind,source=dockerfiles/check-alpine-licenses.sh,target=/tmp/check-alpine-licenses.sh \
+    sh /tmp/check-alpine-licenses.sh
