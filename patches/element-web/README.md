@@ -2,10 +2,9 @@
 
 This directory is the **complete, canonical list of every modification we apply to
 upstream Element Web source** before building. `dockerfiles/Dockerfile.element` is the
-single build source for the element-web images (lab, dev-staging, prod digest
-promotion; all now built from `main`), and it applies exactly the patches listed here, each with
-`git apply --verbose` so **a patch that stops applying fails the image build loudly** —
-never silently at runtime.
+single build source for the element-web image that CI publishes from `main`, and it
+applies exactly the patches listed here, each with `git apply --verbose` so **a patch
+that stops applying fails the image build loudly** — never silently at runtime.
 
 **License.** The patches in this directory are not Apache-2.0 like the rest of the
 repository. Each change is licensed like the Element Web file it changes, which for the
@@ -44,11 +43,17 @@ Rules of this registry:
    vendored patch is re-copied (and the entry's provenance updated) in the same change:
    on 2026-09-29 the SonarCloud follow-up to #35242 (`246724f407`) drifted entry 9 by
    24 lines because this step was missing.
-4. **Tag-bump procedure** (do this for every `ELEMENT_WEB_TAG` change):
+4. **Tag-bump procedure** (do this for every `ELEMENT_WEB_TAG` change). Change
+   `ARG ELEMENT_WEB_TAG` and `ARG ELEMENT_WEB_COMMIT` in `dockerfiles/Dockerfile.element`
+   **together**: the build fails when the tag does not resolve to that commit, which is what
+   stops a tag moved upstream from changing what we ship. Look the commit up with
+   `git ls-remote https://github.com/element-hq/element-web 'refs/tags/<newtag>^{}'`.
+   Then try every patch against a fresh clone of the new tag:
    ```bash
-   git clone --depth 1 --branch <newtag> https://github.com/element-hq/element-web.git /tmp/ewcheck
+   ewcheck="$(mktemp -d)"
+   git clone --depth 1 --branch <newtag> https://github.com/element-hq/element-web.git "$ewcheck"
    for p in $(grep -oE 'patches/element-web/[a-z0-9-]+\.patch' dockerfiles/Dockerfile.element); do
-     git -C /tmp/ewcheck apply "$PWD/$p" && echo "OK $p" || { echo "FAIL $p"; break; }
+     git -C "$ewcheck" apply "$PWD/$p" && echo "OK $p" || { echo "FAIL $p"; break; }
    done
    ```
    Apply IN DOCKERFILE ORDER (several patches touch `en_EN.json`; order is load-bearing).
@@ -82,7 +87,8 @@ Rules of this registry:
 5. **Non-`.patch` deltas count too.** The runtime stage of Dockerfile.element also
    modifies the served app; those deltas are listed at the bottom of this file.
 6. **The repo README mirrors this list.** Its "Upstream deviations (patches)" section
-   carries one line per entry, and its "Dependencies" table carries `ELEMENT_WEB_TAG`.
+   carries one line per entry, and its "Dependencies" table carries `ELEMENT_WEB_TAG` and
+   `ELEMENT_WEB_COMMIT`.
    Adding, dropping or renumbering a patch, or bumping the tag, updates the README in
    the same commit.
 
@@ -143,40 +149,22 @@ check code is the security property; the extra Continue click is not, and the
 ceremony friction it removes is worth the maintenance. Recorded so this is not
 re-litigated each time someone audits the registry.
 
-## What runs on prod today
+## Summary
 
-**Updated 2026-09-28: entries 1-8 are live on `element.inblock.io`; entries 9 and 10
-are NOT.** Prod was re-promoted on 2026-09-25 (the Matrix stack promotion: Element Web
-1.12.29, `element-web@sha256:8cea1873…`, the `:main` digest). Checked read-only on
-2026-09-28: `https://element.inblock.io/version` = `1.12.29`; the served `sw.js` ends in
-the build stamp `// build: 4c2ef16084332bf0ad41 2026-09-25T11:40:49Z` and contains
-none of the entry 9/10 markers (`not caching server support`, `retrying without one`,
-`retrying media request with a refreshed access token`: 0 each), i.e. prod runs the
-stock service worker and is exposed to the entry 9 defect; the served `sw-boot.js`
-carries the canary (`swprobe`) but not the `SYNCING` gate; the served English i18n
-carries entry 7's `did_label_unsigned`. Entry 8 has no string marker that survives
-minification; it is in the build by provenance (same Dockerfile, fail-loud apply).
-
-The 2026-09-13 note that used to head this section ("all EIGHT patches are now live")
-listed only rows 1-6 below and named an artifact (`element-web@sha256:785ab46c…`,
-`rev=f933e7b`) that the 2026-09-25 promotion replaced. f933e7b did carry all eight
-patches; the table now lists every entry.
-
-| # | Patch | Purpose | Active on prod |
+| # | Patch | Purpose | Gate |
 |---|---|---|---|
-| 1 | `force-first-device-recovery` | Makes 4S recovery-key setup **mandatory on the first device**, so every later device has cross-signing secrets to join against. Deployment policy, permanent. | yes, ungated |
-| 2 | `setup-encryption-busy-wedge` | Recovers from an upstream post-verification `Phase.Busy` dead end that is indistinguishable from "verification failed" to the user. | yes, ungated |
-| 3 | `honest-qr-disabled-reason` | When "Show QR code" is blocked by **this session's own** crypto state, stop reporting it as the account provider not supporting device link. The stock string is simply false for us and hides the actual remedy. | yes, ungated |
-| 4 | `offer-verify-current-session` | `DeviceVerificationStatusCard` gave an unverified **current** session a card with no action and no reason, leaving the destructive identity reset as the only visible exit. | yes, ungated |
-| 5 | `auto-approve-check-code` | MSC4108 QR device-link check-code auto-approves once both digits are typed. The deliberate read-and-type is the security property; the extra confirm click is not. | yes, ungated |
-| 6 | `browser-eventindex` | A `BrowserEventIndexManager` implementing `BaseEventIndexManager` so E2EE room search works in hosted Element Web, with a **non-blocking** load so a large index cannot delay app start, bounded crawl/memory/disk budgets, a chunked encrypted store, and a streamed cold scan for what is on disk outside the resident window. Upstream PR #34718 plus increments A, B, C, D-core and E, which lead it. | **yes, via `features.feature_web_event_index: true`** (renamed on prod 2026-09-13) |
-| 7 | `show-attested-did` | Shows the provider-attested DID (`io.inblock.did`) under the MXID in the member panel and in All settings -> Account. | yes, ungated (i18n key `did_label_unsigned` served) |
-| 8 | `resolve-did-search` | A DID typed into Spotlight or the invite/DM dialog resolves to the user's MXID. Depends on 7. | yes, ungated (by build provenance; no surviving string marker) |
-| 9 | `sw-versions-no-cache-on-error` | The service worker never caches a failed `/versions` check, retries it anonymously, and shares one check per server. | **no**: dev only (main 2e9eb93, pinned on dev 2026-09-28). Release notes and procedure: `docs/2026-09-28-PENDING-PROMOTION-element-sw-media-auth.md` |
-| 10 | `sw-media-401-token-retry` | A media request that 401s with the stored token waits (5 s bound) for the app's refresh and retries once. | **no**: dev only, ships together with 9 (same doc) |
+| 1 | `force-first-device-recovery` | Makes 4S recovery-key setup **mandatory on the first device**, so every later device has cross-signing secrets to join against. Deployment policy, permanent. | none |
+| 2 | `setup-encryption-busy-wedge` | Recovers from an upstream post-verification `Phase.Busy` dead end that is indistinguishable from "verification failed" to the user. | none |
+| 3 | `honest-qr-disabled-reason` | When "Show QR code" is blocked by **this session's own** crypto state, stop reporting it as the account provider not supporting device link. The stock string is simply false for us and hides the actual remedy. | none |
+| 4 | `offer-verify-current-session` | `DeviceVerificationStatusCard` gave an unverified **current** session a card with no action and no reason, leaving the destructive identity reset as the only visible exit. | none |
+| 5 | `auto-approve-check-code` | MSC4108 QR device-link check-code auto-approves once both digits are typed. The deliberate read-and-type is the security property; the extra confirm click is not. | none |
+| 6 | `browser-eventindex` | A `BrowserEventIndexManager` implementing `BaseEventIndexManager` so E2EE room search works in hosted Element Web, with a **non-blocking** load so a large index cannot delay app start, bounded crawl/memory/disk budgets, a chunked encrypted store, and a streamed cold scan for what is on disk outside the resident window. Upstream PR #34718 plus increments A, B, C, D-core and E, which lead it. | labs flag `feature_web_event_index` (off unless set; this repository's config sets it) |
+| 7 | `show-attested-did` | Shows the provider-attested DID (`io.inblock.did`) under the MXID in the member panel and in All settings -> Account. | none |
+| 8 | `resolve-did-search` | A DID typed into Spotlight or the invite/DM dialog resolves to the user's MXID. Depends on 7. | none |
+| 9 | `sw-versions-no-cache-on-error` | The service worker never caches a failed `/versions` check, retries it anonymously, and shares one check per server. | none |
+| 10 | `sw-media-401-token-retry` | A media request that 401s with the stored token waits (5 s bound) for the app's refresh and retries once. | none |
 
-Entry 6 is the only gated one. **Its gate is now the same everywhere**, which it
-was not before 2026-09-13:
+Entry 6 is the only gated one:
 
 ```
 feature_web_event_index === true   -> ON (config.json `features`, or per-device in Labs)
@@ -184,39 +172,22 @@ feature_web_event_index === false  -> off
 feature_web_event_index unset      -> OFF. There is no hostname fallback any more.
 ```
 
-Both `element.inblock.io` and `dev.element.inblock.io` set the key to `true` in
-their bind-mounted `config/element-config.json`, so both are ON by the same
-explicit mechanism. `feature_inblock_encrypted_search` is dead: nothing reads it,
-and it has been removed from prod's config.
+`config/element-config.json` in this repository sets the key to `true`. The older key
+`feature_inblock_encrypted_search` is dead: nothing reads it. Until 2026-09-13 the patch
+also turned the feature on by hostname (`STAGING_HOSTS`); that fallback is gone, so a
+note calling the feature "staging only" or "gated off by hostname" describes a gate that
+no longer exists.
 
-**The history matters if you read older notes.** Until 2026-09-13 the two hosts
-were on by *different* mechanisms — prod by an explicit
-`feature_inblock_encrypted_search: true`, dev-staging by the patch's
-`STAGING_HOSTS` hostname fallback with no key set at all. Both the old key and
-the hostname allowlist are gone from the patch. So any comment claiming this
-feature is "dev-staging only", or "gated off on the production hostname",
-describes a gate that no longer exists and was already wrong about prod as
-configured.
+Which build a given deployment runs, and so which of these entries it carries, is
+recorded by that deployment, not here.
 
 ## Which Dockerfile applies what
 
 **One Dockerfile, all ten patches.** `dockerfiles/Dockerfile.element` applies every
-numbered patch below, in this file's order. Entries 9 (`sw-versions-no-cache-on-error`)
-and 10 (`sw-media-401-token-retry`), both 2026-09-28, are the newest. They touch only the
-service worker, were merged to `main` from branch `fix/ew-sw-versions-401-poison` in
-`2e9eb93`, and are not on prod yet (see the table above); **10 depends on 9** and must
-stay after it. Entries 7 (`show-attested-did`) and 8 (`resolve-did-search`) were added
-2026-09-11; entries 1-6 are the set the paragraphs below describe. **8 depends on
-7** and must stay after it — see its Order note.
-
-This section used to describe a split: the `dev` Dockerfile applied all six
-while the `main` one applied 1, 5 and 6 only, with entries 2–4 described as
-"policy we maintain; they ship on staging until promoted". Both halves of that
-are now wrong. `dev` was merged into `main` on 2026-09-01 and deleted, so there
-is a single Dockerfile. And the "not yet on prod" half was **already** false
-before that merge: prod's element image was built from `dev` (revision
-`60b037b`), so production has been running all six patches, entries 2–4
-included, since it adopted that build.
+numbered patch below, in this file's order. **8 depends on 7** and **10 depends on 9**;
+each must stay after the entry it depends on (see their Order notes). Until 2026-09-01 a
+separate `dev` branch applied a different subset; that branch was merged into `main` and
+deleted, so there is a single Dockerfile.
 
 A tag bump must try every patch in this file's order.
 
@@ -237,8 +208,9 @@ A tag bump must try every patch in this file's order.
   that can never verify a second device (the MSC4108/QR prerequisite is client-side and
   invisible to the server). The body-read fix is the root-cause fix of the
   owner-reported prod reset failure (2026-08-01).
-- **Evidence:** siwx-oidc repo `docs/2026-08-01-HANDOVER-elementx-verify-open-question.md`
-  §4; `docs/2026-08-02-elementx-verify-RESOLVED-identity-binding-walk.md`.
+- **Evidence:** two siwx-oidc maintainer write-ups of 2026-08-01 and 2026-08-02 (the
+  Element X verification open question, §4, and its resolution walk), no longer in that
+  repository's published tree.
 - **Upstream status:** the forced-setup half is NOT upstreamable (deployment policy).
   The `{}`-tombstone half IS an upstream defect and is already reported.
 - **Tracking:** [element-hq/element-web#29133](https://github.com/element-hq/element-web/issues/29133)
@@ -316,8 +288,9 @@ A tag bump must try every patch in this file's order.
   Includes the matching upstream unit-test edit.
 - **Why:** removing the only non-destructive exit funnels users into cross-signing
   identity resets — the amplifier pattern of the 2026-06-12 incident.
-- **Evidence:** siwx-oidc repo `docs/audits/2026-07-25-R4-recheck-verdict.md`;
-  incident analysis referenced in CLAUDE.md (device lifecycle section).
+- **Evidence:** siwx-oidc repo `docs/audits/2026-07-25-R4-recheck-verdict.md`; the
+  2026-06-12 login incident is summarised in siwx-oidc's `docs/matrix-integration.md`
+  ("Session teardown").
 - **Upstream status:** not filed, and **searched 2026-09-01: no upstream match exists**.
   Patch is already PR-shaped (carries the upstream unit-test edit), so it is the
   cheapest of the three to file. Nearest adjacent item is
@@ -427,12 +400,11 @@ A tag bump must try every patch in this file's order.
   EventIndex, so Search is N/A. Product client is hosted Element Web, not
   Desktop. A Seshat WASM port was evaluated and rejected (SQLCipher /
   Tantivy 0.12 / native threads / Neon).
-- **Evidence:** `docs/2026-08-14-HANDOVER-encrypted-search-browser-eventindex.md`;
-  audit `docs/audits/2026-08-14-encrypted-search-eventindex-audit.md`
-  (staging UX1–UX8 + prod promotion 2026-08-15). Both predate the labs-flag
-  and schema-v2 rework and describe the hostname gate and the
-  `inblock-ew-eventindex` database; read them as the record of why the
-  feature exists, not of how it is gated today.
+- **Evidence:** audit `docs/audits/2026-08-14-encrypted-search-eventindex-audit.md`
+  (threat model, invariants, and the UX1–UX8 run on staging). It predates the labs-flag
+  and schema-v2 rework and describes the hostname gate and the
+  `inblock-ew-eventindex` database; read it as the record of why the feature exists,
+  not of how it is gated today.
 - **Regenerated against the PR, 2026-09-12.** The PR had moved substantially
   (labs gate, schema v2, checkpoint HMAC, teardown hardening, rewritten
   tests, docs) while the vendored copy still carried the 2026-08 form, which
@@ -491,9 +463,8 @@ A tag bump must try every patch in this file's order.
   - **What the non-blocking load changes.** `initEventIndex` no longer awaits a
     full read of the persisted index before returning, so opening Element with a
     large index no longer blocks app start — which was the binding constraint
-    recorded in the EventIndex bounded-memory ruling (memory
-    `event-index-bounded-memory-design`: ~0.18 ms/event of startup decryption,
-    not memory, is what hurts). Hydration now runs in the background behind a
+    recorded in the maintainers' EventIndex bounded-memory ruling (not published:
+    ~0.18 ms/event of startup decryption, not memory, is what hurts). Hydration now runs in the background behind a
     `hydrating` flag, surfaced to callers as a new `IIndexStats.loading`;
     `SearchWarning` polls it so the "results may be incomplete" notice appears
     and, unlike the checkpoint signal, **clears itself** when hydration finishes;
@@ -507,9 +478,8 @@ A tag bump must try every patch in this file's order.
     merged**, so they apply at the tag with offset differences only.
   - **Evidence it is safe to carry.** Adversarial review verdict **SHIP** at
     `27e9537a8c`, all thirteen findings fixed and each fix re-verified as
-    load-bearing by isolated mutation:
-    `~/handovers/2026-09-12-element-web-eventindex/research/review-pr-a.md`;
-    proof numbers in the sibling `measurements-pr-a.md`. Re-run on the
+    load-bearing by isolated mutation (maintainer review notes `review-pr-a.md` and
+    `measurements-pr-a.md`, not published). Re-run on the
     integration branch itself before the patch was regenerated: **vitest
     121/121** (`BrowserEventIndexManager.test.ts` + `WebPlatform.test.ts`),
     **jest 37/37** across `SearchWarning-test.tsx`, `EventIndexPanel-test.tsx`
@@ -581,10 +551,10 @@ A tag bump must try every patch in this file's order.
        (`seshat|warning_kind_search_windowed`, "Search covers messages newer than
        %(date)s"), and `docs/labs.md` states the window (90 days) and the room cap
        (100 desktop / 20 on memory-constrained devices).
-  - **Evidence:** reviews **SHIP** after several rounds —
-    `~/handovers/2026-09-12-element-web-eventindex/research/review-pr-b.md` and
-    `review-pr-c.md` (C took five passes; final SHIP at `af6fec256c`), proofs in
-    `measurements-pr-b.md` and `measurements-pr-c.md`. Gates re-run on the
+  - **Evidence:** reviews **SHIP** after several rounds — maintainer review notes
+    `review-pr-b.md` and `review-pr-c.md` (C took five passes; final SHIP at
+    `af6fec256c`), proofs in `measurements-pr-b.md` and `measurements-pr-c.md` (not
+    published). Gates re-run on the
     integration branch itself: **vitest 183/183** (`BrowserEventIndexManager`,
     `WebPlatform`, `eventIndexBounds`, `EventIndex`), **jest 44/44**
     (`SearchWarning`, `EventIndexPanel`, `RoomSearchAuxPanel`), `tsc --noEmit`
@@ -659,12 +629,11 @@ A tag bump must try every patch in this file's order.
        may be partial.
     3. **Firefox and Safari on the desktop get the desktop tier** rather than the
        49k-event small tier they were getting from the missing `deviceMemory`.
-  - **Evidence:** reviews **SHIP** —
-    `~/handovers/2026-09-12-element-web-eventindex/research/review-pr-d.md` (four
+  - **Evidence:** reviews **SHIP** — maintainer review notes `review-pr-d.md` (four
     sections, D-core SHIP at `2c04b3b562`) and `review-pr-e.md` (four sections,
     E-core SHIP at `c61dba1135`, both HIGH findings of the previous round verified
     fixed in both directions), proofs in `measurements-pr-d.md` and
-    `measurements-pr-e.md`. Gates re-run **on the integration branch itself**:
+    `measurements-pr-e.md` (not published). Gates re-run **on the integration branch itself**:
     **vitest 294/294** (`BrowserEventIndexManager`, `WebPlatform`,
     `eventIndexBounds`, `ElectronPlatform`, `PWAPlatform`, `EventIndex`), **jest
     48/48** across `SearchWarning`, `EventIndexPanel` and `RoomSearchAuxPanel`
@@ -787,25 +756,19 @@ A tag bump must try every patch in this file's order.
   (t3chguy) reported "I don't see any messages whatsoever" with a screenshot
   while testing, and Tim replied suspecting a federation delivery problem on his
   side. That is the SAME symptom class as the MSC4284 policy-server refusal
-  tracked in memory `policyserv-blocks-did-mxids` (our sends to policy-server
+  tracked in the maintainers' notes (our sends to policy-server
   rooms are refused with a bare 400). If a reviewer cannot see test messages,
   they cannot evaluate a *search* feature — so unblocking the federation issue
   may be on the critical path to this merge. Unproven link; check it before
   assuming.
-- **DEPLOYMENT ACTION DISCHARGED, 2026-09-13.** This entry previously carried a
-  "DEPLOYMENT ACTION OUTSTANDING" warning: the patch had stopped reading
-  `features.feature_inblock_encrypted_search` while prod's bind-mounted config
-  still set only that key, so promoting the image without renaming the key would
-  have shipped encrypted search **off on prod**. Both halves have now landed
-  together. Prod's `/home/deploy/matrix/stack/config/element-config.json` was
-  rewritten **in place, inode 559991 preserved** (a single-file bind mount
-  follows the inode), a one-line diff renaming the key to
-  `feature_web_event_index: true`, and the element container was switched in the
-  same window. Verified on the served artifact, not just on disk:
-  `https://element.inblock.io/config.json` reports the new key and no old one.
-  To turn the feature off now, set that key to `false` or remove it — with the
-  hostname fallback gone, removing it means off by design rather than off by
-  accident.
+- **Deployments that used the old key must rename it.** The patch stopped reading
+  `features.feature_inblock_encrypted_search` on 2026-09-12, so a bind-mounted config
+  that still sets only that key serves encrypted search **off**. Rename the key to
+  `feature_web_event_index: true` in the same change that moves the element image to a
+  build of this patch. A single-file bind mount follows the inode: rewrite the file in
+  place rather than replacing it, then check the served `config.json`. To turn the
+  feature off, set the key to `false` or remove it; with the hostname fallback gone,
+  removing it means off by design rather than off by accident.
 - **Order:** applied SIXTH. Its `en_EN.json` hunk was generated against the
   tree with entries 1–5 applied; entry 7's `en_EN.json` hunk absorbs the two
   lines this one now adds in the `labs` section (it lands at offset +1,
@@ -889,7 +852,8 @@ A tag bump must try every patch in this file's order.
   extended-profile support, a malformed value, a network error. Logged at `debug`, never
   `warn`: this hook runs for every member panel opened against every homeserver.
 - **Evidence:** siwx-oidc `docs/audits/2026-09-10-msc4133-acl-probe.md` (the field is
-  world-readable and provider-owned); `docs/2026-09-10-HANDOVER-attested-did-complete.md`.
+  world-readable and provider-owned); siwx-oidc `docs/identity-model.md` for the field
+  itself.
 - **Upstream status:** not upstreamable as-is — `io.inblock.did` is OUR field name, and
   upstream would need a generic custom-profile-field UI (or MSC4133 field registration)
   before anything like this could land. If upstream ships generic custom-field
@@ -1030,8 +994,8 @@ A tag bump must try every patch in this file's order.
   names nobody is reported as a successful empty search, not an error.
 - **Evidence:** the live dev probe behind it — `user_directory_search` holds only
   `@user:server` plus the display name; `MXID_LOCALPART_ALLOWED_CHARACTERS` read out of
-  the running 1.159.0; and a full round trip `did:pkh:…0x5177…` →
-  `@4pkgegvyqk1xk48d:dev.matrix.inblock.io` → the published `{did, proof}`.
+  the running 1.159.0; and a full round trip on the dev homeserver from a `did:pkh` DID
+  to its 16-character localpart and on to the published `{did, proof}`.
 - **Upstream status:** not upstreamable as-is, for the same reason as entry 7 —
   `io.inblock.did` and the localpart derivation are both ours.
 - **Resolver first, formula as fallback (2026-09-27, branch `feat/did-search-resolve-plus-federation`).**
@@ -1190,9 +1154,8 @@ A tag bump must try every patch in this file's order.
   media 404 in Firefox") and
   [element-web#34897](https://github.com/element-hq/element-web/issues/34897) (closed,
   "After upgrade to 1.12.27, media not loading"). Neither names this mechanism. The
-  missing `response.ok` check was already on our own list on 2026-07-31
-  (`docs/superpowers/plans/2026-07-31-sw-hardening-handover.md`, "File upstream (a)")
-  and was not acted on then.
+  missing `response.ok` check was already on our own list on 2026-07-31 (a
+  service-worker hardening handover, not published) and was not acted on then.
 - **Upstream status:** Filing ordered by Tim 2026-09-28, explicit exception: the
   2026-09-01 filing policy gates only entries 2/3/4 on #34718. Issue:
   [element-web#35241](https://github.com/element-hq/element-web/issues/35241) (filed
@@ -1217,7 +1180,7 @@ A tag bump must try every patch in this file's order.
 - **Verified on dev (rev 3a3dae8, `element-web@sha256:9db9df51…`, 2026-09-28):** served
   `sw.js` carries all three entry 9/10 markers. Playwright leg (siwx-oidc 207f4b8,
   re-run 2026-09-28 evening) **3/3 runs green** (SW-1, SW-2, SW-3 each pass in every
-  run; `~/.cache/ew-sw-pw-final/run{1,2,3}-patched.log`). The same leg against the
+  run; maintainer run logs, not published). The same leg against the
   **stock v1.12.29 sw.js** (from `docker.io/vectorim/element-web:v1.12.29`, served
   through the spec's pass-through proxy via `EW_SW_OVERRIDE`) **fails every leg (1 stock
   run per leg)**: SW-1 in a full run (serial mode then skips SW-2/SW-3;
@@ -1228,7 +1191,7 @@ A tag bump must try every patch in this file's order.
   markers, the proxy served it 4x, and the SW console lacks `not caching server support`.
   The 6 accounts these runs created and the 8 from earlier runs (14 in total, each
   verified as the creator of its own `sw-media-auth text` room) were deactivated with
-  `erase: false` (`~/.cache/ew-sw-pw-final/deactivate.log`, `check-after.log`).
+  `erase: false` (maintainer run logs).
   Harness: live window (`live`, `LIVE_STOP_SW=1 LIVE_TRIGGER_S=300.8`) **3/3 shim
   and 3/3 noshim** clean, every one logging `retrying without one` and `retrying media
   request with a refreshed access token`, image rendered first time; fast reopen **3/3**
@@ -1277,7 +1240,7 @@ A tag bump must try every patch in this file's order.
   2026-09-28 logged the retry and rendered the image first time; Playwright leg SW-3
   (the image's own media request is answered 401 while one page `whoami` 401 makes the
   app refresh) passes on the patched build and fails on stock sw.js. The auditor's
-  scratch suite (`~/.cache/ew-audit-applycheck/audit.test.ts`) against this revision:
+  scratch suite (not published) against this revision:
   8/8, revoked token returns the 401 after about 5.0 s, silent tab after about 4.7 s with
   0 leaked listeners, 20 concurrent 401s cost 30 postMessages in total (was one poll loop
   per request).
@@ -1303,7 +1266,7 @@ A tag bump must try every patch in this file's order.
 | Per-build `sw.js` stamp | Dockerfile `RUN` (bundle hash + build UTC) | byte-identical sw.js across deploys let a wedged SW survive every deploy (2026-07-31 incident); stamp forces eviction |
 | inblock.io overlay | `config/element-config.json`, theme CSS, logos/favicons, welcome background | branding + deployment config (`force_verification`, `sso_redirect_options.immediate`) |
 | Entrypoint templating and `index.html` edits | `entrypoints/element_entrypoint.sh` (runs at every container start) | `%%MATRIX_BASE_URL%%`/`%%MATRIX_HOST%%`/`%%CLIENT_HOST%%` substitution in `config.json` (the `permalink_prefix` key is deleted when `CLIENT_HOST` is empty); copies the inblock.io favicons over Element's `vector-icons/*.png`; injects `<link rel="stylesheet" href="element-theme-overrides.css">` into `index.html` `<head>` (idempotent) |
-| Config and entrypoint bind-mounted at runtime | `docker-compose.yml:122-124`, `docker-compose.dev-staging.yml:181-183` | the running container uses the HOST's `config/element-config.json` (as `/app/config.json.src`) and `entrypoints/element_entrypoint.sh`, not the copies baked into the image, so a config change needs no rebuild. It also means the image digest alone does not describe what a box serves |
+| Config and entrypoint bind-mounted at runtime | `docker-compose.yml` (`element-web` service, `volumes`) | the running container uses the HOST's `config/element-config.json` (as `/app/config.json.src`) and `entrypoints/element_entrypoint.sh`, not the copies baked into the image, so a config change needs no rebuild. It also means the image digest alone does not describe what a box serves |
 | CI content marker labels | Dockerfile `LABEL io.inblock.dev-branch-ci-test*` | proves branch CI builds distinct images (S5 check) |
 
 **History note:** the patch stack and the two "honesty" patches were validated against a
@@ -1331,7 +1294,7 @@ exists; the subset is kept here as the record of what was checked.
 **Verified in the DEPLOYED artifact, not just against a tree (2026-08-31).** "Applies
 clean" only proves a patch can be applied; it does not prove the code reached the
 served app. After the `5089872` converge, every patch was confirmed by grepping its own
-distinctive string in the running `matrix-staging-element-web-1` webroot:
+distinctive string in the webroot of the running dev-staging element-web container:
 
 | # | Patch | Marker grepped in `/app` | Files |
 |---|---|---|---|
@@ -1347,9 +1310,8 @@ patch renames the database, so the marker to grep is now `element-eventindex`
 (and `feature_web_event_index` for the gate). `inblock-ew-eventindex`,
 `feature_inblock_encrypted_search` and `still_indexing` will find nothing in a
 build made from the current patch, and finding them instead proves the image is
-an OLD one. The row above is left as the record of what was checked on the
-artifact that served prod until the 2026-09-25 promotion replaced it (see "What runs
-on prod today").
+an OLD one. The row above is left as the record of what was checked on that
+artifact.
 
 **Trap for whoever repeats this:** the EventIndex code is emitted into
 `bundles/<hash>/init.js`, **not** `bundle.js`. Grepping only `bundle.js` returns zero

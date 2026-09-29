@@ -8,13 +8,15 @@ description: Use when deploying the Matrix server stack for the first time, conf
 ## Prerequisites
 
 - Docker Engine + Docker Compose v2
-- A reverse proxy with TLS (Caddy, nginx, or Traefik)
+- A reverse proxy with TLS on the `portal-net` Docker network (the maintainers use Caddy)
 - Three DNS records pointing to your server:
   - `matrix.example.com` (Synapse homeserver)
   - `siwx-oidc.example.com` (OIDC provider)
   - `element.example.com` (Element Web client)
-- The `siwx-oidc` repo cloned adjacent to this repo (`../siwx-oidc`)
 - The Docker network `portal-net` created: `docker network create portal-net`
+
+The images are pulled from GHCR, pinned by digest in `docker-compose.yml`; no sibling
+checkout of siwx-oidc is needed (only `docker-compose.local.yml` builds from one).
 
 ## Step 1: Start the stack
 
@@ -28,13 +30,17 @@ description: Use when deploying the Matrix server stack for the first time, conf
 This generates `.env` (chmod 600) with:
 - `MAS_SHARED_SECRET` (random 64-char string)
 - `SIWEOIDC_SIGNING_KEY_PEM` (P-256 EC key, single-line PEM)
+- `LIVEKIT_KEY`, `LIVEKIT_SECRET`
 - All hostnames and ports
 
-Then runs `docker compose up --build -d`.
+Then runs `docker compose up --pull always -d`.
 
 ## Step 2: Configure reverse proxy
 
 The reverse proxy must handle three hostnames with specific routing rules.
+`Caddyfile.local` is the complete, tested route set (HTTP-only, one port per service);
+the example below is its hostname-based shape, trimmed. Use `Caddyfile.local` for the
+MatrixRTC (`/livekit/*`), QR-login rendezvous and CORS details.
 
 ### Caddy example
 
@@ -46,18 +52,25 @@ matrix.example.com {
     }
     handle /.well-known/matrix/client {
         header Access-Control-Allow-Origin *
-        respond `{"m.homeserver": {"base_url": "https://matrix.example.com"}, "m.authentication": {"issuer": "https://siwx-oidc.example.com"}}`
+        # The issuer must byte-match siwx-oidc's own issuer, trailing slash included.
+        respond `{"m.homeserver": {"base_url": "https://matrix.example.com"}, "m.authentication": {"issuer": "https://siwx-oidc.example.com/", "account": "https://siwx-oidc.example.com/account"}}`
     }
 
-    # MSC3861 compat routes -> siwx-oidc (Synapse disables these)
-    handle /_matrix/client/v3/login {
-        reverse_proxy siwx-oidc:8081
+    # Client auth and device routes -> siwx-oidc (Synapse does not serve these
+    # under delegated auth). Caddyfile.local also adds CORS for them.
+    @siwx path /_matrix/client/v3/login /_matrix/client/v3/logout /_matrix/client/v3/logout/all /_matrix/client/v3/refresh /_matrix/client/v3/delete_devices /_matrix/client/v3/devices/*
+    handle @siwx {
+        reverse_proxy siwx-oidc:8081 {
+            import strip_upstream_cors   # snippet from Caddyfile.local
+        }
     }
-    handle /_matrix/client/v3/logout {
-        reverse_proxy siwx-oidc:8081
+
+    # Never expose the Synapse admin API or the MAS provisioning API.
+    handle /_synapse/admin/* {
+        respond 404
     }
-    handle /_matrix/client/v3/refresh {
-        reverse_proxy siwx-oidc:8081
+    handle /_synapse/mas/* {
+        respond 404
     }
 
     # Everything else -> Synapse
@@ -67,7 +80,9 @@ matrix.example.com {
 }
 
 siwx-oidc.example.com {
-    reverse_proxy siwx-oidc:8081
+    reverse_proxy siwx-oidc:8081 {
+        import strip_upstream_cors
+    }
 }
 
 element.example.com {
@@ -79,8 +94,11 @@ element.example.com {
 
 ### CORS
 
-- `.well-known/matrix/client` needs `Access-Control-Allow-Origin: *` (federation requirement)
-- `siwx-oidc.example.com` needs CORS for `element.example.com` (the Element origin)
+- `.well-known/matrix/client` needs `Access-Control-Allow-Origin: *` (clients read it
+  cross-origin)
+- `siwx-oidc.example.com` needs CORS for the Element origin. Strip siwx-oidc's own CORS
+  headers in the proxy and set them there once: two `Access-Control-Allow-Origin` headers
+  make browsers reject the response
 - Matrix API endpoints on `matrix.example.com` need CORS for `element.example.com`
 
 ## Step 3: Verify
@@ -111,12 +129,12 @@ curl -sI https://element.example.com/
 
 ```bash
 # After the target user has logged in at least once:
-# Option A: Claude Code skill
+# Option A: Claude Code skill (DID or MXID)
 /set-admin did:pkh:eip155:1:0xYourAddress
 
-# Option B: env var (auto-promotes on every boot)
+# Option B: env var (promotes on every boot; MATRIX_ADMIN_MXID is used verbatim)
 echo "MATRIX_ADMIN_DID=did:pkh:eip155:1:0xYourAddress" >> .env
-docker compose restart matrix_synapse
+docker compose up -d matrix_synapse   # recreate so the new env_file value is read
 ```
 
 ## Deploying to a remote server
@@ -134,9 +152,9 @@ docker compose pull && docker compose up -d
 
 - [ ] Three DNS records point to server
 - [ ] `portal-net` Docker network exists
-- [ ] `../siwx-oidc` repo is cloned and on the correct branch
 - [ ] `.env` generated (check with `ls -la .env`)
-- [ ] Reverse proxy routes configured (especially login/logout/refresh to siwx-oidc)
+- [ ] Reverse proxy routes configured (especially login/logout/refresh to siwx-oidc, and
+      `/_synapse/admin/*` and `/_synapse/mas/*` not exposed)
 - [ ] OIDC discovery returns valid JSON
 - [ ] `.well-known/matrix/client` returns `m.authentication.issuer`
 - [ ] Element loads and redirects to OIDC login

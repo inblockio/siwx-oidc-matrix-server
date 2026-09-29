@@ -43,8 +43,7 @@ The rules are the same as `patches/element-web/README.md`, and for the same reas
    porting it by reflex.
 
    Then run the patch's own regression tests against an upstream checkout of the
-   new tag carrying the patch (a clone under `~/.cache`, never `/tmp`), together
-   with upstream's profile suites:
+   new tag carrying the patch, together with upstream's profile suites:
 
    ```bash
    cd <synapse-checkout-at-TAG>
@@ -77,7 +76,7 @@ The rules are the same as `patches/element-web/README.md`, and for the same reas
 
 | Build | Applies the patch? |
 |---|---|
-| `dockerfiles/Dockerfile` (the published `synapse` image; CI, dev-staging, prod) | **yes**, lines 64-72 |
+| `dockerfiles/Dockerfile` (the published `synapse` image that CI builds) | **yes**, in its `patch` step |
 | `e2e-harness/images.sh` (local e2e harness) | **yes**: it builds `dockerfiles/Dockerfile` itself |
 | `real-stack/Dockerfile.synapse` (local real-stack image) | **yes**, since 2026-09-29: it builds `FROM` the published image (default: the same tag-plus-digest ref `docker-compose.yml` defaults to), so it carries this patch, the startup guard and `entrypoints/matrix_server.sh`. Until then it had its own recipe with neither |
 | `scripts/did-field-guard-accept.sh` | **no, on purpose**: it bind-mounts the guarded entrypoint into a STOCK image to prove the guard refuses to start |
@@ -95,15 +94,17 @@ raises `403 M_FORBIDDEN` when a **non-admin** tries to write or delete a listed
 custom profile field. Admins are exempt.
 
 **Why we need it.** siwx-oidc publishes each user's DID into their Matrix profile
-under the MSC4133 custom field `io.inblock.did`, as a provider-signed assertion —
-it is the one identifier a relying party can trust to name a user. On stock
+under the MSC4133 custom field `io.inblock.did`, as a provider-signed assertion, so
+that others can look up which DID stands behind a Matrix ID. (siwx-oidc treats that
+lookup as a discovery hint, never as authorization.) On stock
 Synapse 1.159.0 that field is **freely user-writable with no value validation**:
 `set_profile_field`'s only check is `if not by_admin and target_user != requester.user`,
 which is simply *not an error* when a user writes their own profile. So any user
 could overwrite their own `io.inblock.did` with **another user's DID** and
 misrepresent their cryptographic identity to every client and every federating
 server that reads it. The signed assertion (see the siwx-oidc repo) makes that
-tampering *detectable*; this patch makes it *impossible*.
+tampering *detectable*; this patch stops non-admin users from writing the field at
+all.
 
 **Evidence** (all read from the v1.159.0 source, 2026-09-10):
 

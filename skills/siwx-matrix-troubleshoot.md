@@ -68,7 +68,7 @@ docker compose exec element-web cat /app/config.json
 ```bash
 # Compare WITHOUT printing either secret. The question is only "do they match?",
 # which a fingerprint answers. NEVER echo the value: anything printed in an agent
-# session is transmitted off-machine (five credential exposures on this box to date).
+# session is transmitted off-machine.
 syn=$(docker compose exec -T matrix_synapse yq -r '.matrix_authentication_service.secret' \
         /data/homeserver.yaml | tr -d '\r\n' | sha256sum | cut -c1-12)
 oidc=$(docker compose exec -T siwx-oidc printenv SIWEOIDC_MAS_SHARED_SECRET \
@@ -76,11 +76,14 @@ oidc=$(docker compose exec -T siwx-oidc printenv SIWEOIDC_MAS_SHARED_SECRET \
 [ "$syn" = "$oidc" ] && echo "MATCH ($syn)" || echo "MISMATCH: synapse=$syn oidc=$oidc"
 ```
 
-**Fix**: If they differ, update homeserver.yaml to match .env, then restart Synapse.
+**Fix**: The Synapse entrypoint rewrites `matrix_authentication_service.secret` from
+`MAS_SHARED_SECRET` on every boot, so a mismatch means the two containers were started
+from different `.env` contents. Recreate both from the current `.env`:
+`docker compose up -d --force-recreate matrix_synapse siwx-oidc`.
 
 ### 2. Reverse proxy not routing login/logout/refresh to siwx-oidc
 
-**Symptoms**: Element login flow returns "M_UNRECOGNIZED" or hangs. Synapse disables `/_matrix/client/v3/{login,logout,refresh}` under MSC3861.
+**Symptoms**: Element login flow returns "M_UNRECOGNIZED" or hangs. Synapse does not serve `/_matrix/client/v3/{login,logout,refresh}` under delegated auth; siwx-oidc does.
 
 **Diagnose**:
 ```bash
@@ -90,7 +93,9 @@ curl -s https://{MATRIX_HOST}/_matrix/client/v3/login | jq .
 # If you get 404 or Synapse error, the route goes to Synapse instead of siwx-oidc
 ```
 
-**Fix**: Add proxy rules to route these three paths to siwx-oidc:8081.
+**Fix**: Route these paths, plus `/_matrix/client/v3/logout/all`,
+`/_matrix/client/v3/delete_devices` and `/_matrix/client/v3/devices/*`, to
+siwx-oidc:8081. `Caddyfile.local` has the blocks.
 
 ### 3. CORS errors in browser console
 
@@ -99,18 +104,28 @@ curl -s https://{MATRIX_HOST}/_matrix/client/v3/login | jq .
 **Fix**: The reverse proxy must set CORS headers:
 - `siwx-oidc.example.com`: Allow origin `https://element.example.com`
 - `matrix.example.com`: Allow origin `https://element.example.com`
-- `.well-known/matrix/client`: Allow origin `*` (federation requirement)
+- `.well-known/matrix/client`: Allow origin `*` (clients read it cross-origin)
+
+If the console complains about **multiple** `Access-Control-Allow-Origin` values, the
+proxy is passing siwx-oidc's own CORS headers through next to its own: strip them in the
+`reverse_proxy` block (`strip_upstream_cors` in `Caddyfile.local`).
 
 ### 4. homeserver.yaml not updated after entrypoint change
 
 **Symptoms**: Synapse still uses old config despite entrypoint changes.
 
+**Cause**: Two possibilities. The entrypoint is baked into the Synapse image, so an edit
+to `entrypoints/matrix_server.sh` does nothing until the image is rebuilt and the
+container recreated. And the first-boot keys (server name, listener, retention, server
+notices) are only written when `/data/homeserver.yaml` does not exist yet; delegated
+auth, MatrixRTC and the DID-field denylist are rewritten on every boot.
+
 **Diagnose**:
 ```bash
-docker compose exec matrix_synapse cat /data/homeserver.yaml | head -50
+docker compose exec matrix_synapse yq '.matrix_authentication_service.enabled, .retention' /data/homeserver.yaml
 ```
 
-**Fix**: Edit homeserver.yaml inside the volume directly:
+**Fix** for a first-boot key: edit homeserver.yaml inside the volume directly:
 ```bash
 docker compose exec matrix_synapse yq -i '.key.path = "new_value"' /data/homeserver.yaml
 docker compose restart matrix_synapse
@@ -134,11 +149,11 @@ docker compose exec siwx-oidc wget -qO- http://matrix_synapse:8080/health
 
 **Prevention**: Back up `.env` before any destructive operation.
 
-**Recovery**: There is no recovery for the old key. Users re-login and get new tokens. If the signing key in .env was regenerated, Synapse's homeserver.yaml still has the old MAS_SHARED_SECRET, so also update that.
+**Recovery**: There is no recovery for the old key. Users re-login and get new tokens. If the whole `.env` was regenerated, `MAS_SHARED_SECRET` changed too; the Synapse entrypoint writes the new value at its next boot, so recreate both `matrix_synapse` and `siwx-oidc`. DID proofs signed with the old key can no longer be verified unless its public half is kept as a retired key (see siwx-oidc's configuration reference).
 
 ### 7. Redis data lost
 
-**Symptoms**: All sessions, tokens, device IDs, and WebAuthn credentials gone. Every user must re-register passkeys.
+**Symptoms**: All sessions, tokens and WebAuthn credentials gone. Every user must sign in again and re-register passkeys.
 
 **Diagnose**:
 ```bash
@@ -183,17 +198,19 @@ docker compose exec redis redis-cli MONITOR  # live command stream (Ctrl+C to st
 
 ```bash
 # Active sessions
-docker compose exec redis redis-cli KEYS 'sessions/*'
+docker compose exec redis redis-cli --scan --pattern 'sessions/*'
 
-# Active tokens
-docker compose exec redis redis-cli KEYS 'token:*'
+# Active tokens (access and refresh)
+docker compose exec redis redis-cli --scan --pattern 'token/*'
 
-# Device ID mappings
-docker compose exec redis redis-cli KEYS 'device:*'
+# Tokens per user and device (the revocation index)
+docker compose exec redis redis-cli --scan --pattern 'idx:user_device/*'
 
 # WebAuthn credentials
-docker compose exec redis redis-cli KEYS 'webauthn:credential/*'
+docker compose exec redis redis-cli --scan --pattern 'webauthn:credential/*'
 
 # Inspect a specific key
-docker compose exec redis redis-cli GET 'token:mat_XXXX'
+docker compose exec redis redis-cli GET 'token/mat_XXXX'
+
+# The full keyspace: siwx-oidc docs/architecture.md, "Redis keyspace"
 ```
