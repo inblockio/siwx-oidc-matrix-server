@@ -6,6 +6,13 @@ When promoting, turn this file into the promotion record: rename it to
 "What runs on prod today" table in `patches/element-web/README.md` (rows 9 and 10 plus the
 `sw-boot.js` runtime delta go from "dev only" to "yes").
 
+**Joint promotion (2026-09-29):** this fix is expected to ship in the SAME element-web image as the
+Element DID-search work of session waldknoten-01-36. That branch is rebased on main, so it contains
+entries 9 and 10. Joint release notes: `~/handovers/release-notes-next-prod-promotion.md` (section 2 is
+this fix). If the DID-search work is not ready, this fix can ship alone with the digest in section 2.
+Since 2026-09-28 23:12 UTC dev runs that joint build (`element-web@sha256:4cbcd901...`, rev 5fdc0b0),
+which serves all entry 9/10 markers.
+
 ---
 
 ## 1. Release notes
