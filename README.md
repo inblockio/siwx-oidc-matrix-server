@@ -288,6 +288,18 @@ Hostname for the siwx-oidc OIDC provider (e.g., `siwx-oidc.example.com`).
 
 Port for the siwx-oidc service. Default: `8081`.
 
+#### Opt-ins set in `.env` (no flag)
+
+`docker-compose.yml` passes three more siwx-oidc settings through from `.env`. Each is
+off when unset or empty; they need a siwx-oidc build from 2026-09-30 on. See
+`.env.example` and siwx-oidc's
+[configuration reference](https://github.com/inblockio/siwx-oidc/blob/main/docs/configuration.md).
+
+- `SIWXOIDC_ENS_API_URL`: an ENS API that puts Ethereum users' ENS names in the `name`
+  claim. Setting it sends each Ethereum user's address to that service.
+- `SIWXOIDC_OP_TOS_URI`, `SIWXOIDC_OP_POLICY_URI`: your terms of service and privacy
+  policy, advertised in OIDC discovery. Unset, discovery leaves them out.
+
 ### Matrix
 
 #### --MATRIX_HOST **Required**

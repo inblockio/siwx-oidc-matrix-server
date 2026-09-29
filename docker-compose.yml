@@ -99,6 +99,12 @@ services:
       SIWEOIDC_SUPPORTED_DID_METHODS: '["pkh","key"]'
       SIWEOIDC_MATRIX_SERVER_NAME: ${MATRIX_HOST}
       RUST_LOG: ${RUST_LOG}
+      # Opt-ins, off when empty (set them in .env; see .env.example). The
+      # three names exist in siwx-oidc builds from 2026-09-30 on; an older
+      # build ignores the two URIs and also reads an empty ENS URL as off.
+      SIWXOIDC_ENS_API_URL: ${SIWXOIDC_ENS_API_URL:-}
+      SIWXOIDC_OP_TOS_URI: ${SIWXOIDC_OP_TOS_URI:-}
+      SIWXOIDC_OP_POLICY_URI: ${SIWXOIDC_OP_POLICY_URI:-}
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:${SIWEOIDC_PORT}/.well-known/openid-configuration"]
       interval: 10s
