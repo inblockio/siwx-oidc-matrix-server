@@ -19,7 +19,8 @@ The Synapse and Element Web images built here are **not stock**: see
 > maintain it for third-party deployments**: the maintainers maintain it for their own
 > use, and interfaces may change without notice. There are no tagged releases yet; `main`
 > is what runs. Contributions and security reports are welcome and handled best-effort;
-> see [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). Rules for
+> see [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). **No CLA** is
+> required: contributions are licensed under Apache-2.0 per its §5. Rules for
 > contributors and coding agents: [AGENTS.md](AGENTS.md).
 
 ## Table of Contents
@@ -156,10 +157,9 @@ do:
 - **Build-time package**: Debian `patch` in the Synapse build (`dockerfiles/Dockerfile`)
   floats on purpose, within the Debian release the base digest fixes, and is purged
   before its layer ends.
-- **CI**: `.github/workflows/docker.yml` uses actions by major tag
-  (`actions/checkout@v4`, `docker/login-action@v3`, `docker/metadata-action@v5`,
-  `docker/build-push-action@v6`) on `ubuntu-latest`. `.github/workflows/checks.yml`
-  pins its one action by commit and runs on `ubuntu-24.04`.
+- **CI runner image**: both workflows run on `ubuntu-24.04`, which GitHub updates within
+  that release. Every action they use is pinned by commit, with the release named in a
+  comment, so the actions themselves do not float.
 
 The other image references in the Dockerfiles, compose files and `e2e-harness/`
 scripts are pinned by digest, with the version tag alongside wherever one exists
