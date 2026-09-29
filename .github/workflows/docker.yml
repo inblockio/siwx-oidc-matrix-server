@@ -157,12 +157,16 @@ jobs:
         id: check-secret
         run: echo "ok=${{ secrets.DEV_STAGING_DEPLOY_KEY != '' && secrets.DEV_DEPLOY_HOST != '' && secrets.DEV_DEPLOY_PORT != '' && secrets.DEV_DEPLOY_USER != '' && secrets.DEV_DEPLOY_KNOWN_HOSTS != '' }}" >> "$GITHUB_OUTPUT"
 
+      # Through env:, never interpolated into the script: an expression inside
+      # `run:` is pasted into the shell source before it runs.
       - name: Install deploy key
         if: steps.check-secret.outputs.ok == 'true'
+        env:
+          DEV_STAGING_DEPLOY_KEY: ${{ secrets.DEV_STAGING_DEPLOY_KEY }}
         run: |
           install -m 700 -d ~/.ssh
           umask 077
-          printf '%s\n' "${{ secrets.DEV_STAGING_DEPLOY_KEY }}" > ~/.ssh/dev_staging_deploy_key
+          printf '%s\n' "$DEV_STAGING_DEPLOY_KEY" > ~/.ssh/dev_staging_deploy_key
           chmod 600 ~/.ssh/dev_staging_deploy_key
 
       - name: Pin the deploy target's host key
