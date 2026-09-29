@@ -436,10 +436,10 @@ index ef0a821..93fdeec 100644
          "disinvite_button_space": "Disinvite from space",
 diff --git a/apps/web/src/utils/didLocalpart.test.ts b/apps/web/src/utils/didLocalpart.test.ts
 new file mode 100644
-index 0000000..cc6d2ef
+index 0000000..e9e4df2
 --- /dev/null
 +++ b/apps/web/src/utils/didLocalpart.test.ts
-@@ -0,0 +1,946 @@
+@@ -0,0 +1,959 @@
 +/**
 +Copyright 2026 inblock.io
 +
@@ -1115,6 +1115,19 @@ index 0000000..cc6d2ef
 +                expect(client.cache.has(own())).toBe(false);
 +            });
 +
++            it("account DEACTIVATED with erasure (404 M_UNKNOWN 'No row found'): evicted, not read from the cache", async () => {
++                // What Synapse 1.161 answered on dev for a MAS delete_user erase=true
++                // account: a 404 whose errcode is NOT M_NOT_FOUND. Treating it as
++                // "server cannot answer" would verify the stale cached copy.
++                const client = mockClient({
++                    profileError: new MatrixError({ errcode: "M_UNKNOWN", error: "No row found (profiles)" }, 404),
++                    cached: { [own()]: { [DID_PROFILE_FIELD]: await genuineCopy(own()) } },
++                });
++                await expect(resolveDid(client, KEY_UPPER, { fetchFn: mockFetch(RESOLVER_DOWN) })).resolves.toBeNull();
++                expect(client.getExtendedProfileProperty).not.toHaveBeenCalled();
++                expect(client.cache.has(own())).toBe(false);
++            });
++
 +            it("server cannot answer: falls back to a cached copy that still verifies", async () => {
 +                const client = mockClient({
 +                    profileError: new MatrixError({ errcode: "M_UNKNOWN", error: "peer unreachable" }, 502),
@@ -1388,10 +1401,10 @@ index 0000000..cc6d2ef
 +});
 diff --git a/apps/web/src/utils/didLocalpart.ts b/apps/web/src/utils/didLocalpart.ts
 new file mode 100644
-index 0000000..e82df16
+index 0000000..2512607
 --- /dev/null
 +++ b/apps/web/src/utils/didLocalpart.ts
-@@ -0,0 +1,703 @@
+@@ -0,0 +1,708 @@
 +/**
 +Copyright 2026 inblock.io
 +
@@ -1993,9 +2006,14 @@ index 0000000..e82df16
 +    return typeof raw.proof === "string" && raw.proof ? { did: raw.did, proof: raw.proof } : { did: raw.did };
 +}
 +
-+/** The homeserver saying the profile does not exist: no such account, or a deactivated one. */
++/**
++ * The homeserver saying the profile does not exist: no such account, or a
++ * deactivated one. Any 404 counts, whatever its errcode: an unknown user is
++ * `M_NOT_FOUND`, but a user deactivated with erasure answers
++ * `404 M_UNKNOWN "No row found (profiles)"` (Synapse 1.161, seen live on dev).
++ */
 +function isProfileNotFound(e: unknown): boolean {
-+    return isRecord(e) && e.httpStatus === 404 && e.errcode === "M_NOT_FOUND";
++    return isRecord(e) && e.httpStatus === 404;
 +}
 +
 +/**
@@ -2018,8 +2036,8 @@ index 0000000..e82df16
 + * The cached copy is also what other surfaces read (`useAttestedDid`), so a
 + * fresh answer is written back over it: a changed value overwrites the cached
 + * one, a field the server no longer has is removed from the cached profile, and
-+ * an account the server no longer knows (404 `M_NOT_FOUND`) loses its cached
-+ * profile altogether. The cache is consulted only when the homeserver cannot
++ * an account the server no longer knows (any 404) loses its cached profile
++ * altogether. The cache is consulted only when the homeserver cannot
 + * answer at all (network error, 5xx, an unreachable federated peer), and then
 + * the candidate still has to pass proof verification; a cached value that
 + * fails it is evicted by the caller ({@link forgetCachedDidField}).

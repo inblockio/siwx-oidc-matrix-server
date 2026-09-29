@@ -1067,12 +1067,14 @@ A tag bump must try every patch in this file's order.
   deactivated after the first search kept answering from the cache. The candidate read
   now uses `getExtendedProfile` (never cached), and writes the fresh answer back over any
   cached copy: a changed value overwrites it, a missing field is removed from the cached
-  profile (the whole entry when nothing else is left), a 404 `M_NOT_FOUND` account loses
-  its cached profile. Only when the homeserver cannot answer (network, 5xx, unreachable
+  profile (the whole entry when nothing else is left), an account the server answers 404
+  for loses its cached profile (any errcode: an erase-deactivated account answers
+  `404 M_UNKNOWN "No row found (profiles)"` on Synapse 1.161, found by the dev browser
+  run, where an `M_NOT_FOUND`-only check fell back to the stale cached copy). Only when the homeserver cannot answer (network, 5xx, unreachable
   peer) is the cached copy read, and a cached copy whose proof is REJECTED is evicted.
   No js-sdk patch needed. Not covered: `useAttestedDid` (entry 7) still reads cache-first,
   so a user-info panel opened with no DID search in between can show a stale DID; a DID
-  search for that user corrects it. 9 vitest cases (mock client modelled on js-sdk's
+  search for that user corrects it. 10 vitest cases (mock client modelled on js-sdk's
   cache-first read); disabling the fresh read fails 9, the reject eviction 1, the 404
   eviction 1.
 - **Spotlight coverage (2026-09-29):** 6 jest cases in `SpotlightDialog-test.tsx`
