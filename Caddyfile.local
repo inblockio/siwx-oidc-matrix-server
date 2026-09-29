@@ -105,7 +105,7 @@
     # MatrixRTC: LiveKit SFU. Port 7880 muxes WebSocket signaling AND the Twirp
     # management API, which no upstream flag can split or disable, so the edge
     # is the only place to restrict it (S3, 2026-08-01 av-hardening audit;
-    # parity with Caddyfile.production, which carries the full rationale).
+    # kept in parity with the production edge).
     # Private-range callers pass through because lk-jwt's own CreateRoom call
     # hairpins back in through here.
     @livekit_twirp_public {
@@ -130,7 +130,7 @@
 
     # SEC-0003: never expose the Synapse admin / MAS provisioning surfaces at the
     # edge. siwx-oidc reaches them directly over the Docker network, so the deny
-    # breaks nothing. Kept in parity with Caddyfile.production.
+    # breaks nothing. Kept in parity with the production edge.
     handle /_synapse/admin/* {
         respond 404
     }
