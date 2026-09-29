@@ -10,15 +10,15 @@ Patches to upstream projects
 ----------------------------
 
 The .patch files under patches/ modify Synapse and Element Web, which are
-not licensed under the Apache License. Each patch is therefore licensed
-under the license of the upstream files it modifies. The registries
-patches/synapse/README.md and patches/element-web/README.md are this
-project's own documentation and fall under the Apache License. The
-licenses below were read from the upstream sources at Synapse v1.161.0
-and Element Web v1.12.29.
+not licensed under the Apache License. Each change in a patch is licensed
+under the license of the upstream file it changes, and a file that a patch
+adds is licensed as stated below. The registries patches/synapse/README.md
+and patches/element-web/README.md are this project's own documentation
+and fall under the Apache License. The upstream licenses below were read
+from Synapse v1.161.0 and Element Web v1.12.29.
 
 patches/synapse/msc4133-profile-field-write-policy.patch
-    AGPL-3.0-or-later. It modifies synapse/config/experimental.py and
+    AGPL-3.0-or-later. It changes synapse/config/experimental.py and
     synapse/handlers/profile.py, whose headers license them under the GNU
     Affero General Public License, version 3 or any later version. It
     backports code from https://github.com/element-hq/synapse/pull/19980.
@@ -29,51 +29,47 @@ patches/synapse/tests/test_msc4133_write_policy.py
     code of Synapse's tests/rest/client/test_profile.py.
 
 patches/element-web/*.patch
-    The Element Web files these patches modify carry
+    Almost every existing file these patches change carries
     "SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR
-    LicenseRef-Element-Commercial". The files without such a header
-    (AUTHORS.rst, docs/labs.md, apps/web/src/i18n/strings/en_EN.json) fall
-    under Element Web's README, which offers the same licenses in their
-    "or any later version" form. The third option names Element's
-    commercial license, which only Element can grant. Each patch as a
-    whole is therefore licensed as follows:
+    LicenseRef-Element-Commercial". The third option names Element's
+    commercial license, which only Element can grant, so the changes to
+    these files, and the code files the patches add, are licensed
+    AGPL-3.0-only OR GPL-3.0-only. The added code files carry Element's
+    standard file header so that they can be proposed upstream unchanged.
 
-    AGPL-3.0-only OR GPL-3.0-only
-        auto-approve-check-code.patch
-        force-first-device-recovery.patch
-        honest-qr-disabled-reason.patch
-        offer-verify-current-session.patch
-        resolve-did-search.patch
-        setup-encryption-busy-wedge.patch
-        show-attested-did.patch
+    AUTHORS.rst, docs/labs.md and apps/web/src/i18n/strings/en_EN.json
+    have no header and fall under Element Web's README, which offers the
+    same licenses in their "or any later version" form. Changes to them
+    are licensed AGPL-3.0-or-later OR GPL-3.0-or-later.
 
-    AGPL-3.0-only
-        browser-eventindex.patch, because it also modifies
-        docs/.vitepress/config.ts, which Element offers under
-        "AGPL-3.0-only OR LicenseRef-Element-Commercial" only.
+    The following changes are licensed differently. None of them is part
+    of the built web application: they are documentation and tests.
 
-        sw-versions-no-cache-on-error.patch and
-        sw-media-401-token-retry.patch, because the test files they add
-        (apps/web/src/serviceworker/serverSupport.test.ts and
-        mediaTokenRetry.test.ts) adapt the test harness of
-        apps/web/src/serviceworker/index.test.ts from
-        https://github.com/element-hq/element-web/pull/34955, which is
-        licensed "AGPL-3.0-only OR LicenseRef-Element-Commercial" with the
-        notice:
+    - docs/.vitepress/config.ts, changed by browser-eventindex.patch, is
+      offered by Element under "AGPL-3.0-only OR
+      LicenseRef-Element-Commercial" only. That change is AGPL-3.0-only.
 
-            Copyright 2026 Element Creations Ltd.
+    - apps/web/src/indexing/EventIndex.test.ts, changed by
+      browser-eventindex.patch, is licensed under the Apache License,
+      Version 2.0, with the notice:
 
-        The headers of those two test files do not say so yet.
+          Copyright 2025 The Matrix.org Foundation C.I.C.
 
-    browser-eventindex.patch also modifies
-    apps/web/src/indexing/EventIndex.test.ts, which Element Web licenses
-    under the Apache License, Version 2.0, with the notice:
+      That change is licensed under the Apache License, Version 2.0.
 
-        Copyright 2025 The Matrix.org Foundation C.I.C.
+    - apps/web/src/serviceworker/serverSupport.test.ts, added by
+      sw-versions-no-cache-on-error.patch, and
+      apps/web/src/serviceworker/mediaTokenRetry.test.ts, added by
+      sw-media-401-token-retry.patch, adapt the test harness of
+      apps/web/src/serviceworker/index.test.ts from
+      https://github.com/element-hq/element-web/pull/34955, which is
+      licensed "AGPL-3.0-only OR LicenseRef-Element-Commercial" with the
+      notice:
 
-    The other code files that the patches add are this project's work.
-    They carry Element's standard file header so that they can be
-    proposed upstream unchanged.
+          Copyright 2026 Element Creations Ltd.
+
+      These two files are therefore AGPL-3.0-only. Their headers do not
+      say so yet.
 
 
 Brand assets
@@ -156,8 +152,8 @@ Upstream sources
 
 The patches apply to the upstream releases pinned in dockerfiles/Dockerfile
 (the FROM line) and dockerfiles/Dockerfile.element (ELEMENT_WEB_TAG). The
-images are built from those releases at build time; their source is not
-part of this repository:
+images are built on those releases, and their source is not part of this
+repository:
 
     Synapse       https://github.com/element-hq/synapse
     Element Web   https://github.com/element-hq/element-web
