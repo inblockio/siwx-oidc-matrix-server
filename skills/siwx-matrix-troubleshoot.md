@@ -94,8 +94,10 @@ curl -s https://{MATRIX_HOST}/_matrix/client/v3/login | jq .
 ```
 
 **Fix**: Route these paths, plus `/_matrix/client/v3/logout/all`,
-`/_matrix/client/v3/delete_devices` and `/_matrix/client/v3/devices/*`, to
-siwx-oidc:8081. `Caddyfile.local` has the blocks.
+`/_matrix/client/v3/delete_devices` and `DELETE /_matrix/client/v3/devices/{id}`, to
+siwx-oidc:8081. Match the method on `devices/*`: siwx-oidc serves only `DELETE` there,
+so a `GET` or `PUT` of a device routed to it answers 405 (renaming a session fails).
+`Caddyfile.local` has the blocks.
 
 ### 3. CORS errors in browser console
 

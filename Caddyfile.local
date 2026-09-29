@@ -71,9 +71,16 @@
             import strip_upstream_cors
         }
     }
-    # Prefix match covers DELETE /devices/{id} (owned by siwx). GET list may also
-    # hit this path; compat handlers or fall-through — keep parity with real-stack edge.
-    handle /_matrix/client/v3/devices/* {
+    # DELETE only: siwx-oidc registers `DELETE /_matrix/client/v3/devices/{id}`
+    # and no other method on that path, so GET (one device) and PUT (rename a
+    # session) must stay on Synapse, or they answer 405. The device list,
+    # GET /_matrix/client/v3/devices, does not match `devices/*` at all. A CORS
+    # preflight (OPTIONS) for the DELETE is answered by Synapse.
+    @siwx_device_delete {
+        method DELETE
+        path /_matrix/client/v3/devices/*
+    }
+    handle @siwx_device_delete {
         import public_cors
         reverse_proxy siwx-oidc:8081 {
             import strip_upstream_cors

@@ -166,9 +166,10 @@ it read-only for non-admins.
   strict and rejects a mismatch.
 - **The proxy routes client login, logout, refresh and device deletion to siwx-oidc**
   (`/_matrix/client/v3/{login,logout,logout/all,refresh,delete_devices}` and
-  `/_matrix/client/v3/devices/*`). Synapse does not serve login, logout or refresh under
-  delegated auth, and siwx-oidc revokes a device's tokens when it deletes the device.
-  `Caddyfile.local` shows the routes.
+  `DELETE /_matrix/client/v3/devices/{id}`). Synapse does not serve login, logout or
+  refresh under delegated auth, and siwx-oidc revokes a device's tokens when it deletes
+  the device. Match the method on `devices/*`: siwx-oidc serves only `DELETE` there, so
+  `GET` and `PUT` of a device must stay on Synapse. `Caddyfile.local` shows the routes.
 - **Never expose `/_synapse/admin/*` or `/_synapse/mas/*` at the edge.** siwx-oidc reaches
   them over the Docker network; `Caddyfile.local` answers both with 404.
 - **Strip siwx-oidc's CORS headers in the proxy** (`strip_upstream_cors` in

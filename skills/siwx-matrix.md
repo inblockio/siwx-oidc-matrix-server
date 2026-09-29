@@ -86,7 +86,7 @@ start-matrix.sh
 - **Signing key lifecycle**: P-256 PEM generated once by start-matrix.sh, stored in .env. If lost, all issued tokens become invalid.
 - **Shared secret**: `MAS_SHARED_SECRET` must match between Synapse config and siwx-oidc config. Mismatch causes 401 on every introspection call, breaking all auth.
 - **Network topology**: siwx-oidc and Synapse communicate on the Docker `default` network. The `portal-net` external network connects to the reverse proxy.
-- **Reverse proxy routing**: The proxy must route `/_matrix/client/v3/{login,logout,logout/all,refresh,delete_devices}` and `/_matrix/client/v3/devices/*` to siwx-oidc (not Synapse); Synapse does not serve login, logout or refresh under delegated auth. All other `/_matrix/*` routes go to Synapse, except `/_synapse/admin/*` and `/_synapse/mas/*`, which the proxy must not expose. `Caddyfile.local` has the routes.
+- **Reverse proxy routing**: The proxy must route `/_matrix/client/v3/{login,logout,logout/all,refresh,delete_devices}` and `DELETE /_matrix/client/v3/devices/{id}` to siwx-oidc (not Synapse); Synapse does not serve login, logout or refresh under delegated auth. Only `DELETE` goes to siwx-oidc on `devices/*`: `GET` and `PUT` of a device stay on Synapse, which siwx-oidc would answer with 405. All other `/_matrix/*` routes go to Synapse, except `/_synapse/admin/*` and `/_synapse/mas/*`, which the proxy must not expose. `Caddyfile.local` has the routes.
 
 ## Common mistakes
 

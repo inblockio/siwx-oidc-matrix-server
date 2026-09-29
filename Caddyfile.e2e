@@ -53,8 +53,8 @@
 
 	# --- MSC3861-owned endpoints → siwx-e2eh-oidc -------------------------------
 	# Endpoints siwx-oidc registers (login flow, logout, logout/all, refresh,
-	# delete_devices, devices/{id}). Synapse 404s them under MSC3861; the edge
-	# routes them to siwx-oidc, exactly as the real stack / prod does.
+	# delete_devices, DELETE devices/{id}). Synapse does not serve login, logout
+	# or refresh under delegated auth, so the edge routes them to siwx-oidc.
 	handle /_matrix/client/v3/login {
 		import public_cors
 		reverse_proxy siwx-e2eh-oidc:8081 {
@@ -79,8 +79,13 @@
 			import strip_upstream_cors
 		}
 	}
-	# Prefix-match also covers DELETE /_matrix/client/v3/devices/{device_id}.
-	handle /_matrix/client/v3/devices/* {
+	# DELETE /_matrix/client/v3/devices/{device_id} only. siwx-oidc registers no
+	# other method there, so GET and PUT on a device stay on Synapse.
+	@siwx_device_delete {
+		method DELETE
+		path /_matrix/client/v3/devices/*
+	}
+	handle @siwx_device_delete {
 		import public_cors
 		reverse_proxy siwx-e2eh-oidc:8081 {
 			import strip_upstream_cors

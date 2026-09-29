@@ -39,12 +39,35 @@ Then runs `docker compose up --pull always -d`.
 
 The reverse proxy must handle three hostnames with specific routing rules.
 `Caddyfile.local` is the complete, tested route set (HTTP-only, one port per service);
-the example below is its hostname-based shape, trimmed. Use `Caddyfile.local` for the
-MatrixRTC (`/livekit/*`), QR-login rendezvous and CORS details.
+the example below is its hostname-based shape, trimmed, and `caddy adapt` accepts it as
+written. Take the MatrixRTC (`/livekit/*`) and QR-login rendezvous routes from
+`Caddyfile.local`.
 
 ### Caddy example
 
 ```caddyfile
+# Snippets from Caddyfile.local. siwx-oidc sets its own CORS headers; the proxy
+# strips them and sets them once, because two Access-Control-Allow-Origin
+# headers make browsers reject the response.
+(strip_upstream_cors) {
+    header_down -Access-Control-Allow-Origin
+    header_down -Access-Control-Allow-Methods
+    header_down -Access-Control-Allow-Headers
+    header_down -Access-Control-Allow-Credentials
+    header_down -Access-Control-Expose-Headers
+    header_down -Access-Control-Max-Age
+    header_down -Vary
+}
+
+(public_cors) {
+    @cors_preflight method OPTIONS
+    header Access-Control-Allow-Origin "*"
+    header Access-Control-Allow-Methods "GET, HEAD, POST, PUT, DELETE, OPTIONS"
+    header Access-Control-Allow-Headers "X-Requested-With, Content-Type, Authorization, Date"
+    header Access-Control-Max-Age "86400"
+    respond @cors_preflight 204
+}
+
 matrix.example.com {
     # Matrix well-known endpoints
     handle /.well-known/matrix/server {
@@ -56,12 +79,26 @@ matrix.example.com {
         respond `{"m.homeserver": {"base_url": "https://matrix.example.com"}, "m.authentication": {"issuer": "https://siwx-oidc.example.com/", "account": "https://siwx-oidc.example.com/account"}}`
     }
 
-    # Client auth and device routes -> siwx-oidc (Synapse does not serve these
-    # under delegated auth). Caddyfile.local also adds CORS for them.
-    @siwx path /_matrix/client/v3/login /_matrix/client/v3/logout /_matrix/client/v3/logout/all /_matrix/client/v3/refresh /_matrix/client/v3/delete_devices /_matrix/client/v3/devices/*
+    # Client auth routes -> siwx-oidc (Synapse does not serve these under
+    # delegated auth).
+    @siwx path /_matrix/client/v3/login /_matrix/client/v3/logout /_matrix/client/v3/logout/all /_matrix/client/v3/refresh /_matrix/client/v3/delete_devices
     handle @siwx {
+        import public_cors
         reverse_proxy siwx-oidc:8081 {
-            import strip_upstream_cors   # snippet from Caddyfile.local
+            import strip_upstream_cors
+        }
+    }
+
+    # Device deletion -> siwx-oidc. It serves only DELETE on this path, so GET
+    # and PUT of a device must fall through to Synapse.
+    @siwx_device_delete {
+        method DELETE
+        path /_matrix/client/v3/devices/*
+    }
+    handle @siwx_device_delete {
+        import public_cors
+        reverse_proxy siwx-oidc:8081 {
+            import strip_upstream_cors
         }
     }
 
@@ -80,6 +117,7 @@ matrix.example.com {
 }
 
 siwx-oidc.example.com {
+    import public_cors
     reverse_proxy siwx-oidc:8081 {
         import strip_upstream_cors
     }
