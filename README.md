@@ -71,7 +71,7 @@ their last update).
 | Component | Version / pin | Pinned in | Stock / patched / built |
 |---|---|---|---|
 | Synapse | `v1.161.0` (`matrixdotorg/synapse:v1.161.0@sha256:6b95dd129e35…`, index digest) | `dockerfiles/Dockerfile:30` | **Patched**: 1 source patch, plus config written by `entrypoints/matrix_server.sh`. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/synapse` |
-| Synapse image the stack runs | default `…/synapse:sha-33a0c95@sha256:32abd6fa5e31…` (CI build of main at 33a0c95); dev-staging default `…/synapse@sha256:2f1b6c17406c…` | `docker-compose.yml:24`, `docker-compose.dev-staging.yml:65` (`SYNAPSE_IMAGE_REF`) | Built here |
+| Synapse image the stack runs | default `…/synapse:sha-33a0c95@sha256:32abd6fa5e31…` (CI build of main at 33a0c95); dev-staging default `…/synapse@sha256:2f1b6c17406c…` | `docker-compose.yml:24`, `docker-compose.dev-staging.yml:65` (`SYNAPSE_IMAGE_REF`); `real-stack/Dockerfile.synapse:26` (same default, for the local real stack) | Built here |
 | Element Web | `v1.12.29` (git tag of element-hq/element-web) | `dockerfiles/Dockerfile.element:17` (`ARG ELEMENT_WEB_TAG`) | **Built from source and patched**: 10 source patches, plus a runtime overlay |
 | Element Web image the stack runs | default `…/element-web:sha-33a0c95@sha256:1761832069bd…` (CI build of main at 33a0c95); dev-staging default `…/element-web@sha256:8cea1873e574…` | `docker-compose.yml:115`, `docker-compose.dev-staging.yml:174` (`ELEMENT_IMAGE_REF`) | Built here |
 | Element Call | `0.24.0` (`@element-hq/element-call-embedded`) | Not pinned here: Element Web `v1.12.29`'s `apps/web/package.json` and `pnpm-lock.yaml` | Stock, embedded in the Element Web bundle (`element_call.use_exclusively` in `config/element-config.json`). Moves only with the Element Web tag |
@@ -109,10 +109,9 @@ do:
   the same bytes every time. Pin by digest in `.env` to run anything newer.
 - **Base images by moving tag**: `node:24-bullseye` (`dockerfiles/Dockerfile.element:15`)
   and `nginxinc/nginx-unprivileged:alpine-slim` (`dockerfiles/Dockerfile.element:183`).
-- **Unpinned packages**: `apt-get install` in `real-stack/Dockerfile.synapse:11`;
-  yq from `releases/latest` in `real-stack/Dockerfile.synapse:12`. Debian `patch`
-  in the Synapse build (`dockerfiles/Dockerfile:66`) floats on purpose, within the
-  Debian release the base digest fixes, and is purged before its layer ends.
+- **Build-time package**: Debian `patch` in the Synapse build
+  (`dockerfiles/Dockerfile:66`) floats on purpose, within the Debian release the
+  base digest fixes, and is purged before its layer ends.
 - **Local and test only**: `docker-compose.local.yml:43` (`redis`, no tag) and `:137`
   (`caddy:2-alpine`); `docker-compose.e2e.yml:18` (`redis:7-alpine`), `:97`
   (`livekit/livekit-server:v1.13.6`, tag without digest), `:170` and `:185`

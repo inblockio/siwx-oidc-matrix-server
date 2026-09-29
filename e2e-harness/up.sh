@@ -99,7 +99,7 @@ podman run -d --name siwx-e2eh-oidc --network "${NET}" --restart unless-stopped 
   "${SIWX_OIDC_IMAGE_REF}" >/dev/null
 
 # 6. synapse (SYNAPSE_IMAGE_REF; internal 8008, published 18448)
-#    First boot generates homeserver.yaml from the env contract in synapse_entrypoint.sh.
+#    First boot generates homeserver.yaml from the env contract in entrypoints/matrix_server.sh.
 echo "[up] starting siwx-e2eh-synapse (host ${SYNAPSE_HOST_PORT} -> 8008)"
 podman run -d --name siwx-e2eh-synapse --network "${NET}" --restart unless-stopped \
   -p "127.0.0.1:${SYNAPSE_HOST_PORT}:8008" \

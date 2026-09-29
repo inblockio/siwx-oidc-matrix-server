@@ -42,8 +42,8 @@ when missing**. `e2e-harness/images.sh` is the single place that decides them.
   write-policy patch from `patches/synapse/`, and `entrypoints/matrix_server.sh`.
   The tag suffix hashes the Dockerfile and every file it COPYs, so editing the
   entrypoint or a patch rebuilds it and an unchanged tree reuses it. It is
-  deliberately **not** `real-stack/Dockerfile.synapse`: that one has no MSC4133
-  patch, and the `did_field` checks in the full tier need it.
+  deliberately **not** `real-stack/Dockerfile.synapse`: that one runs the
+  published image, and the harness exists to test the working tree.
 
 ```bash
 e2e-harness/images.sh print        # resolved refs, default vs override, present vs missing

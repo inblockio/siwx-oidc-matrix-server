@@ -17,10 +17,10 @@ services:
     # was at pull time, and start-matrix.sh pulls on every start. A required
     # `${VAR:?}` would have broken start-matrix.sh, which writes no image refs.
     # The digest decides the bytes; the `sha-` tag only names the commit that
-    # built them. Bump deliberately, together with the README row: take the
-    # digest a later main build published under its `sha-<commit>` tag. A
-    # default can only name a build of an EARLIER commit, since no commit can
-    # contain the digest of its own build.
+    # built them. Bump deliberately, with the README row and the SYNAPSE_IMAGE
+    # default in real-stack/Dockerfile.synapse: take the digest a later main
+    # build published under its `sha-<commit>` tag. A default can only name a
+    # build of an EARLIER commit: no commit can hold its own build's digest.
     image: ${SYNAPSE_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/synapse:sha-33a0c95@sha256:32abd6fa5e312796926eb33a2aeebecfe2ec705768828d3f570004c8ba44d775}
     restart: unless-stopped
     expose:

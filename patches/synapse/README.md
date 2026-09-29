@@ -74,7 +74,7 @@ The rules are the same as `patches/element-web/README.md`, and for the same reas
 |---|---|
 | `dockerfiles/Dockerfile` (the published `synapse` image; CI, dev-staging, prod) | **yes**, lines 64-72 |
 | `e2e-harness/images.sh` (local e2e harness) | **yes**: it builds `dockerfiles/Dockerfile` itself |
-| `real-stack/Dockerfile.synapse` (local real-stack image) | **no**: same `FROM` tag, no patch, and it fetches yq from `releases/latest`. Do not use it to test anything that depends on the DID field being protected; the startup guard in `entrypoints/matrix_server.sh` does not run there either, because that image has its own entrypoint (`real-stack/synapse_entrypoint.sh`) |
+| `real-stack/Dockerfile.synapse` (local real-stack image) | **yes**, since 2026-09-29: it builds `FROM` the published image (default: the same tag-plus-digest ref `docker-compose.yml` defaults to), so it carries this patch, the startup guard and `entrypoints/matrix_server.sh`. Until then it had its own recipe with neither |
 | `scripts/did-field-guard-accept.sh` | **no, on purpose**: it bind-mounts the guarded entrypoint into a STOCK image to prove the guard refuses to start |
 
 ---
