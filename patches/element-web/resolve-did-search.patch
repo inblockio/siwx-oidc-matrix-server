@@ -1,16 +1,18 @@
 diff --git a/apps/web/src/components/views/dialogs/InviteDialog.tsx b/apps/web/src/components/views/dialogs/InviteDialog.tsx
-index 71eab82..de7fc2a 100644
+index 6ea4366..079d52a 100644
 --- a/apps/web/src/components/views/dialogs/InviteDialog.tsx
 +++ b/apps/web/src/components/views/dialogs/InviteDialog.tsx
-@@ -17,6 +17,7 @@ import { DialPadIcon, UserProfileSolidIcon } from "@vector-im/compound-design-to
+@@ -17,6 +17,9 @@ import { DialPadIcon, UserProfileSolidIcon } from "@vector-im/compound-design-to
  
  import { _t, _td } from "../../../languageHandler";
  import { MatrixClientPeg } from "../../../MatrixClientPeg";
-+import { looksLikeDid, resolveDidToUserId } from "../../../utils/didLocalpart";
++import { didSearchOptionsFromConfig, looksLikeDid, resolveDid } from "../../../utils/didLocalpart";
++import { DidSearchMember } from "../../../utils/didSearchMember";
++import SdkConfig from "../../../SdkConfig";
  import { makeRoomPermalink, makeUserPermalink } from "../../../utils/permalinks/Permalinks";
  import DMRoomMap from "../../../utils/DMRoomMap";
  import * as Email from "../../../email";
-@@ -546,16 +547,29 @@ export default class InviteDialog extends React.PureComponent<Props, IInviteDial
+@@ -536,16 +539,32 @@ export default class InviteDialog extends React.PureComponent<Props, IInviteDial
  
                      // While we're here, try and autocomplete a search result for the mxid itself
                      // if there's no matches (and the input looks like a mxid).
@@ -21,8 +23,11 @@ index 71eab82..de7fc2a 100644
 +                    // uppercase), so it is first resolved to the MXID it was derived
 +                    // from — see utils/didLocalpart.ts. The user directory cannot
 +                    // find these at all, so this is the only path to them.
-+                    const resolvedUserId = looksLikeDid(term)
-+                        ? await resolveDidToUserId(MatrixClientPeg.safeGet(), term)
++                    const didMatch = looksLikeDid(term)
++                        ? await resolveDid(MatrixClientPeg.safeGet(), term, didSearchOptionsFromConfig(SdkConfig.get()))
++                        : null;
++                    const resolvedUserId = didMatch
++                        ? didMatch.userId
 +                        : term[0] === "@" && term.indexOf(":") > 1
 +                          ? term
 +                          : null;
@@ -43,19 +48,116 @@ index 71eab82..de7fc2a 100644
                                      display_name: profile["displayname"],
                                      avatar_url: profile["avatar_url"],
                                  });
+@@ -559,7 +578,12 @@ export default class InviteDialog extends React.PureComponent<Props, IInviteDial
+                     this.setState({
+                         serverResultsMixin: r.results.map((u) => ({
+                             userId: u.user_id,
+-                            user: new DirectoryMember(u),
++                            // The DID hit carries its verification state, which
++                            // DMRoomTile renders as a marker beside the MXID.
++                            user:
++                                didMatch && u.user_id === didMatch.userId
++                                    ? new DidSearchMember(u, didMatch)
++                                    : new DirectoryMember(u),
+                         })),
+                     });
+                 })
+diff --git a/apps/web/src/components/views/dialogs/invite/DMRoomTile.test.tsx b/apps/web/src/components/views/dialogs/invite/DMRoomTile.test.tsx
+new file mode 100644
+index 0000000..1d65dcd
+--- /dev/null
++++ b/apps/web/src/components/views/dialogs/invite/DMRoomTile.test.tsx
+@@ -0,0 +1,38 @@
++/**
++Copyright 2026 inblock.io
++
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++// @vitest-environment happy-dom
++
++import React from "react";
++import { describe, it, expect } from "vitest";
++import { render } from "test-utils-rtl";
++
++import { DMRoomTile } from "./DMRoomTile";
++import { DirectoryMember } from "../../../../utils/direct-messages";
++import { DidSearchMember } from "../../../../utils/didSearchMember";
++
++describe("DMRoomTile DID search marker", () => {
++    const user = { user_id: "@0f2g2c0d3vclsu3i:home.server", display_name: "Alice" };
++
++    it.each([
++        [{ verification: "verified" } as const, "DID verified"],
++        [{ verification: "unverified", reason: "unchecked" } as const, "DID unverified: signing key unreachable"],
++        [{ verification: "unverified", reason: "unpublished" } as const, "DID unverified: not yet published"],
++    ])("marks a DID search hit %o", (state, text) => {
++        const { container } = render(
++            <DMRoomTile member={new DidSearchMember(user, { userId: user.user_id, ...state })} />,
++        );
++        expect(container.textContent).toContain(`${user.user_id} · ${text}`);
++    });
++
++    it("renders no marker for an ordinary directory result, whatever its display name claims", () => {
++        const { container } = render(
++            <DMRoomTile member={new DirectoryMember({ ...user, display_name: "Alice (DID verified)" })} />,
++        );
++        expect(container.textContent).not.toContain(" · DID");
++    });
++});
+diff --git a/apps/web/src/components/views/dialogs/invite/DMRoomTile.tsx b/apps/web/src/components/views/dialogs/invite/DMRoomTile.tsx
+index 28a6e6e..7204b4d 100644
+--- a/apps/web/src/components/views/dialogs/invite/DMRoomTile.tsx
++++ b/apps/web/src/components/views/dialogs/invite/DMRoomTile.tsx
+@@ -14,6 +14,7 @@ import BaseAvatar from "../../avatars/BaseAvatar.tsx";
+ import { mediaFromMxc } from "../../../../customisations/Media.ts";
+ import UserIdentifierCustomisations from "../../../../customisations/UserIdentifier.ts";
+ import { _t } from "../../../../languageHandler";
++import { DidSearchMember, didMatchMarker } from "../../../../utils/didSearchMember.ts";
+ import EmailPillAvatarIcon from "../../../../../res/img/icon-email-pill-avatar.svg?react";
+ 
+ interface IDMRoomTileProps {
+@@ -56,9 +57,15 @@ export class DMRoomTile extends React.PureComponent<IDMRoomTileProps> {
+             withDisplayName: true,
+         });
+ 
+-        const caption = (this.props.member as ThreepidMember).isEmail
++        let caption = (this.props.member as ThreepidMember).isEmail
+             ? _t("invite|email_caption")
+             : userIdentifier || this.props.member.userId;
++        // A DID search result says how far its DID binding was checked. The
++        // marker sits in the caption, next to the MXID, where the found user's
++        // own display name cannot imitate it.
++        if (this.props.member instanceof DidSearchMember) {
++            caption = `${caption} · ${didMatchMarker(this.props.member.didMatch)}`;
++        }
+ 
+         return (
+             <RichItem
 diff --git a/apps/web/src/components/views/dialogs/spotlight/SpotlightDialog.tsx b/apps/web/src/components/views/dialogs/spotlight/SpotlightDialog.tsx
-index 20a8b60..c235783 100644
+index 0726b93..d9e6776 100644
 --- a/apps/web/src/components/views/dialogs/spotlight/SpotlightDialog.tsx
 +++ b/apps/web/src/components/views/dialogs/spotlight/SpotlightDialog.tsx
-@@ -55,6 +55,7 @@ import { type ViewRoomPayload } from "../../../../dispatcher/payloads/ViewRoomPa
+@@ -55,6 +55,8 @@ import { type ViewRoomPayload } from "../../../../dispatcher/payloads/ViewRoomPa
  import { useDebouncedCallback } from "../../../../hooks/spotlight/useDebouncedCallback";
  import { useRecentSearches } from "../../../../hooks/spotlight/useRecentSearches";
  import { useProfileInfo } from "../../../../hooks/useProfileInfo";
-+import { looksLikeDid } from "../../../../utils/didLocalpart";
++import { type DidMatch, looksLikeDid } from "../../../../utils/didLocalpart";
++import { didMatchMarker } from "../../../../utils/didSearchMember";
  import { usePublicRoomDirectory } from "../../../../hooks/usePublicRoomDirectory";
  import { useSpaceResults } from "../../../../hooks/useSpaceResults";
  import { useUserDirectory } from "../../../../hooks/useUserDirectory";
-@@ -379,7 +380,13 @@ const SpotlightDialog: React.FC<IProps> = ({ initialText = "", initialFilter = n
+@@ -179,6 +181,8 @@ interface IMemberResult extends IBaseResult {
+      * If the result is from a filtered server API then we set true here to avoid locally culling it in our own filters
+      */
+     alreadyFiltered: boolean;
++    /** Set when this user was found by DID search: rendered as a verification marker. */
++    didMatch?: DidMatch;
+ }
+ 
+ interface IResult extends IBaseResult {
+@@ -380,7 +384,13 @@ const SpotlightDialog: React.FC<IProps> = ({ initialText = "", initialFilter = n
          searchParams,
      );
      useDebouncedCallback(filter === Filter.People, searchPeople, searchParams);
@@ -70,6 +172,97 @@ index 20a8b60..c235783 100644
  
      const possibleResults = useMemo<Result[]>(() => {
          const visibleRooms = findVisibleRooms(cli, msc3946ProcessDynamicPredecessor);
+@@ -417,6 +427,10 @@ const SpotlightDialog: React.FC<IProps> = ({ initialText = "", initialFilter = n
+         addUserResults(userDirectorySearchResults, true);
+         if (profile) {
+             addUserResults([new DirectoryMember(profile)], true);
++            // Attach the DID verification state to whichever result now
++            // represents this user, including one added earlier from rooms.
++            const added = alreadyAddedUserIds.get(profile.user_id);
++            if (profile.did_match && added && isMemberResult(added)) added.didMatch = profile.did_match;
+         }
+ 
+         return [
+@@ -449,12 +463,18 @@ const SpotlightDialog: React.FC<IProps> = ({ initialText = "", initialFilter = n
+             const lcQuery = trimmedQuery.toLowerCase();
+             const normalizedQuery = normalize(trimmedQuery);
+ 
++            // A DID search hit names a user whose DM (if we have one) matches
++            // nothing in the query text: the DID is in no room name or member
++            // name. Upstream's MXID lookup never needs this, because an MXID is
++            // in the DM's member list. See utils/didLocalpart.ts.
++            const didHitUserId = profile?.did_match ? profile.user_id : undefined;
+             possibleResults.forEach((entry) => {
+                 if (isRoomResult(entry)) {
+                     // If the room is a DM with a user that is part of the user directory search results,
+                     // we can assume the user is a relevant result, so include the DM with them too.
+                     const userId = DMRoomMap.shared().getUserIdForRoomId(entry.room.roomId);
+-                    if (!userDirectorySearchResults.some((user) => user.userId === userId)) {
++                    const isDidHitDm = !!didHitUserId && userId === didHitUserId;
++                    if (!isDidHitDm && !userDirectorySearchResults.some((user) => user.userId === userId)) {
+                         if (
+                             !entry.room.normalizedName?.includes(normalizedQuery) &&
+                             !entry.room.getCanonicalAlias()?.toLowerCase().includes(lcQuery) &&
+@@ -512,7 +532,7 @@ const SpotlightDialog: React.FC<IProps> = ({ initialText = "", initialFilter = n
+         }
+ 
+         return results;
+-    }, [cli, trimmedQuery, filter, possibleResults, userDirectorySearchResults, memberComparator]);
++    }, [cli, trimmedQuery, filter, possibleResults, userDirectorySearchResults, profile, memberComparator]);
+ 
+     const numResults = sum(Object.values(results).map((it) => it.length));
+     useWebSearchMetrics(numResults, query.length, true);
+@@ -708,6 +728,12 @@ const SpotlightDialog: React.FC<IProps> = ({ initialText = "", initialFilter = n
+                             className="mx_SpotlightDialog_result_details"
+                         >
+                             {result.member.userId}
++                            {result.didMatch && (
++                                <span className="mx_SpotlightDialog_result_didMarker">
++                                    {" · "}
++                                    {didMatchMarker(result.didMatch)}
++                                </span>
++                            )}
+                         </div>
+                     </Option>
+                 );
+@@ -816,8 +842,18 @@ const SpotlightDialog: React.FC<IProps> = ({ initialText = "", initialFilter = n
+             );
+         }
+ 
++        // Upstream shows Suggestions only under Filter.People. A DID hit is the
++        // exception: it is found by the lookup that also runs with NO filter
++        // (see the searchProfileInfo call above), and it lands in Suggestions
++        // like every member result. Hiding that section would hide the only
++        // result a DID search can have, so without a filter the section shows
++        // just the DID hits and nothing else upstream would not show.
++        const shownSuggestions =
++            filter === Filter.People
++                ? results[Section.Suggestions]
++                : results[Section.Suggestions].filter((result) => isMemberResult(result) && !!result.didMatch);
+         let suggestionsSection: JSX.Element | undefined;
+-        if (results[Section.Suggestions].length && filter === Filter.People) {
++        if (shownSuggestions.length) {
+             suggestionsSection = (
+                 <div
+                     className="mx_SpotlightDialog_section mx_SpotlightDialog_results"
+@@ -825,7 +861,7 @@ const SpotlightDialog: React.FC<IProps> = ({ initialText = "", initialFilter = n
+                     aria-labelledby="mx_SpotlightDialog_section_suggestions"
+                 >
+                     <h4 id="mx_SpotlightDialog_section_suggestions">{_t("common|suggestions")}</h4>
+-                    <div>{results[Section.Suggestions].slice(0, SECTION_LIMIT).map(resultMapper)}</div>
++                    <div>{shownSuggestions.slice(0, SECTION_LIMIT).map(resultMapper)}</div>
+                 </div>
+             );
+         }
+@@ -1047,7 +1083,7 @@ const SpotlightDialog: React.FC<IProps> = ({ initialText = "", initialFilter = n
+         let noResultsSection: JSX.Element | undefined;
+         const hasResults =
+             !!results[Section.People].length ||
+-            (filter === Filter.People && !!results[Section.Suggestions].length) ||
++            !!shownSuggestions.length ||
+             !!results[Section.Rooms].length ||
+             !!results[Section.Spaces].length ||
+             !!results[Section.PublicRoomsAndSpaces].length ||
 diff --git a/apps/web/src/hooks/useAttestedDid.ts b/apps/web/src/hooks/useAttestedDid.ts
 index 22a15bb..8550365 100644
 --- a/apps/web/src/hooks/useAttestedDid.ts
@@ -99,19 +292,88 @@ index 22a15bb..8550365 100644
  
  export interface AttestedDid {
      /** The DID exactly as published. Never normalised: `did:key` case is key material. */
+diff --git a/apps/web/src/hooks/useProfileInfo.test.ts b/apps/web/src/hooks/useProfileInfo.test.ts
+index e0740c0..9fcecba 100644
+--- a/apps/web/src/hooks/useProfileInfo.test.ts
++++ b/apps/web/src/hooks/useProfileInfo.test.ts
+@@ -8,13 +8,19 @@ Please see LICENSE files in the repository root for full details.
+ 
+ // @vitest-environment happy-dom
+ 
+-import { describe, it, expect, beforeEach } from "vitest";
++import { describe, it, expect, beforeEach, vi } from "vitest";
+ import { waitFor, renderHook, act } from "test-utils-rtl";
+ import { type EmptyObject, type MatrixClient } from "matrix-js-sdk/src/matrix";
+ import { stubClient } from "test-utils/test-utils";
+ 
+ import { useProfileInfo } from "./useProfileInfo";
+ import { MatrixClientPeg } from "../MatrixClientPeg";
++import { resolveDid } from "../utils/didLocalpart";
++
++vi.mock("../utils/didLocalpart", async (importOriginal) => ({
++    ...(await importOriginal<typeof import("../utils/didLocalpart")>()),
++    resolveDid: vi.fn(),
++}));
+ 
+ function render() {
+     return renderHook(() => useProfileInfo());
+@@ -49,6 +55,33 @@ describe("useProfileInfo", () => {
+         });
+     });
+ 
++    it("carries a DID search's verification state into the profile result", async () => {
++        const did = "did:key:z6MkmWziJJ2k3ckqVqnmMGVKefMhDSe4ZxrfvqksxDMGBa4v";
++        const match = { userId: "@0f2g2c0d3vclsu3i:home.server", verification: "unverified", reason: "unpublished" };
++        vi.mocked(resolveDid).mockResolvedValue(match as Awaited<ReturnType<typeof resolveDid>>);
++
++        const { result } = render();
++        act(() => {
++            result.current.search({ query: did });
++        });
++
++        await waitFor(() => {
++            expect(result.current.profile?.user_id).toBe(match.userId);
++            expect(result.current.profile?.did_match).toEqual(match);
++        });
++    });
++
++    it("reports a DID that names nobody as an empty result", async () => {
++        vi.mocked(resolveDid).mockResolvedValue(null);
++        const { result } = render();
++        let ok: boolean | undefined;
++        await act(async () => {
++            ok = await result.current.search({ query: "did:key:z6MkmWziJJ2k3ckqVqnmMGVKefMhDSe4ZxrfvqksxDMGBa4v" });
++        });
++        expect(ok).toBe(true);
++        expect(result.current.profile).toBeNull();
++    });
++
+     it("should work with empty queries", async () => {
+         const query = "";
+ 
 diff --git a/apps/web/src/hooks/useProfileInfo.ts b/apps/web/src/hooks/useProfileInfo.ts
-index d0cfd4a..8d33da9 100644
+index d0cfd4a..995982c 100644
 --- a/apps/web/src/hooks/useProfileInfo.ts
 +++ b/apps/web/src/hooks/useProfileInfo.ts
-@@ -10,6 +10,7 @@ import { useCallback, useState } from "react";
+@@ -10,6 +10,8 @@ import { useCallback, useState } from "react";
  
  import { MatrixClientPeg } from "../MatrixClientPeg";
  import { useLatestResult } from "./useLatestResult";
-+import { looksLikeDid, resolveDidToUserId } from "../utils/didLocalpart";
++import { type DidMatch, didSearchOptionsFromConfig, looksLikeDid, resolveDid } from "../utils/didLocalpart";
++import SdkConfig from "../SdkConfig";
  
  export interface IProfileInfoOpts {
      query?: string;
-@@ -36,16 +37,37 @@ export const useProfileInfo = (): {
+@@ -19,6 +21,8 @@ export interface IProfileInfo {
+     user_id: string;
+     avatar_url?: string;
+     display_name?: string;
++    /** Set only when the result came from a DID search: how far the binding was checked. */
++    did_match?: DidMatch;
+ }
+ 
+ export const useProfileInfo = (): {
+@@ -36,18 +40,43 @@ export const useProfileInfo = (): {
      const search = useCallback(
          async ({ query: term }: IProfileInfoOpts): Promise<boolean> => {
              updateQuery(term);
@@ -137,7 +399,10 @@ index d0cfd4a..8d33da9 100644
              try {
 -                const result = await MatrixClientPeg.safeGet().getProfileInfo(term);
 +                const client = MatrixClientPeg.safeGet();
-+                const userId = isDid ? await resolveDidToUserId(client, term) : term;
++                const didMatch = isDid
++                    ? await resolveDid(client, term, didSearchOptionsFromConfig(SdkConfig.get()))
++                    : undefined;
++                const userId = isDid ? didMatch?.userId : term;
 +                if (!userId) {
 +                    // A DID that names nobody here is an ordinary empty result,
 +                    // not a failure: report success so the caller does not fall
@@ -151,13 +416,30 @@ index d0cfd4a..8d33da9 100644
 +                    user_id: userId,
                      avatar_url: result.avatar_url,
                      display_name: result.displayname,
++                    ...(didMatch ? { did_match: didMatch } : {}),
                  });
+                 return true;
+             } catch (e) {
+diff --git a/apps/web/src/i18n/strings/en_EN.json b/apps/web/src/i18n/strings/en_EN.json
+index ef0a821..93fdeec 100644
+--- a/apps/web/src/i18n/strings/en_EN.json
++++ b/apps/web/src/i18n/strings/en_EN.json
+@@ -3809,6 +3809,9 @@
+         "demote_self_confirm_title": "Demote yourself?",
+         "did_label": "DID",
+         "did_label_unsigned": "DID (unsigned)",
++        "did_search_unverified_unchecked": "DID unverified: signing key unreachable",
++        "did_search_unverified_unpublished": "DID unverified: not yet published",
++        "did_search_verified": "DID verified",
+         "disinvite_button_room": "Disinvite from room",
+         "disinvite_button_room_name": "Disinvite from %(roomName)s",
+         "disinvite_button_space": "Disinvite from space",
 diff --git a/apps/web/src/utils/didLocalpart.test.ts b/apps/web/src/utils/didLocalpart.test.ts
 new file mode 100644
-index 0000000..81ccc4b
+index 0000000..e9e4df2
 --- /dev/null
 +++ b/apps/web/src/utils/didLocalpart.test.ts
-@@ -0,0 +1,116 @@
+@@ -0,0 +1,959 @@
 +/**
 +Copyright 2026 inblock.io
 +
@@ -165,9 +447,23 @@ index 0000000..81ccc4b
 +Please see LICENSE files in the repository root for full details.
 +*/
 +
-+import { describe, it, expect } from "vitest";
++import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
++import { type MatrixClient, MatrixError } from "matrix-js-sdk/src/matrix";
 +
-+import { canonicaliseDid, legacyLocalpartForDid, localpartForDid, looksLikeDid, parseDidQuery } from "./didLocalpart";
++import {
++    canonicaliseDid,
++    clearResolverDiscoveryCache,
++    DID_PROFILE_FIELD,
++    didSearchOptionsFromConfig,
++    legacyLocalpartForDid,
++    localpartForDid,
++    looksLikeDid,
++    parseDidQuery,
++    resolveDid,
++    resolveDidToUserId,
++    RESOLVE_ENDPOINT_METADATA_KEY,
++    serverNameOf,
++} from "./didLocalpart";
 +
 +/**
 + * These are the SAME vectors pinned by siwx-oidc's `src/mxid.rs` tests
@@ -187,12 +483,76 @@ index 0000000..81ccc4b
 +const KEY_LOWER = "did:key:z6mkmwzijj2k3ckqvqnmmgvkefmhdse4zxrfvqksxdmgba4v";
 +const KEY_LOWER_EXPECTED = "4qhlwf2qqvk7sqfw";
 +
++/**
++ * siwx-oidc's golden vector FILE, embedded verbatim. The Rust test
++ * `tests/localpart_vectors.rs` proves the file is what `mxid.rs` computes, and
++ * siwx-oidc-matrix-server's `scripts/check-did-localpart-vectors.sh` proves this
++ * copy is byte-identical to the file -- so the chain "server derivation ==
++ * fixture == this mirror" is checked end to end instead of trusted. Replace the
++ * whole block from the fixture; never edit a value by hand.
++ */
++// BEGIN siwx-oidc tests/fixtures/localpart-vectors.json
++const GOLDEN = JSON.parse(`{
++  "_comment": "Golden vectors for siwx_oidc::mxid (canonicalize, localpart_for, legacy_localpart). The source of truth for every hand-copied mirror of the derivation (Element Web resolve-did-search patch, e2e/browser/mxid-helper.mjs). Enforced by tests/localpart_vectors.rs. APPEND ONLY: a changed value means the derivation changed, which reassigns Matrix accounts.",
++  "vectors": [
++    {
++      "did": "did:pkh:eip155:1:0x7a760ea15d76f935c8646b449af488c2b0021734",
++      "canonical": "did:pkh:eip155:1:0x7a760ea15d76f935c8646b449af488c2b0021734",
++      "localpart": "37rb2h7bdij3o1qm",
++      "legacy_localpart": "did-pkh-eip155-1-0x7a760ea15d76f935c8646b449af488c2b0021734"
++    },
++    {
++      "did": "did:pkh:eip155:1:0x7A760ea15d76F935c8646b449AF488c2B0021734",
++      "canonical": "did:pkh:eip155:1:0x7a760ea15d76f935c8646b449af488c2b0021734",
++      "localpart": "37rb2h7bdij3o1qm",
++      "legacy_localpart": "did-pkh-eip155-1-0x7a760ea15d76f935c8646b449af488c2b0021734"
++    },
++    {
++      "did": "did:key:z6MkmWziJJ2k3ckqVqnmMGVKefMhDSe4ZxrfvqksxDMGBa4v",
++      "canonical": "did:key:z6MkmWziJJ2k3ckqVqnmMGVKefMhDSe4ZxrfvqksxDMGBa4v",
++      "localpart": "0f2g2c0d3vclsu3i",
++      "legacy_localpart": "did-key-z6mkmwzijj2k3ckqvqnmmgvkefmhdse4zxrfvqksxdmgba4v"
++    },
++    {
++      "did": "did:key:z6mkmwzijj2k3ckqvqnmmgvkefmhdse4zxrfvqksxdmgba4v",
++      "canonical": "did:key:z6mkmwzijj2k3ckqvqnmmgvkefmhdse4zxrfvqksxdmgba4v",
++      "localpart": "4qhlwf2qqvk7sqfw",
++      "legacy_localpart": "did-key-z6mkmwzijj2k3ckqvqnmmgvkefmhdse4zxrfvqksxdmgba4v"
++    },
++    {
++      "did": "did:peer:2.Ez6LSbysY2xFMRpGMhb7tFTLMpeuPRUqZAsvhgSfvY9ZBLM",
++      "canonical": "did:peer:2.Ez6LSbysY2xFMRpGMhb7tFTLMpeuPRUqZAsvhgSfvY9ZBLM",
++      "localpart": "0umi2bxe3biv6d95",
++      "legacy_localpart": "did-peer-2.ez6lsbysy2xfmrpgmhb7tftlmpeupruqzasvhgsfvy9zblm"
++    },
++    {
++      "did": "did:peer:2.ez6lsbysy2xfmrpgmhb7tftlmpeupruqzasvhgsfvy9zblm",
++      "canonical": "did:peer:2.ez6lsbysy2xfmrpgmhb7tftlmpeupruqzasvhgsfvy9zblm",
++      "localpart": "52kbzku4jf2oj2nl",
++      "legacy_localpart": "did-peer-2.ez6lsbysy2xfmrpgmhb7tftlmpeupruqzasvhgsfvy9zblm"
++    }
++  ]
++}
++`) as {
++    vectors: { did: string; canonical: string; localpart: string; legacy_localpart: string }[];
++};
++// END siwx-oidc tests/fixtures/localpart-vectors.json
++
 +describe("didLocalpart", () => {
 +    it("matches the localpart vectors pinned by the server's mxid.rs", async () => {
 +        await expect(localpartForDid(PKH_LOWER)).resolves.toBe(PKH_EXPECTED);
 +        await expect(localpartForDid(KEY_UPPER)).resolves.toBe(KEY_UPPER_EXPECTED);
 +        await expect(localpartForDid(KEY_LOWER)).resolves.toBe(KEY_LOWER_EXPECTED);
 +    });
++
++    it.each(GOLDEN.vectors.map((v) => [v.did, v] as const))(
++        "reproduces siwx-oidc's golden vector for %s",
++        async (did, v) => {
++            expect(canonicaliseDid(did)).toBe(v.canonical);
++            await expect(localpartForDid(did)).resolves.toBe(v.localpart);
++            expect(legacyLocalpartForDid(did)).toBe(v.legacy_localpart);
++        },
++    );
 +
 +    it("folds did:pkh case, because EIP-55 mixed case is a checksum and not identity", async () => {
 +        expect(canonicaliseDid(PKH_MIXED)).toBe(PKH_LOWER);
@@ -273,13 +633,778 @@ index 0000000..81ccc4b
 +            expect(parseDidQuery("alice@example.org")).toBeNull();
 +        });
 +    });
++
++    describe("resolveDidToUserId", () => {
++        const OWN = "own.example";
++        const PEER = "peer.example.org";
++        const ISSUER = "https://siwx.own.example/";
++        const ADVERTISED = "https://siwx.own.example/resolve";
++        const PEER_RESOLVER = "https://siwx.peer.example.org/resolve";
++        const PEER_ISSUER = "https://siwx.peer.example.org";
++        const PEER_BASE = "https://matrix.peer.example.org";
++
++        // ---- Test signing keys: generated here, never a real server's -----
++        //
++        // `own` plays our provider's LIVE key, `ownRetired` a key it rotated
++        // away from (still listed in its JWKS, as siwx-oidc's `oidc::jwks`
++        // does), `peer` the remote provider's key, and `stranger` a key nobody
++        // publishes.
++        interface TestKey {
++            kid: string;
++            privateKey: CryptoKey;
++            jwk: JsonWebKey & { kid: string };
++        }
++        const keys = {} as Record<"own" | "ownRetired" | "peer" | "stranger", TestKey>;
++
++        async function makeKey(kid: string): Promise<TestKey> {
++            const pair = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
++                "sign",
++                "verify",
++            ])) as CryptoKeyPair;
++            const pub = await crypto.subtle.exportKey("jwk", pair.publicKey);
++            return {
++                kid,
++                privateKey: pair.privateKey,
++                jwk: { kty: "EC", crv: "P-256", x: pub.x, y: pub.y, use: "sig", alg: "ES256", kid },
++            };
++        }
++
++        beforeAll(async () => {
++            keys.own = await makeKey("own-live");
++            keys.ownRetired = await makeKey("own-retired");
++            keys.peer = await makeKey("peer-live");
++            keys.stranger = await makeKey("stranger");
++        });
++
++        const b64url = (bytes: Uint8Array): string =>
++            btoa(String.fromCharCode(...bytes))
++                .replace(/\+/g, "-")
++                .replace(/\//g, "_")
++                .replace(/=+$/, "");
++        const b64json = (value: unknown): string => b64url(new TextEncoder().encode(JSON.stringify(value)));
++
++        /** Mint a proof exactly as siwx-oidc's `did_assertion::mint_did_assertion` lays it out. */
++        async function mint(opts: {
++            key: TestKey;
++            kid?: string;
++            iss: string;
++            sub: string;
++            mxid: string;
++            header?: Record<string, unknown>;
++        }): Promise<string> {
++            const header = opts.header ?? { alg: "ES256", typ: "JWT", kid: opts.kid ?? opts.key.kid };
++            const input = `${b64json(header)}.${b64json({ iss: opts.iss, sub: opts.sub, mxid: opts.mxid, iat: 1_790_000_000 })}`;
++            const signature = await crypto.subtle.sign(
++                { name: "ECDSA", hash: "SHA-256" },
++                opts.key.privateKey,
++                new TextEncoder().encode(input),
++            );
++            return `${input}.${b64url(new Uint8Array(signature))}`;
++        }
++
++        /**
++         * A GENUINE published field: minted when read, bound to the MXID it is
++         * read from, by the provider that MXID's server advertises.
++         */
++        const published = (did: string): { sign: string } => ({ sign: did });
++
++        let modern: string;
++        const legacy = legacyLocalpartForDid(KEY_UPPER);
++
++        beforeEach(async () => {
++            clearResolverDiscoveryCache();
++            modern = await localpartForDid(KEY_UPPER);
++        });
++        afterEach(() => {
++            vi.useRealTimers();
++        });
++
++        type TestClient = MatrixClient & {
++            getExtendedProfile: ReturnType<typeof vi.fn>;
++            getExtendedProfileProperty: ReturnType<typeof vi.fn>;
++            /** The client-side profile cache (IndexedDB in Element), inspectable. */
++            cache: Map<string, Record<string, unknown>>;
++        };
++
++        /**
++         * `fields`: userId -> the published io.inblock.did object, as the SERVER
++         * holds it. `accounts`: users that exist without the field. Anyone else
++         * is a 404 `M_NOT_FOUND`. `profileError`: the server cannot answer any
++         * profile read (e.g. a federated peer is down). `cached`: what the
++         * client's profile cache already holds, modelled on matrix-js-sdk:
++         * `getExtendedProfileProperty` is cache-first and writes through, and
++         * `getExtendedProfile` never touches the cache.
++         */
++        function mockClient(opts: {
++            authMetadata?: Record<string, unknown> | Error;
++            fields?: Record<string, unknown>;
++            accounts?: string[];
++            profileError?: Error;
++            cached?: Record<string, Record<string, unknown>>;
++        }): TestClient {
++            const fields = opts.fields ?? {};
++            const cache = new Map(Object.entries(opts.cached ?? {}));
++            const notFound = (): MatrixError =>
++                new MatrixError({ errcode: "M_NOT_FOUND", error: "Profile not found" }, 404);
++            async function serverValue(userId: string): Promise<unknown> {
++                const value = fields[userId];
++                if (value && typeof value === "object" && "sign" in value) {
++                    const did = (value as { sign: string }).sign;
++                    const onPeer = userId.endsWith(`:${PEER}`);
++                    const proof = await mint({
++                        key: onPeer ? keys.peer : keys.own,
++                        iss: onPeer ? PEER_ISSUER : ISSUER,
++                        sub: did,
++                        mxid: userId,
++                    });
++                    return { did, proof };
++                }
++                return value;
++            }
++            return {
++                getDomain: () => OWN,
++                doesServerSupportExtendedProfiles: vi.fn().mockResolvedValue(true),
++                getAuthMetadata: vi.fn(async () => {
++                    if (opts.authMetadata instanceof Error) throw opts.authMetadata;
++                    return opts.authMetadata ?? { issuer: ISSUER };
++                }),
++                getExtendedProfile: vi.fn(async (userId: string) => {
++                    if (opts.profileError) throw opts.profileError;
++                    if (userId in fields)
++                        return { displayname: "someone", [DID_PROFILE_FIELD]: await serverValue(userId) };
++                    if (opts.accounts?.includes(userId)) return { displayname: "someone" };
++                    throw notFound();
++                }),
++                getExtendedProfileProperty: vi.fn(async (userId: string, key: string) => {
++                    const stored = cache.get(userId);
++                    if (stored?.[key] !== undefined) return stored[key];
++                    if (opts.profileError) throw opts.profileError;
++                    if (key !== DID_PROFILE_FIELD || !(userId in fields)) return undefined;
++                    const value = await serverValue(userId);
++                    cache.set(userId, { ...stored, [key]: value });
++                    return value;
++                }),
++                store: {
++                    getUserProfile: async (userId: string) => cache.get(userId),
++                    storeUserProfiles: async (profiles: Map<string, Record<string, unknown>>) =>
++                        profiles.forEach((profile, userId) => cache.set(userId, profile)),
++                    removeUserProfiles: async (userIds: string[]) => userIds.forEach((id) => cache.delete(id)),
++                },
++                cache,
++            } as unknown as TestClient;
++        }
++
++        type Route = { status?: number; body?: unknown; hang?: boolean; cors?: boolean };
++
++        /**
++         * Both providers' public key material, served the way siwx-oidc serves
++         * it: discovery names the issuer and a same-origin `jwks_uri`, and the
++         * JWKS lists the live key AND the retired one. A test route with the
++         * same prefix overrides these.
++         */
++        function keyRoutes(): Record<string, Route> {
++            return {
++                "https://siwx.own.example/.well-known/openid-configuration": {
++                    body: { issuer: ISSUER, jwks_uri: "https://siwx.own.example/jwk" },
++                },
++                "https://siwx.own.example/jwk": { body: { keys: [keys.own.jwk, keys.ownRetired.jwk] } },
++                [`https://${PEER}/.well-known/matrix/client`]: {
++                    body: { "m.homeserver": { base_url: `${PEER_BASE}/` } },
++                },
++                [`${PEER_BASE}/_matrix/client/v1/auth_metadata`]: { body: { issuer: PEER_ISSUER } },
++                [`${PEER_ISSUER}/.well-known/openid-configuration`]: {
++                    body: { issuer: PEER_ISSUER, jwks_uri: `${PEER_ISSUER}/jwk` },
++                },
++                [`${PEER_ISSUER}/jwk`]: { body: { keys: [keys.peer.jwk] } },
++            };
++        }
++
++        /** A fetch that answers by URL prefix and records every URL it was asked for. */
++        function mockFetch(testRoutes: Record<string, Route>): typeof fetch & { urls: string[] } {
++            const routes = { ...testRoutes, ...keyRoutes(), ...testRoutes };
++            const urls: string[] = [];
++            const fn = vi.fn(async (input: string | URL, init?: RequestInit) => {
++                const url = String(input);
++                urls.push(url);
++                const key = Object.keys(routes).find((prefix) => url.startsWith(prefix));
++                const route = key ? routes[key] : { status: 404, body: {} };
++                // What a browser reports for a CORS refusal: a TypeError, no response.
++                if (route.cors) throw new TypeError("Failed to fetch");
++                if (route.hang) {
++                    return new Promise((_resolve, reject) =>
++                        init?.signal?.addEventListener("abort", () => reject(new Error("aborted"))),
++                    );
++                }
++                const status = route.status ?? 200;
++                return { ok: status >= 200 && status < 300, status, json: async () => route.body };
++            });
++            return Object.assign(fn, { urls }) as unknown as typeof fetch & { urls: string[] };
++        }
++
++        it("asks the ADVERTISED resolver for our own server and trusts only its account", async () => {
++            // Split-brain: both shapes publish the DID. The formula alone would
++            // take the modern one; the provider's grandfathering rule says legacy.
++            const client = mockClient({
++                authMetadata: { issuer: ISSUER, [RESOLVE_ENDPOINT_METADATA_KEY]: ADVERTISED },
++                fields: {
++                    [`@${modern}:${OWN}`]: published(KEY_UPPER),
++                    [`@${legacy}:${OWN}`]: published(KEY_UPPER),
++                },
++            });
++            const fetchFn = mockFetch({
++                [ADVERTISED]: { body: { did: KEY_UPPER, mxid: `@${legacy}:${OWN}`, exists: true, attested: true } },
++            });
++
++            await expect(resolveDidToUserId(client, KEY_UPPER, { fetchFn })).resolves.toBe(`@${legacy}:${OWN}`);
++            expect(fetchFn.urls.filter((u) => u.startsWith(ADVERTISED))).toEqual([
++                `${ADVERTISED}?did=${encodeURIComponent(KEY_UPPER)}`,
++            ]);
++            // Verified through the homeserver, and only that one account.
++            expect(client.getExtendedProfile).toHaveBeenCalledTimes(1);
++        });
++
++        it("falls back to {issuer}/resolve for our own server when nothing is advertised", async () => {
++            const client = mockClient({ fields: { [`@${modern}:${OWN}`]: published(KEY_UPPER) } });
++            const fetchFn = mockFetch({
++                [`${ISSUER}resolve`]: {
++                    body: { did: KEY_UPPER, mxid: `@${modern}:${OWN}`, exists: true, attested: true },
++                },
++            });
++            await expect(resolveDidToUserId(client, KEY_UPPER, { fetchFn })).resolves.toBe(`@${modern}:${OWN}`);
++            expect(fetchFn.urls[0]).toMatch(/^https:\/\/siwx\.own\.example\/resolve\?did=/);
++        });
++
++        it("treats the resolver's 'no account' as final and reads no profile", async () => {
++            const client = mockClient({ fields: { [`@${modern}:${OWN}`]: published(KEY_UPPER) } });
++            const fetchFn = mockFetch({
++                [`${ISSUER}resolve`]: {
++                    body: { did: KEY_UPPER, mxid: `@${modern}:${OWN}`, exists: false, attested: false },
++                },
++            });
++            await expect(resolveDidToUserId(client, KEY_UPPER, { fetchFn })).resolves.toBeNull();
++            expect(client.getExtendedProfile).not.toHaveBeenCalled();
++            expect(client.getExtendedProfileProperty).not.toHaveBeenCalled();
++        });
++
++        it("rejects a resolver's account whose published DID does not match -- no formula second guess", async () => {
++            const client = mockClient({
++                fields: {
++                    [`@${modern}:${OWN}`]: published(KEY_UPPER),
++                    "@mallory:own.example": published(KEY_LOWER),
++                },
++            });
++            const fetchFn = mockFetch({
++                [`${ISSUER}resolve`]: {
++                    body: { did: KEY_UPPER, mxid: "@mallory:own.example", exists: true, attested: true },
++                },
++            });
++            await expect(resolveDidToUserId(client, KEY_UPPER, { fetchFn })).resolves.toBeNull();
++        });
++
++        it.each([
++            ["a 429 from the edge limiter", { status: 429, body: { error: "rate_limited" } }],
++            ["a 503 from an unconfigured provider", { status: 503, body: { error: "unavailable" } }],
++            ["a malformed body", { body: { hello: "world" } }],
++            ["an answer about ANOTHER server", { body: { mxid: `@${"x".repeat(16)}:evil.example`, exists: true } }],
++        ])("falls back to the formula on %s", async (_label, route) => {
++            const client = mockClient({ fields: { [`@${modern}:${OWN}`]: published(KEY_UPPER) } });
++            const fetchFn = mockFetch({ [`${ISSUER}resolve`]: route as Route });
++            await expect(resolveDidToUserId(client, KEY_UPPER, { fetchFn })).resolves.toBe(`@${modern}:${OWN}`);
++        });
++
++        it("falls back LEGACY-first, the provider's grandfathering order, when both shapes publish", async () => {
++            const client = mockClient({
++                fields: {
++                    [`@${modern}:${OWN}`]: published(KEY_UPPER),
++                    [`@${legacy}:${OWN}`]: published(KEY_UPPER),
++                },
++            });
++            const fetchFn = mockFetch({ [`${ISSUER}resolve`]: { status: 429, body: {} } });
++            await expect(resolveDidToUserId(client, KEY_UPPER, { fetchFn })).resolves.toBe(`@${legacy}:${OWN}`);
++        });
++
++        it("falls back to the formula when the homeserver has no OAuth metadata at all", async () => {
++            const client = mockClient({
++                authMetadata: new Error("legacy auth"),
++                fields: { [`@${legacy}:${OWN}`]: published(KEY_UPPER) },
++            });
++            const fetchFn = mockFetch({});
++            await expect(resolveDidToUserId(client, KEY_UPPER, { fetchFn })).resolves.toBe(`@${legacy}:${OWN}`);
++            expect(fetchFn.urls).toEqual([]);
++        });
++
++        it("falls back to the formula when the resolver hangs past its budget", async () => {
++            vi.useFakeTimers();
++            const client = mockClient({ fields: { [`@${modern}:${OWN}`]: published(KEY_UPPER) } });
++            const fetchFn = mockFetch({ [`${ISSUER}resolve`]: { hang: true } });
++            const result = resolveDidToUserId(client, KEY_UPPER, { fetchFn });
++            await vi.advanceTimersByTimeAsync(4_100);
++            await expect(result).resolves.toBe(`@${modern}:${OWN}`);
++        });
++
++        it("remembers the discovered endpoint instead of re-reading auth metadata per keystroke", async () => {
++            const client = mockClient({ fields: { [`@${modern}:${OWN}`]: published(KEY_UPPER) } });
++            const fetchFn = mockFetch({
++                [`${ISSUER}resolve`]: { body: { mxid: `@${modern}:${OWN}`, exists: true, attested: true } },
++            });
++            await resolveDidToUserId(client, KEY_UPPER, { fetchFn });
++            await resolveDidToUserId(client, KEY_UPPER, { fetchFn });
++            expect(client.getAuthMetadata).toHaveBeenCalledTimes(1);
++            // Two resolver calls; discovery and JWKS fetched once for both searches.
++            expect(fetchFn.urls.filter((u) => u.includes("/resolve"))).toHaveLength(2);
++            expect(fetchFn.urls.filter((u) => u.includes("openid-configuration"))).toHaveLength(1);
++            expect(fetchFn.urls.filter((u) => u.endsWith("/jwk"))).toHaveLength(1);
++        });
++
++        describe("a pinned remote homeserver", () => {
++            it("by default never sends the DID to the remote, and still finds them over federation", async () => {
++                const client = mockClient({ fields: { [`@${modern}:${PEER}`]: published(KEY_UPPER) } });
++                const fetchFn = mockFetch({});
++                await expect(resolveDidToUserId(client, `${KEY_UPPER}@${PEER}`, { fetchFn })).resolves.toBe(
++                    `@${modern}:${PEER}`,
++                );
++                // The only browser-to-peer traffic is fetching its public key
++                // material to verify the proof: no resolver, and no DID anywhere.
++                expect(fetchFn.urls).toEqual([
++                    `https://${PEER}/.well-known/matrix/client`,
++                    `${PEER_BASE}/_matrix/client/v1/auth_metadata`,
++                    `${PEER_ISSUER}/.well-known/openid-configuration`,
++                    `${PEER_ISSUER}/jwk`,
++                ]);
++                expect(client.getAuthMetadata).not.toHaveBeenCalled();
++            });
++
++            it("with remote resolvers on, discovers theirs through well-known + auth_metadata", async () => {
++                const client = mockClient({
++                    fields: {
++                        [`@${modern}:${PEER}`]: published(KEY_UPPER),
++                        [`@${legacy}:${PEER}`]: published(KEY_UPPER),
++                    },
++                });
++                const fetchFn = mockFetch({
++                    [`https://${PEER}/.well-known/matrix/client`]: {
++                        body: { "m.homeserver": { base_url: "https://matrix.peer.example.org/" } },
++                    },
++                    "https://matrix.peer.example.org/_matrix/client/v1/auth_metadata": {
++                        body: {
++                            issuer: "https://siwx.peer.example.org/",
++                            [RESOLVE_ENDPOINT_METADATA_KEY]: PEER_RESOLVER,
++                        },
++                    },
++                    [PEER_RESOLVER]: { body: { mxid: `@${legacy}:${PEER}`, exists: true, attested: true } },
++                });
++                await expect(
++                    resolveDidToUserId(client, `${KEY_UPPER}@${PEER}`, { fetchFn, remoteResolvers: true }),
++                ).resolves.toBe(`@${legacy}:${PEER}`);
++                expect(fetchFn.urls.map((u) => u.split("?")[0])).toEqual([
++                    `https://${PEER}/.well-known/matrix/client`,
++                    "https://matrix.peer.example.org/_matrix/client/v1/auth_metadata",
++                    PEER_RESOLVER,
++                    // Verification reuses the cached auth metadata for the issuer.
++                    `${PEER_ISSUER}/.well-known/openid-configuration`,
++                    `${PEER_ISSUER}/jwk`,
++                ]);
++            });
++
++            it("never GUESSES a remote resolver from its issuer", async () => {
++                const client = mockClient({ fields: { [`@${modern}:${PEER}`]: published(KEY_UPPER) } });
++                const fetchFn = mockFetch({
++                    [`https://${PEER}/.well-known/matrix/client`]: {
++                        body: { "m.homeserver": { base_url: "https://matrix.peer.example.org" } },
++                    },
++                    "https://matrix.peer.example.org/_matrix/client/v1/auth_metadata": {
++                        body: { issuer: "https://siwx.peer.example.org/" },
++                    },
++                });
++                await expect(
++                    resolveDidToUserId(client, `${KEY_UPPER}@${PEER}`, { fetchFn, remoteResolvers: true }),
++                ).resolves.toBe(`@${modern}:${PEER}`);
++                expect(fetchFn.urls.some((u) => u.includes("/resolve"))).toBe(false);
++            });
++
++            it("ignores a remote resolver that answers for a different server", async () => {
++                const client = mockClient({ fields: { [`@${modern}:${PEER}`]: published(KEY_UPPER) } });
++                const fetchFn = mockFetch({
++                    [`https://${PEER}/.well-known/matrix/client`]: {
++                        body: { "m.homeserver": { base_url: "https://matrix.peer.example.org" } },
++                    },
++                    "https://matrix.peer.example.org/_matrix/client/v1/auth_metadata": {
++                        body: { [RESOLVE_ENDPOINT_METADATA_KEY]: PEER_RESOLVER },
++                    },
++                    [PEER_RESOLVER]: { body: { mxid: `@${modern}:${OWN}`, exists: true } },
++                });
++                await expect(
++                    resolveDidToUserId(client, `${KEY_UPPER}@${PEER}`, { fetchFn, remoteResolvers: true }),
++                ).resolves.toBe(`@${modern}:${PEER}`);
++            });
++        });
++
++        describe("the client's profile cache (stale io.inblock.did)", () => {
++            // matrix-js-sdk keeps every looked-up field in the client store and
++            // answers later reads from it; the search must not trust that copy.
++            const own = (): string => `@${modern}:${OWN}`;
++            const RESOLVER_DOWN: Record<string, Route> = { [`${ISSUER}resolve`]: { status: 503, body: {} } };
++            const ownResolverNames = (userId: string): Record<string, Route> => ({
++                [`${ISSUER}resolve`]: { body: { did: KEY_UPPER, mxid: userId, exists: true, attested: true } },
++            });
++            /** A cached copy that verified when it was cached. */
++            const genuineCopy = async (userId: string): Promise<Record<string, unknown>> => ({
++                did: KEY_UPPER,
++                proof: await mint({ key: keys.own, iss: ISSUER, sub: KEY_UPPER, mxid: userId }),
++            });
++
++            it("reads the field FRESH, never from the cache, when the server answers", async () => {
++                const client = mockClient({
++                    fields: { [own()]: published(KEY_UPPER) },
++                    cached: { [own()]: { [DID_PROFILE_FIELD]: { did: KEY_UPPER, proof: "stale.junk.copy" } } },
++                });
++                await expect(resolveDid(client, KEY_UPPER, { fetchFn: mockFetch(RESOLVER_DOWN) })).resolves.toEqual({
++                    userId: own(),
++                    verification: "verified",
++                });
++                expect(client.getExtendedProfile).toHaveBeenCalledWith(own());
++                expect(client.getExtendedProfileProperty).not.toHaveBeenCalled();
++                // The fresh value overwrote the stale copy.
++                const cached = client.cache.get(own())?.[DID_PROFILE_FIELD] as { proof?: string };
++                expect(cached.proof).not.toBe("stale.junk.copy");
++            });
++
++            it("field REMOVED server-side: no result, and the cached field is evicted (other keys kept)", async () => {
++                const client = mockClient({
++                    accounts: [own()],
++                    cached: { [own()]: { [DID_PROFILE_FIELD]: await genuineCopy(own()), "m.tz": "Europe/Berlin" } },
++                });
++                await expect(resolveDid(client, KEY_UPPER, { fetchFn: mockFetch(RESOLVER_DOWN) })).resolves.toBeNull();
++                expect(client.cache.get(own())).toEqual({ "m.tz": "Europe/Berlin" });
++            });
++
++            it("field REMOVED, nothing else cached: the whole cache entry goes", async () => {
++                const client = mockClient({
++                    accounts: [own()],
++                    cached: { [own()]: { [DID_PROFILE_FIELD]: await genuineCopy(own()) } },
++                });
++                await expect(resolveDid(client, KEY_UPPER, { fetchFn: mockFetch(RESOLVER_DOWN) })).resolves.toBeNull();
++                expect(client.cache.has(own())).toBe(false);
++            });
++
++            it("field removed but our resolver names the account: fresh state is 'not yet published'", async () => {
++                const client = mockClient({
++                    accounts: [own()],
++                    cached: { [own()]: { [DID_PROFILE_FIELD]: await genuineCopy(own()) } },
++                });
++                await expect(
++                    resolveDid(client, KEY_UPPER, { fetchFn: mockFetch(ownResolverNames(own())) }),
++                ).resolves.toEqual({ userId: own(), verification: "unverified", reason: "unpublished" });
++                expect(client.cache.has(own())).toBe(false);
++            });
++
++            it("field CHANGED server-side: the fresh value decides and overwrites the cached one", async () => {
++                const client = mockClient({
++                    fields: { [own()]: published(KEY_LOWER) },
++                    cached: { [own()]: { [DID_PROFILE_FIELD]: await genuineCopy(own()) } },
++                });
++                await expect(resolveDid(client, KEY_UPPER, { fetchFn: mockFetch(RESOLVER_DOWN) })).resolves.toBeNull();
++                expect((client.cache.get(own())?.[DID_PROFILE_FIELD] as { did: string }).did).toBe(KEY_LOWER);
++            });
++
++            it("account GONE (404 M_NOT_FOUND): no result, and its cached profile is evicted", async () => {
++                const client = mockClient({
++                    cached: { [own()]: { [DID_PROFILE_FIELD]: await genuineCopy(own()), displayname: "old" } },
++                });
++                await expect(resolveDid(client, KEY_UPPER, { fetchFn: mockFetch(RESOLVER_DOWN) })).resolves.toBeNull();
++                expect(client.cache.has(own())).toBe(false);
++            });
++
++            it("account DEACTIVATED with erasure (404 M_UNKNOWN 'No row found'): evicted, not read from the cache", async () => {
++                // What Synapse 1.161 answered on dev for a MAS delete_user erase=true
++                // account: a 404 whose errcode is NOT M_NOT_FOUND. Treating it as
++                // "server cannot answer" would verify the stale cached copy.
++                const client = mockClient({
++                    profileError: new MatrixError({ errcode: "M_UNKNOWN", error: "No row found (profiles)" }, 404),
++                    cached: { [own()]: { [DID_PROFILE_FIELD]: await genuineCopy(own()) } },
++                });
++                await expect(resolveDid(client, KEY_UPPER, { fetchFn: mockFetch(RESOLVER_DOWN) })).resolves.toBeNull();
++                expect(client.getExtendedProfileProperty).not.toHaveBeenCalled();
++                expect(client.cache.has(own())).toBe(false);
++            });
++
++            it("server cannot answer: falls back to a cached copy that still verifies", async () => {
++                const client = mockClient({
++                    profileError: new MatrixError({ errcode: "M_UNKNOWN", error: "peer unreachable" }, 502),
++                    cached: { [own()]: { [DID_PROFILE_FIELD]: await genuineCopy(own()) } },
++                });
++                await expect(resolveDid(client, KEY_UPPER, { fetchFn: mockFetch(RESOLVER_DOWN) })).resolves.toEqual({
++                    userId: own(),
++                    verification: "verified",
++                });
++                expect(client.cache.has(own())).toBe(true);
++            });
++
++            it("server cannot answer: a cached copy that no longer verifies is hidden AND evicted", async () => {
++                // Bound to another MXID: what a stale copy looks like after the
++                // account was re-provisioned under a different localpart.
++                const replayed = await mint({ key: keys.own, iss: ISSUER, sub: KEY_UPPER, mxid: "@other:own.example" });
++                const client = mockClient({
++                    profileError: new MatrixError({ errcode: "M_UNKNOWN", error: "peer unreachable" }, 502),
++                    cached: { [own()]: { [DID_PROFILE_FIELD]: { did: KEY_UPPER, proof: replayed }, "m.tz": "UTC" } },
++                });
++                await expect(resolveDid(client, KEY_UPPER, { fetchFn: mockFetch(RESOLVER_DOWN) })).resolves.toBeNull();
++                expect(client.cache.get(own())).toEqual({ "m.tz": "UTC" });
++            });
++
++            it("writes nothing into a cache that held no copy", async () => {
++                const client = mockClient({ fields: { [own()]: published(KEY_UPPER) } });
++                await expect(
++                    resolveDid(client, KEY_UPPER, { fetchFn: mockFetch(RESOLVER_DOWN) }),
++                ).resolves.toMatchObject({
++                    verification: "verified",
++                });
++                expect(client.cache.size).toBe(0);
++            });
++        });
++
++        describe("proof verification (ES256 over io.inblock.did)", () => {
++            const RESOLVE = `${ISSUER}resolve`;
++            const own = (): string => `@${modern}:${OWN}`;
++            const ownResolverNames = (userId: string): Record<string, Route> => ({
++                [RESOLVE]: { body: { did: KEY_UPPER, mxid: userId, exists: true, attested: true } },
++            });
++            const RATE_LIMITED: Record<string, Route> = { [RESOLVE]: { status: 429, body: {} } };
++
++            it("VERIFIED: a genuine proof by our provider's live key", async () => {
++                const client = mockClient({ fields: { [own()]: published(KEY_UPPER) } });
++                const fetchFn = mockFetch(ownResolverNames(own()));
++                await expect(resolveDid(client, KEY_UPPER, { fetchFn })).resolves.toEqual({
++                    userId: own(),
++                    verification: "verified",
++                });
++            });
++
++            it("VERIFIED: a proof minted before a rotation, by a RETIRED key the JWKS still lists", async () => {
++                const proof = await mint({ key: keys.ownRetired, iss: ISSUER, sub: KEY_UPPER, mxid: own() });
++                const client = mockClient({ fields: { [own()]: { did: KEY_UPPER, proof } } });
++                const fetchFn = mockFetch(ownResolverNames(own()));
++                await expect(resolveDid(client, KEY_UPPER, { fetchFn })).resolves.toMatchObject({
++                    verification: "verified",
++                });
++            });
++
++            it("VERIFIED on the formula path too, when our resolver is rate-limited", async () => {
++                const client = mockClient({ fields: { [own()]: published(KEY_UPPER) } });
++                const fetchFn = mockFetch(RATE_LIMITED);
++                await expect(resolveDid(client, KEY_UPPER, { fetchFn })).resolves.toEqual({
++                    userId: own(),
++                    verification: "verified",
++                });
++            });
++
++            it("REJECTED: a genuine proof REPLAYED into another profile (valid JWS, wrong mxid)", async () => {
++                // Alice's real, correctly signed proof, copied into the candidate's profile.
++                const alices = await mint({ key: keys.own, iss: ISSUER, sub: KEY_UPPER, mxid: "@alice:own.example" });
++                const client = mockClient({ fields: { [own()]: { did: KEY_UPPER, proof: alices } } });
++                // Even our own resolver naming the account does not rescue a failing proof.
++                await expect(
++                    resolveDid(client, KEY_UPPER, { fetchFn: mockFetch(ownResolverNames(own())) }),
++                ).resolves.toBeNull();
++                clearResolverDiscoveryCache();
++                await expect(resolveDid(client, KEY_UPPER, { fetchFn: mockFetch(RATE_LIMITED) })).resolves.toBeNull();
++            });
++
++            it("REJECTED: iss is not the issuer the candidate's homeserver advertises, and its keys are never fetched", async () => {
++                // A self-consistent forgery: an attacker's issuer with its own
++                // (reachable, CORS-open) JWKS. Only the pinned issuer's keys count.
++                const EVIL = "https://evil.example";
++                const forged = await mint({ key: keys.stranger, iss: EVIL, sub: KEY_UPPER, mxid: own() });
++                const client = mockClient({ fields: { [own()]: { did: KEY_UPPER, proof: forged } } });
++                const fetchFn = mockFetch({
++                    ...RATE_LIMITED,
++                    [`${EVIL}/.well-known/openid-configuration`]: {
++                        body: { issuer: EVIL, jwks_uri: `${EVIL}/jwk` },
++                    },
++                    [`${EVIL}/jwk`]: { body: { keys: [keys.stranger.jwk] } },
++                });
++                await expect(resolveDid(client, KEY_UPPER, { fetchFn })).resolves.toBeNull();
++                expect(fetchFn.urls.some((u) => u.startsWith(EVIL))).toBe(false);
++            });
++
++            it("REJECTED: a proof for a remote user signed by OUR provider (iss pinned per homeserver)", async () => {
++                const peerUser = `@${modern}:${PEER}`;
++                const ours = await mint({ key: keys.own, iss: ISSUER, sub: KEY_UPPER, mxid: peerUser });
++                const client = mockClient({ fields: { [peerUser]: { did: KEY_UPPER, proof: ours } } });
++                const fetchFn = mockFetch({});
++                await expect(resolveDid(client, `${KEY_UPPER}@${PEER}`, { fetchFn })).resolves.toBeNull();
++            });
++
++            it("REJECTED: an unknown kid on a reachable JWKS, after one refresh in case the key just rotated", async () => {
++                const proof = await mint({ key: keys.stranger, iss: ISSUER, sub: KEY_UPPER, mxid: own() });
++                const client = mockClient({ fields: { [own()]: { did: KEY_UPPER, proof } } });
++                const fetchFn = mockFetch(ownResolverNames(own()));
++                await expect(resolveDid(client, KEY_UPPER, { fetchFn })).resolves.toBeNull();
++                expect(fetchFn.urls.filter((u) => u.endsWith("/jwk"))).toHaveLength(2);
++            });
++
++            it("REJECTED: a bad signature under a known kid", async () => {
++                const proof = await mint({
++                    key: keys.stranger,
++                    kid: keys.own.kid,
++                    iss: ISSUER,
++                    sub: KEY_UPPER,
++                    mxid: own(),
++                });
++                const client = mockClient({ fields: { [own()]: { did: KEY_UPPER, proof } } });
++                await expect(
++                    resolveDid(client, KEY_UPPER, { fetchFn: mockFetch(ownResolverNames(own())) }),
++                ).resolves.toBeNull();
++            });
++
++            it("REJECTED: a proof whose sub is another DID, even when the plain did member matches", async () => {
++                const proof = await mint({ key: keys.own, iss: ISSUER, sub: KEY_LOWER, mxid: own() });
++                const client = mockClient({ fields: { [own()]: { did: KEY_UPPER, proof } } });
++                await expect(resolveDid(client, KEY_UPPER, { fetchFn: mockFetch(RATE_LIMITED) })).resolves.toBeNull();
++            });
++
++            it.each([
++                ["alg none", { alg: "none", typ: "JWT", kid: "own-live" }],
++                ["alg HS256", { alg: "HS256", typ: "JWT", kid: "own-live" }],
++                ["a crit header", { alg: "ES256", typ: "JWT", kid: "own-live", crit: ["exp"] }],
++            ])("REJECTED before any key is fetched: %s", async (_label, header) => {
++                const proof = await mint({ key: keys.own, header, iss: ISSUER, sub: KEY_UPPER, mxid: own() });
++                const client = mockClient({ fields: { [own()]: { did: KEY_UPPER, proof } } });
++                const fetchFn = mockFetch(RATE_LIMITED);
++                await expect(resolveDid(client, KEY_UPPER, { fetchFn })).resolves.toBeNull();
++                expect(fetchFn.urls.some((u) => u.includes("openid-configuration") || u.endsWith("/jwk"))).toBe(false);
++            });
++
++            it("UNVERIFIED (shown, marked): the JWKS refuses our origin in CORS", async () => {
++                const client = mockClient({ fields: { [own()]: published(KEY_UPPER) } });
++                const fetchFn = mockFetch({ ...RATE_LIMITED, "https://siwx.own.example/jwk": { cors: true } });
++                await expect(resolveDid(client, KEY_UPPER, { fetchFn })).resolves.toEqual({
++                    userId: own(),
++                    verification: "unverified",
++                    reason: "unchecked",
++                });
++            });
++
++            it("UNVERIFIED (shown, marked): a remote homeserver whose discovery is unreachable", async () => {
++                const peerUser = `@${modern}:${PEER}`;
++                const client = mockClient({ fields: { [peerUser]: published(KEY_UPPER) } });
++                const fetchFn = mockFetch({ [`https://${PEER}/.well-known/matrix/client`]: { cors: true } });
++                await expect(resolveDid(client, `${KEY_UPPER}@${PEER}`, { fetchFn })).resolves.toEqual({
++                    userId: peerUser,
++                    verification: "unverified",
++                    reason: "unchecked",
++                });
++            });
++
++            it("VERIFIED for a remote user, by the issuer THEIR homeserver advertises, and no request carries the DID", async () => {
++                const peerUser = `@${legacy}:${PEER}`;
++                const client = mockClient({ fields: { [peerUser]: published(KEY_UPPER) } });
++                const fetchFn = mockFetch({});
++                await expect(resolveDid(client, `${KEY_UPPER}@${PEER}`, { fetchFn })).resolves.toEqual({
++                    userId: peerUser,
++                    verification: "verified",
++                });
++                const encoded = encodeURIComponent(KEY_UPPER);
++                expect(fetchFn.urls.every((u) => !u.includes(KEY_UPPER) && !u.includes(encoded))).toBe(true);
++                for (const [, init] of vi.mocked(fetchFn).mock.calls) {
++                    expect(init).toMatchObject({ credentials: "omit", referrerPolicy: "no-referrer" });
++                }
++            });
++
++            it("UNVERIFIED (shown, marked): our own resolver names an account that has not published its DID", async () => {
++                const client = mockClient({ fields: {} });
++                const fetchFn = mockFetch(ownResolverNames(own()));
++                await expect(resolveDid(client, KEY_UPPER, { fetchFn })).resolves.toEqual({
++                    userId: own(),
++                    verification: "unverified",
++                    reason: "unpublished",
++                });
++            });
++
++            it("UNVERIFIED (shown, marked): our own resolver names an account whose DID carries no proof", async () => {
++                const client = mockClient({ fields: { [own()]: { did: KEY_UPPER } } });
++                const fetchFn = mockFetch(ownResolverNames(own()));
++                await expect(resolveDid(client, KEY_UPPER, { fetchFn })).resolves.toMatchObject({
++                    verification: "unverified",
++                    reason: "unpublished",
++                });
++            });
++
++            it("HIDDEN: an unpublished or proof-less account found by the FORMULA or a REMOTE resolver", async () => {
++                // Formula (our resolver rate-limited): neither shape counts without a proof.
++                const client = mockClient({ fields: { [own()]: { did: KEY_UPPER } } });
++                await expect(resolveDid(client, KEY_UPPER, { fetchFn: mockFetch(RATE_LIMITED) })).resolves.toBeNull();
++
++                // A remote resolver naming an account is not enough either.
++                const peerUser = `@${modern}:${PEER}`;
++                const remote = mockClient({ fields: {} });
++                const fetchFn = mockFetch({
++                    [`${PEER_BASE}/_matrix/client/v1/auth_metadata`]: {
++                        body: { issuer: PEER_ISSUER, [RESOLVE_ENDPOINT_METADATA_KEY]: PEER_RESOLVER },
++                    },
++                    [PEER_RESOLVER]: { body: { mxid: peerUser, exists: true } },
++                });
++                await expect(
++                    resolveDid(remote, `${KEY_UPPER}@${PEER}`, { fetchFn, remoteResolvers: true }),
++                ).resolves.toBeNull();
++            });
++
++            it("caches discovery and JWKS per issuer across searches", async () => {
++                const client = mockClient({ fields: { [own()]: published(KEY_UPPER) } });
++                const fetchFn = mockFetch(RATE_LIMITED);
++                await resolveDid(client, KEY_UPPER, { fetchFn });
++                await resolveDid(client, KEY_UPPER, { fetchFn });
++                expect(fetchFn.urls.filter((u) => u.includes("openid-configuration"))).toHaveLength(1);
++                expect(fetchFn.urls.filter((u) => u.endsWith("/jwk"))).toHaveLength(1);
++            });
++
++            it("REJECTED: signed by the pinned issuer's own key but claiming a different iss", async () => {
++                const proof = await mint({ key: keys.own, iss: "https://other.example", sub: KEY_UPPER, mxid: own() });
++                const client = mockClient({ fields: { [own()]: { did: KEY_UPPER, proof } } });
++                await expect(
++                    resolveDid(client, KEY_UPPER, { fetchFn: mockFetch(ownResolverNames(own())) }),
++                ).resolves.toBeNull();
++            });
++
++            it("HIDDEN: our own resolver names an account whose unsigned field publishes ANOTHER DID", async () => {
++                const client = mockClient({ fields: { [own()]: { did: KEY_LOWER } } });
++                await expect(
++                    resolveDid(client, KEY_UPPER, { fetchFn: mockFetch(ownResolverNames(own())) }),
++                ).resolves.toBeNull();
++            });
++
++            it("still hides a candidate whose published did is someone else's, whatever its proof says", async () => {
++                const client = mockClient({ fields: { [own()]: published(KEY_LOWER) } });
++                await expect(
++                    resolveDid(client, KEY_UPPER, { fetchFn: mockFetch(ownResolverNames(own())) }),
++                ).resolves.toBeNull();
++            });
++        });
++    });
++
++    it("reads remote_resolvers from config.json, defaulting to off", () => {
++        expect(didSearchOptionsFromConfig({})).toEqual({ remoteResolvers: false });
++        expect(didSearchOptionsFromConfig(undefined)).toEqual({ remoteResolvers: false });
++        expect(didSearchOptionsFromConfig({ "io.inblock.did_search": { remote_resolvers: "yes" } })).toEqual({
++            remoteResolvers: false,
++        });
++        expect(didSearchOptionsFromConfig({ "io.inblock.did_search": { remote_resolvers: true } })).toEqual({
++            remoteResolvers: true,
++        });
++    });
++
++    it("splits an MXID's server at the FIRST colon, keeping a port", () => {
++        expect(serverNameOf("@a:example.org:8448")).toBe("example.org:8448");
++        expect(serverNameOf("a:example.org")).toBeNull();
++        expect(serverNameOf("@:example.org")).toBeNull();
++    });
 +});
 diff --git a/apps/web/src/utils/didLocalpart.ts b/apps/web/src/utils/didLocalpart.ts
 new file mode 100644
-index 0000000..9d28b96
+index 0000000..2512607
 --- /dev/null
 +++ b/apps/web/src/utils/didLocalpart.ts
-@@ -0,0 +1,241 @@
+@@ -0,0 +1,708 @@
 +/**
 +Copyright 2026 inblock.io
 +
@@ -287,7 +1412,9 @@ index 0000000..9d28b96
 +Please see LICENSE files in the repository root for full details.
 +*/
 +
-+import { type MatrixClient } from "matrix-js-sdk/src/matrix";
++import { type MatrixClient, type SyncUserProfile } from "matrix-js-sdk/src/matrix";
++
++import { clearIssuerKeysCache, fetchPublicJson, PromiseCache, type ProofVerdict, verifyDidProof } from "./didProof";
 +
 +/**
 + * The MSC4133 profile field an identity provider publishes a user's DID into.
@@ -334,6 +1461,17 @@ index 0000000..9d28b96
 + * for. A divergent derivation therefore yields **no result**, never the wrong
 + * user — it can cost a false negative, it cannot misdirect. `didLocalpart.test.ts`
 + * pins the same vectors as `mxid.rs`'s own tests so drift is caught in CI first.
++ *
++ * Since the provider grew `GET /resolve`, this mirror is the FALLBACK, not the
++ * primary path: our own homeserver is asked through its resolver first, and the
++ * mirror runs only when no resolver answers -- which is also how a federated
++ * server running this stack is reached without the browser sending it the DID.
++ * The mirror is kept for exactly those two cases (see {@link resolveDid}).
++ *
++ * Since 2026-09-28 a match is also checked cryptographically: the ES256 proof
++ * beside the published DID is verified against the keys of the issuer the
++ * candidate's own homeserver advertises (`didProof.ts`), and the result says
++ * whether that succeeded (see {@link DidMatch}).
 + */
 +
 +const BASE36_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz";
@@ -439,8 +1577,264 @@ index 0000000..9d28b96
 + */
 +const RESOLVE_TIMEOUT_MS = 10_000;
 +
++/**
++ * How long the resolver step (discovery + the `/resolve` call) may take before
++ * the lookup falls back to the formula. Well inside {@link RESOLVE_TIMEOUT_MS},
++ * so a slow resolver still leaves the fallback time to run: a resolver that is
++ * down must cost a delay, never the result.
++ */
++const RESOLVER_BUDGET_MS = 4_000;
++
++/**
++ * How long verifying one proof (issuer pinning, discovery, JWKS, signature) may
++ * take. Past it the proof counts as UNCHECKED: the result is shown, marked
++ * unverified, exactly as if the keys had been unreachable.
++ */
++const VERIFY_BUDGET_MS = 4_000;
++
++/** How long a homeserver's auth metadata (resolver, issuer) is remembered. */
++const DISCOVERY_TTL_MS = 10 * 60_000;
++
 +function withTimeout<T>(work: Promise<T>, ms: number, fallback: T): Promise<T> {
 +    return Promise.race([work, new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms))]);
++}
++
++// ---------------------------------------------------------------------------
++// The authoritative path: the provider's own `GET /resolve`
++// ---------------------------------------------------------------------------
++
++/**
++ * The key under which siwx-oidc advertises its `GET /resolve` endpoint in its
++ * OpenID provider metadata. Synapse's `/_matrix/client/v1/auth_metadata`
++ * forwards that document with unknown keys intact (its `ServerMetadata` model
++ * is `extra="allow"`; `account_management_uri` reaches clients the same way),
++ * so any homeserver delegating auth to siwx-oidc advertises its resolver
++ * through the one discovery document every OAuth-aware client already reads.
++ */
++export const RESOLVE_ENDPOINT_METADATA_KEY = "io.inblock.resolve_endpoint";
++
++/**
++ * The `SdkConfig` key holding this feature's options, e.g.
++ * `"io.inblock.did_search": { "remote_resolvers": true }`.
++ */
++export const DID_SEARCH_CONFIG_KEY = "io.inblock.did_search";
++
++export interface ResolveDidOptions {
++    /**
++     * Also ask a PINNED REMOTE homeserver's resolver, discovered through that
++     * server's `.well-known/matrix/client` and `auth_metadata`.
++     *
++     * Off by default, because it is the one step that makes the searcher's
++     * BROWSER send the searched DID to another organisation: that party then
++     * learns the searcher's IP address alongside the DID being looked for,
++     * which the federated profile read (our homeserver asking theirs) never
++     * reveals. It also only works where the remote edge's CORS policy admits
++     * this origin. The result is verified the same way either way, so turning
++     * it on changes which account is found in edge cases (see
++     * {@link resolveDid}), never how much a match is trusted.
++     *
++     * (Proof verification of a remote match does contact the remote's
++     * well-known, auth metadata, discovery and JWKS regardless of this flag,
++     * but those requests name only the server and its issuer, never the DID.)
++     */
++    remoteResolvers?: boolean;
++    /** Injected in tests; defaults to the global `fetch`. */
++    fetchFn?: typeof fetch;
++}
++
++/** Read the options from `config.json`; absent or malformed means the defaults. */
++export function didSearchOptionsFromConfig(config: unknown): ResolveDidOptions {
++    const section = isRecord(config) ? config[DID_SEARCH_CONFIG_KEY] : undefined;
++    return { remoteResolvers: isRecord(section) && section["remote_resolvers"] === true };
++}
++
++type ResolverAnswer =
++    /** The provider named the account for this DID on this server. */
++    | { kind: "account"; userId: string }
++    /** The provider says no account exists for this DID on this server, under any shape. */
++    | { kind: "none" }
++    /** No usable answer: no resolver, CORS, 429, 5xx, timeout, malformed body. */
++    | { kind: "unavailable" };
++
++const UNAVAILABLE: ResolverAnswer = { kind: "unavailable" };
++
++function isRecord(value: unknown): value is Record<string, unknown> {
++    return typeof value === "object" && value !== null && !Array.isArray(value);
++}
++
++/** The server half of `@localpart:server` (everything after the FIRST colon), or null. */
++export function serverNameOf(userId: string): string | null {
++    if (!userId.startsWith("@")) return null;
++    const colon = userId.indexOf(":");
++    return colon > 1 ? userId.slice(colon + 1) : null;
++}
++
++/** An endpoint URL a resolver may be fetched from; anything else is ignored. */
++function usableEndpoint(raw: unknown, allowHttp: boolean): string | null {
++    if (typeof raw !== "string") return null;
++    try {
++        const url = new URL(raw);
++        if (url.protocol === "https:" || (allowHttp && url.protocol === "http:")) return url.toString();
++    } catch {
++        // fall through
++    }
++    return null;
++}
++
++const authMetadataCache = new PromiseCache<Record<string, unknown> | null>(DISCOVERY_TTL_MS);
++
++/** Test hook: forget every discovered resolver, issuer and JWKS. */
++export function clearResolverDiscoveryCache(): void {
++    authMetadataCache.clear();
++    clearIssuerKeysCache();
++}
++
++/**
++ * The auth metadata `serverName` advertises, cached per server. It is the one
++ * document both the resolver discovery and the issuer PINNING read.
++ *
++ * - **Own homeserver:** through the client (`/_matrix/client/v1/auth_metadata`).
++ * - **Remote homeserver:** its `.well-known/matrix/client` -> `base_url` ->
++ *   `auth_metadata`. These requests carry the server name only, never a DID.
++ */
++function serverAuthMetadata(
++    client: MatrixClient,
++    serverName: string,
++    own: boolean,
++    fetchFn: typeof fetch,
++): Promise<Record<string, unknown> | null> {
++    return authMetadataCache.get(serverName, async () => {
++        if (own) {
++            const metadata: unknown = await client.getAuthMetadata();
++            return isRecord(metadata) ? metadata : null;
++        }
++        // `.well-known/matrix/client` lives on the bare hostname, never on a port.
++        const host = serverName.replace(/:\d+$/, "");
++        const wellKnown = await fetchPublicJson(fetchFn, `https://${host}/.well-known/matrix/client`);
++        const homeserver = isRecord(wellKnown) ? wellKnown["m.homeserver"] : undefined;
++        const baseUrl = usableEndpoint(isRecord(homeserver) ? homeserver.base_url : undefined, false);
++        if (!baseUrl) return null;
++        const metadata = await fetchPublicJson(
++            fetchFn,
++            `${baseUrl.replace(/\/+$/, "")}/_matrix/client/v1/auth_metadata`,
++        );
++        return isRecord(metadata) ? metadata : null;
++    });
++}
++
++/**
++ * Where `serverName`'s DID resolver lives, or null when it has none we may use.
++ *
++ * - **Own homeserver:** the advertised key in our own `auth_metadata`; failing
++ *   that, `{issuer}/resolve`. The issuer guess is allowed ONLY here: it is our
++ *   own deployment's provider, the answer is verified like any other, and a
++ *   provider without the route simply 404s into the formula fallback. It is
++ *   what lets this work against a siwx-oidc that predates the advertisement.
++ * - **Pinned remote homeserver** (only with `remoteResolvers`): the advertised
++ *   key in that server's `auth_metadata`. Never a guess: a remote issuer that
++ *   does not advertise a resolver is not assumed to be siwx-oidc.
++ */
++async function discoverResolver(
++    client: MatrixClient,
++    serverName: string,
++    own: boolean,
++    fetchFn: typeof fetch,
++): Promise<string | null> {
++    let metadata: Record<string, unknown> | null;
++    try {
++        metadata = await serverAuthMetadata(client, serverName, own, fetchFn);
++    } catch {
++        return null;
++    }
++    if (!metadata) return null;
++    const advertised = usableEndpoint(metadata[RESOLVE_ENDPOINT_METADATA_KEY], own);
++    if (advertised || !own) return advertised;
++    if (typeof metadata.issuer !== "string") return null;
++    const issuer = metadata.issuer.endsWith("/") ? metadata.issuer : metadata.issuer + "/";
++    try {
++        return usableEndpoint(new URL("resolve", issuer).toString(), true);
++    } catch {
++        return null;
++    }
++}
++
++/**
++ * The issuer `userId`'s OWN homeserver advertises: the only issuer whose keys
++ * may verify a proof about that user. Never taken from the proof itself, whose
++ * `iss` is attacker-chosen text until it has been compared with this. Rejects
++ * when the homeserver's metadata cannot be read or names no usable issuer.
++ */
++async function pinnedIssuerFor(client: MatrixClient, userId: string, fetchFn: typeof fetch): Promise<string> {
++    const serverName = serverNameOf(userId);
++    if (!serverName) throw new Error("not an MXID");
++    const own = serverName === client.getDomain();
++    const metadata = await serverAuthMetadata(client, serverName, own, fetchFn);
++    const issuer = usableEndpoint(metadata?.issuer, own);
++    if (!issuer || typeof metadata?.issuer !== "string") throw new Error("no usable issuer advertised");
++    return metadata.issuer;
++}
++
++/**
++ * Ask `serverName`'s resolver which account the DID has there.
++ *
++ * An answer counts only if it is about THAT server: a `mxid` on any other
++ * server is discarded as unusable, so a resolver cannot redirect a search to a
++ * homeserver the searcher did not ask about.
++ */
++async function askResolver(
++    client: MatrixClient,
++    did: string,
++    serverName: string,
++    own: boolean,
++    fetchFn: typeof fetch,
++): Promise<ResolverAnswer> {
++    const controller = new AbortController();
++    const timer = setTimeout(() => controller.abort(), RESOLVER_BUDGET_MS);
++    try {
++        const endpoint = await withTimeout(
++            discoverResolver(client, serverName, own, fetchFn),
++            RESOLVER_BUDGET_MS,
++            null,
++        );
++        if (!endpoint) return UNAVAILABLE;
++        const url = new URL(endpoint);
++        url.searchParams.set("did", did);
++        const body = await fetchPublicJson(fetchFn, url.toString(), controller.signal);
++        if (!isRecord(body) || typeof body.exists !== "boolean" || typeof body.mxid !== "string") {
++            return UNAVAILABLE;
++        }
++        if (serverNameOf(body.mxid) !== serverName) return UNAVAILABLE;
++        return body.exists ? { kind: "account", userId: body.mxid } : { kind: "none" };
++    } catch {
++        return UNAVAILABLE;
++    } finally {
++        clearTimeout(timer);
++    }
++}
++
++// ---------------------------------------------------------------------------
++// Resolution
++// ---------------------------------------------------------------------------
++
++/**
++ * A DID search hit, and how far it could be checked.
++ *
++ * - `verified`: the account publishes the searched DID, and the ES256 proof
++ *   beside it verifies against the keys of the issuer its own homeserver
++ *   advertises, bound to this exact MXID (see `didProof.ts`).
++ * - `unverified`, `reason: "unchecked"`: the proof is present and passed every
++ *   check that needs no keys, but the issuer's discovery or JWKS could not be
++ *   reached (CORS, network, timeout). Shown, marked.
++ * - `unverified`, `reason: "unpublished"`: OUR OWN homeserver's resolver named
++ *   this account, but it has no signed DID in its profile yet (it has not
++ *   signed in since publication started, or the provider's key is ephemeral).
++ *   Only an own-server resolver hit can produce this; the formula and a remote
++ *   resolver are not trusted to name an account on their own.
++ */
++export interface DidMatch {
++    userId: string;
++    verification: "verified" | "unverified";
++    reason?: "unchecked" | "unpublished";
 +}
 +
 +/**
@@ -448,76 +1842,740 @@ index 0000000..9d28b96
 + * `null`.
 + *
 + * Accepts either `did:key:z6Mk...` (looked for on the caller's own homeserver)
-+ * or `did:key:z6Mk...@peer.example.org` (looked for on that one). The derivation
-+ * is identical either way -- only the server half of the MXID changes -- and
-+ * Synapse proxies the profile read over federation, returning custom fields
-+ * through `on_profile_query`.
++ * or `did:key:z6Mk...@peer.example.org` (looked for on that one).
 + *
-+ * Both candidate localparts are tried -- the modern hash-derived shape and the
-+ * grandfathered legacy one -- because which of the two an identity has depends
-+ * on when it first signed in, and that is not observable from the DID.
++ * # Two ways to find the candidate
 + *
-+ * **A candidate only counts when its published `io.inblock.did` matches.** The
-+ * derivation supplies the address; the attested field supplies the evidence that
-+ * the address is the right one. Requiring the match is what makes a hit mean
-+ * "this really is that key's account" rather than "something exists where I
-+ * guessed" -- and it is what makes a mirror that has drifted fail closed.
++ * 1. **The provider's resolver, when it answers.** siwx-oidc's `GET /resolve`
++ *    applies the real derivation AND the real grandfathering rule
++ *    (`localpart::resolve_identity`: legacy shape first), so it cannot drift
++ *    from the provider and it names the canonical account even in the
++ *    split-brain case where both shapes exist. Used for our own homeserver
++ *    always, and for a pinned remote one when `remoteResolvers` is on. When it
++ *    answers, its answer is FINAL: "this account" means only that account is
++ *    checked, and "no account" means no result, without falling back to a
++ *    formula that could only second-guess it.
++ * 2. **The hand-copied formula, when it does not.** No resolver, CORS refusal,
++ *    a 429 from the edge limiter, a 5xx, a timeout (see
++ *    {@link RESOLVER_BUDGET_MS}) or a malformed answer all land here: both
++ *    candidate localparts are derived locally and tried on `serverName`, legacy
++ *    first (the provider's own grandfathering order). This is the path that
++ *    reaches any federated server running this stack without the searcher's
++ *    browser ever sending the DID to it, because Synapse proxies the profile
++ *    read over federation (`on_profile_query`).
 + *
-+ * # What a match across federation does and does not prove
++ * # One way to accept it
 + *
-+ * What makes the field trustworthy is that the homeserver hosting it refuses a
-+ * write to it from its own subject -- our vendored MSC4133 write-ACL patch. That
-+ * holds for the caller's own server by construction, and for a peer exactly when
-+ * the peer runs the same stack. **A peer that does not is free to let its users
-+ * write any DID they like into their own profile**, so a pinned-server result is
-+ * only as good as that server. This reads the field; it does not verify the
-+ * ES256 proof sitting next to it, which is what would make the result
-+ * self-supporting rather than server-supporting. The verifier already exists
-+ * (`siwx-oidc-auth`'s `fetch_and_verify_did`) and porting it here is the upgrade
-+ * path if a peer outside the stack ever has to be trusted.
++ * **Every candidate is read back through our own homeserver, and its published
++ * `io.inblock.did` must be the searched DID.** Then the ES256 proof beside it
++ * is verified (`didProof.ts`): `sub` must be the searched DID, `mxid` must be
++ * the candidate (a copied proof fails here), `iss` must be the issuer the
++ * candidate's own homeserver advertises, and the signature must verify with
++ * that issuer's key for the proof's `kid` (retired keys included). A proof that
++ * fails any of these hides the candidate. A proof whose keys cannot be reached
++ * shows it, marked unverified. A candidate without a proof is hidden, EXCEPT
++ * when our own homeserver's resolver named it: that alone is enough to show
++ * the account, marked unverified (see {@link DidMatch}).
++ *
++ * # What a verified match across federation does and does not prove
++ *
++ * It proves the peer's identity provider (the issuer its homeserver
++ * advertises) attested this DID for this MXID, so a result no longer depends on
++ * the peer's profile write ACL. It does NOT protect against a malicious peer
++ * OPERATOR, who controls both the homeserver and the issuer it advertises and
++ * can therefore sign any binding it likes. See `didProof.ts`.
 + *
 + * Never throws: every failure -- no extended-profile support, no such user, an
-+ * absent or malformed field, an unreachable peer, a network error -- is `null`,
-+ * because the caller is a search box that must keep working.
++ * absent or malformed field, an unreachable peer, a network error -- is `null`
++ * or an unverified marker, because the caller is a search box that must keep
++ * working.
 + */
-+export async function resolveDidToUserId(client: MatrixClient, term: string): Promise<string | null> {
++export async function resolveDid(
++    client: MatrixClient,
++    term: string,
++    options: ResolveDidOptions = {},
++): Promise<DidMatch | null> {
 +    const query = parseDidQuery(term);
 +    if (!query) return null;
 +
-+    const serverName = query.serverName ?? client.getDomain();
++    const ownServer = client.getDomain();
++    const serverName = query.serverName ?? ownServer;
 +    if (!serverName || !globalThis.crypto?.subtle) return null;
 +
-+    return withTimeout(probe(client, query.did, serverName), RESOLVE_TIMEOUT_MS, null);
++    return withTimeout(
++        probe(client, query.did, serverName, serverName === ownServer, options),
++        RESOLVE_TIMEOUT_MS,
++        null,
++    );
 +}
 +
-+async function probe(client: MatrixClient, did: string, serverName: string): Promise<string | null> {
++/** {@link resolveDid}, reduced to the user ID. Verified and unverified hits alike. */
++export async function resolveDidToUserId(
++    client: MatrixClient,
++    term: string,
++    options: ResolveDidOptions = {},
++): Promise<string | null> {
++    return (await resolveDid(client, term, options))?.userId ?? null;
++}
++
++async function probe(
++    client: MatrixClient,
++    did: string,
++    serverName: string,
++    own: boolean,
++    options: ResolveDidOptions,
++): Promise<DidMatch | null> {
 +    try {
 +        if ((await client.doesServerSupportExtendedProfiles()) === false) return null;
 +    } catch {
 +        return null;
 +    }
 +
-+    const candidates = [await localpartForDid(did), legacyLocalpartForDid(did)];
 +    const wanted = canonicaliseDid(did);
++    const fetchFn = options.fetchFn ?? globalThis.fetch?.bind(globalThis);
 +
-+    for (const localpart of new Set(candidates)) {
-+        const userId = `@${localpart}:${serverName}`;
-+        try {
-+            const raw = await client.getExtendedProfileProperty(userId, DID_PROFILE_FIELD);
-+            const published =
-+                typeof raw === "object" && raw !== null && typeof (raw as Record<string, unknown>).did === "string"
-+                    ? ((raw as Record<string, unknown>).did as string)
-+                    : undefined;
-+            // Compared under the SAME canonicalisation the account itself is
-+            // keyed on, so that searching for the lowercase spelling of an
-+            // EIP-55 wallet address finds the account that published the
-+            // checksummed one. For did:key this is byte-for-byte, since
-+            // canonicaliseDid leaves those untouched.
-+            if (published && canonicaliseDid(published) === wanted) return userId;
-+        } catch {
-+            // The overwhelmingly common case: no such user, or a user with no
-+            // published DID. Not worth a log line per keystroke.
++    let answer: ResolverAnswer = UNAVAILABLE;
++    if (fetchFn && (own || options.remoteResolvers)) {
++        answer = await askResolver(client, did, serverName, own, fetchFn);
++    }
++
++    let candidates: string[];
++    switch (answer.kind) {
++        case "none":
++            return null;
++        case "account":
++            candidates = [answer.userId];
++            break;
++        case "unavailable":
++            // LEGACY FIRST, the order siwx-oidc's `localpart::resolve_identity`
++            // uses: an identity with a legacy account signs in to THAT account,
++            // so when both shapes publish the DID (the D4 split-brain), the
++            // legacy one is the canonical answer and the fallback must agree
++            // with the resolver it stands in for.
++            candidates = [...new Set([legacyLocalpartForDid(did), await localpartForDid(did)])].map(
++                (localpart) => `@${localpart}:${serverName}`,
++            );
++            break;
++    }
++    // Decision (Tim, 2026-09-28): our OWN resolver naming an account is enough
++    // to show it before it has published a signed DID. Only this source: the
++    // formula is a guess and a remote resolver is another organisation's word.
++    const ownResolverHit = own && answer.kind === "account";
++
++    for (const userId of candidates) {
++        const field = await readDidField(client, userId);
++        // A published DID that is not the searched one disqualifies the
++        // candidate whatever named it: a lying resolver gets no result.
++        if (field && canonicaliseDid(field.did) !== wanted) continue;
++        if (!field?.proof) {
++            if (ownResolverHit) return { userId, verification: "unverified", reason: "unpublished" };
++            continue;
 +        }
++        const verdict = await withTimeout<ProofVerdict>(
++            verifyDidProof({
++                jws: field.proof,
++                expectedDid: wanted,
++                expectedMxid: userId,
++                pinnedIssuer: () => pinnedIssuerFor(client, userId, fetchFn ?? rejectingFetch),
++                canonicalise: canonicaliseDid,
++                fetchFn: fetchFn ?? rejectingFetch,
++            }),
++            VERIFY_BUDGET_MS,
++            { kind: "unchecked", reason: "verification timed out" },
++        );
++        if (verdict.kind === "verified") return { userId, verification: "verified" };
++        if (verdict.kind === "unchecked") return { userId, verification: "unverified", reason: "unchecked" };
++        // Rejected: hidden. The next formula candidate may still be genuine.
++        // A value that no longer verifies must not outlive this search in the
++        // client's profile cache either (see readDidField).
++        await forgetCachedDidField(client, userId);
 +    }
 +    return null;
 +}
++
++/** Stands in when there is no global fetch: every key lookup is then "unchecked". */
++const rejectingFetch: typeof fetch = () => Promise.reject(new Error("no fetch available"));
++
++type DidField = { did: string; proof?: string };
++
++/** The `{did, proof?}` object in a raw profile value, or null when absent or malformed. */
++function parseDidField(raw: unknown): DidField | null {
++    if (!isRecord(raw) || typeof raw.did !== "string") return null;
++    // `proof` is absent (not null, not "") when the provider's key is
++    // ephemeral; anything that is not a non-empty string counts as absent.
++    return typeof raw.proof === "string" && raw.proof ? { did: raw.did, proof: raw.proof } : { did: raw.did };
++}
++
++/**
++ * The homeserver saying the profile does not exist: no such account, or a
++ * deactivated one. Any 404 counts, whatever its errcode: an unknown user is
++ * `M_NOT_FOUND`, but a user deactivated with erasure answers
++ * `404 M_UNKNOWN "No row found (profiles)"` (Synapse 1.161, seen live on dev).
++ */
++function isProfileNotFound(e: unknown): boolean {
++    return isRecord(e) && e.httpStatus === 404;
++}
++
++/**
++ * The `{did, proof?}` object in `userId`'s profile, or null when absent or
++ * malformed. Read FRESH from the homeserver whenever it answers.
++ *
++ * # Why not `getExtendedProfileProperty`
++ *
++ * matrix-js-sdk's `getExtendedProfileProperty` is cache-first: the first read
++ * of a key writes the value through to the client store (IndexedDB in Element)
++ * and every later read returns that copy without asking the server again. Only
++ * a sync `profile_updates` entry (MSC4429, for keys in the sync filter, which
++ * this one is not) ever refreshes it. So a DID that was unpublished, rebound or
++ * deactivated after the first search would keep answering from the cache
++ * forever. `getExtendedProfile` bypasses that cache (it returns the whole
++ * profile, which the cache cannot), so it is the read that decides.
++ *
++ * # Keeping the cache honest
++ *
++ * The cached copy is also what other surfaces read (`useAttestedDid`), so a
++ * fresh answer is written back over it: a changed value overwrites the cached
++ * one, a field the server no longer has is removed from the cached profile, and
++ * an account the server no longer knows (any 404) loses its cached profile
++ * altogether. The cache is consulted only when the homeserver cannot
++ * answer at all (network error, 5xx, an unreachable federated peer), and then
++ * the candidate still has to pass proof verification; a cached value that
++ * fails it is evicted by the caller ({@link forgetCachedDidField}).
++ */
++async function readDidField(client: MatrixClient, userId: string): Promise<DidField | null> {
++    let profile: Record<string, unknown>;
++    try {
++        profile = await client.getExtendedProfile(userId);
++    } catch (e) {
++        if (isProfileNotFound(e)) {
++            await forgetCachedProfile(client, userId);
++            return null;
++        }
++        // The homeserver could not answer: the cached copy is all there is.
++        try {
++            return parseDidField(await client.getExtendedProfileProperty(userId, DID_PROFILE_FIELD));
++        } catch {
++            // The overwhelmingly common case: no such user, or a user with no
++            // published DID. Not worth a log line per keystroke.
++            return null;
++        }
++    }
++    const raw = isRecord(profile) ? profile[DID_PROFILE_FIELD] : undefined;
++    await syncCachedDidField(client, userId, raw);
++    return parseDidField(raw);
++}
++
++/**
++ * Bring a cached copy of `userId`'s DID field in line with what the server
++ * just said (`fresh === undefined`: the server has no such field). Writes only
++ * where a cached copy exists; never throws.
++ */
++async function syncCachedDidField(client: MatrixClient, userId: string, fresh: unknown): Promise<void> {
++    try {
++        const store = client.store;
++        const cached = await store?.getUserProfile(userId);
++        if (!cached || cached[DID_PROFILE_FIELD] === undefined) return;
++        if (fresh === undefined) {
++            await forgetCachedDidField(client, userId);
++        } else {
++            // Read off the wire as JSON, so it is JSON: the cast only restates that.
++            const value = fresh as SyncUserProfile[string];
++            await store.storeUserProfiles(new Map([[userId, { ...cached, [DID_PROFILE_FIELD]: value }]]));
++        }
++    } catch {
++        // A cache we cannot write is a cache we will read past next time anyway.
++    }
++}
++
++/** Drop the DID field from `userId`'s cached profile (the whole entry when nothing else is left). */
++async function forgetCachedDidField(client: MatrixClient, userId: string): Promise<void> {
++    try {
++        const store = client.store;
++        const cached = await store?.getUserProfile(userId);
++        if (!cached || cached[DID_PROFILE_FIELD] === undefined) return;
++        const { [DID_PROFILE_FIELD]: _dropped, ...rest } = cached;
++        if (Object.keys(rest).length) {
++            await store.storeUserProfiles(new Map([[userId, rest]]));
++        } else {
++            await store.removeUserProfiles([userId]);
++        }
++    } catch {
++        // See syncCachedDidField.
++    }
++}
++
++/** Drop `userId`'s whole cached profile: the homeserver says the account does not exist. */
++async function forgetCachedProfile(client: MatrixClient, userId: string): Promise<void> {
++    try {
++        const store = client.store;
++        if (await store?.getUserProfile(userId)) await store.removeUserProfiles([userId]);
++    } catch {
++        // See syncCachedDidField.
++    }
++}
+diff --git a/apps/web/src/utils/didProof.ts b/apps/web/src/utils/didProof.ts
+new file mode 100644
+index 0000000..b702f82
+--- /dev/null
++++ b/apps/web/src/utils/didProof.ts
+@@ -0,0 +1,303 @@
++/**
++Copyright 2026 inblock.io
++
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++/**
++ * Client-side verification of the ES256 proof siwx-oidc publishes next to a
++ * user's DID in the `io.inblock.did` profile field.
++ *
++ * # The wire contract
++ *
++ * Defined in siwx-oidc's `src/did_assertion.rs` header comment, and mirrored by
++ * the Rust verifier in `siwx-oidc-auth/src/did_assertion.rs`:
++ *
++ *     compact JWS, ES256, header {"alg":"ES256","typ":"JWT","kid":...}
++ *     payload {"iss":<issuer>,"sub":<exact-case DID>,"mxid":<@local:server>,"iat":<secs>}
++ *     signature = raw r||s, exactly 64 bytes, over the RECEIVED signing input
++ *
++ * # What a VERIFIED result proves, and what it cannot
++ *
++ * It proves that the identity provider which the candidate's OWN homeserver
++ * names as its issuer signed "this DID belongs to this MXID". That removes the
++ * need to trust the homeserver's profile write ACL, and it makes a copied proof
++ * worthless (the `mxid` claim binds it to one account).
++ *
++ * It CANNOT protect against a malicious remote operator: whoever runs a
++ * homeserver also chooses the issuer it advertises, so an operator who controls
++ * both can mint a valid proof for any DID. A signature moves the trust from
++ * "that server's profile ACL" to "that server's issuer", which is the same
++ * organisation. Only a proof by the DID's own key would close that, and this
++ * wire format does not carry one.
++ *
++ * # Three outcomes
++ *
++ * - `verified`: every check passed.
++ * - `unchecked`: the keys could not be obtained (discovery or JWKS unreachable,
++ *   CORS refusal, timeout, a malformed document). Nothing was learned, so the
++ *   caller may show the result, marked as unverified.
++ * - `rejected`: the proof is present and FAILS a check: malformed, wrong alg,
++ *   `sub` or `mxid` not the expected values, `iss` not the pinned issuer, a
++ *   `kid` the reachable JWKS does not hold, or a bad signature. The caller hides
++ *   the result.
++ *
++ * Note the asymmetry this implies: an attacker who can make the keys
++ * unreachable gets at most `unchecked`, never `verified`, which is why
++ * `unchecked` must stay visibly distinct from `verified` in the UI.
++ */
++
++export type ProofVerdict =
++    | { kind: "verified" }
++    | { kind: "unchecked"; reason: string }
++    | { kind: "rejected"; reason: string };
++
++/** How long one discovery or JWKS fetch may take. */
++const FETCH_TIMEOUT_MS = 4_000;
++
++/** How long an issuer's discovery document and JWKS are remembered. */
++const KEYS_TTL_MS = 10 * 60_000;
++
++function isRecord(value: unknown): value is Record<string, unknown> {
++    return typeof value === "object" && value !== null && !Array.isArray(value);
++}
++
++/**
++ * GET a public JSON document, with no credentials and no referrer.
++ *
++ * Every caller in this module fetches only server names and issuer URLs; the
++ * searched DID is never part of a URL, header or body here. That is what keeps
++ * verification from telling a remote organisation who is being looked for.
++ */
++export async function fetchPublicJson(fetchFn: typeof fetch, url: string, signal?: AbortSignal): Promise<unknown> {
++    const controller = new AbortController();
++    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
++    const onAbort = (): void => controller.abort();
++    signal?.addEventListener("abort", onAbort);
++    try {
++        const res = await fetchFn(url, {
++            signal: controller.signal,
++            credentials: "omit",
++            referrerPolicy: "no-referrer",
++            headers: { Accept: "application/json" },
++        });
++        if (!res.ok) throw new Error(`HTTP ${res.status}`);
++        return await res.json();
++    } finally {
++        clearTimeout(timer);
++        signal?.removeEventListener("abort", onAbort);
++    }
++}
++
++/**
++ * A small TTL cache of promises. A promise that REJECTS is dropped, so an
++ * unreachable issuer is retried on the next search instead of being remembered
++ * as unreachable for ten minutes.
++ */
++export class PromiseCache<T> {
++    private readonly entries = new Map<string, { expires: number; value: Promise<T> }>();
++
++    public constructor(private readonly ttlMs: number) {}
++
++    public get(key: string, factory: () => Promise<T>, refresh = false): Promise<T> {
++        const hit = this.entries.get(key);
++        if (!refresh && hit && hit.expires > Date.now()) return hit.value;
++        const value = factory();
++        const entry = { expires: Date.now() + this.ttlMs, value };
++        this.entries.set(key, entry);
++        value.catch(() => {
++            if (this.entries.get(key) === entry) this.entries.delete(key);
++        });
++        return value;
++    }
++
++    public clear(): void {
++        this.entries.clear();
++    }
++}
++
++/** Issuer URLs compare with trailing slashes removed, as the Rust verifier does. */
++export function normaliseIssuer(issuer: string): string {
++    return issuer.replace(/\/+$/, "");
++}
++
++interface IssuerKeys {
++    keys: Record<string, unknown>[];
++}
++
++const keysCache = new PromiseCache<IssuerKeys>(KEYS_TTL_MS);
++
++/** Test hook: forget every cached discovery document and JWKS. */
++export function clearIssuerKeysCache(): void {
++    keysCache.clear();
++}
++
++/**
++ * The published verification keys of `issuer`, which the caller has already
++ * PINNED (it came from the candidate homeserver's auth metadata, never from the
++ * token). Rejects on anything that prevents learning the keys.
++ *
++ * - discovery is `{issuer}/.well-known/openid-configuration`, and its `issuer`
++ *   must equal the pinned one (OpenID Connect Discovery 1.0 section 4.3);
++ * - `jwks_uri` must share the issuer's origin, so the one field a document can
++ *   still choose cannot send key resolution to a host nobody vouched for;
++ * - siwx-oidc's JWKS lists the live key AND every retired key (`oidc::jwks`),
++ *   so proofs minted before a key rotation keep verifying by their `kid`.
++ */
++function issuerKeys(issuer: string, fetchFn: typeof fetch, refresh: boolean): Promise<IssuerKeys> {
++    return keysCache.get(
++        normaliseIssuer(issuer),
++        async () => {
++            const base = normaliseIssuer(issuer);
++            const discovery = await fetchPublicJson(fetchFn, `${base}/.well-known/openid-configuration`);
++            if (!isRecord(discovery) || typeof discovery.issuer !== "string") {
++                throw new Error("discovery document has no issuer");
++            }
++            if (normaliseIssuer(discovery.issuer) !== base) {
++                throw new Error("discovery document names a different issuer");
++            }
++            if (typeof discovery.jwks_uri !== "string") throw new Error("discovery document has no jwks_uri");
++            const jwksUri = new URL(discovery.jwks_uri);
++            if (jwksUri.origin !== new URL(base).origin) throw new Error("jwks_uri is not on the issuer's origin");
++            const jwks = await fetchPublicJson(fetchFn, jwksUri.toString());
++            if (!isRecord(jwks) || !Array.isArray(jwks.keys)) throw new Error("JWKS has no keys array");
++            return { keys: jwks.keys.filter(isRecord) };
++        },
++        refresh,
++    );
++}
++
++function b64urlToBytes(value: string): Uint8Array<ArrayBuffer> {
++    if (!/^[A-Za-z0-9_-]*$/.test(value)) throw new Error("not unpadded base64url");
++    const b64 = value.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((value.length + 3) % 4);
++    const binary = atob(b64);
++    const out = new Uint8Array(binary.length);
++    for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
++    return out;
++}
++
++function decodeJsonPart(part: string): Record<string, unknown> {
++    const parsed: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(b64urlToBytes(part)));
++    if (!isRecord(parsed)) throw new Error("not a JSON object");
++    return parsed;
++}
++
++/** Whether a JWK may verify an ES256 signature under its own RFC 7517 restrictions. */
++function usableForEs256(jwk: Record<string, unknown>): boolean {
++    if (jwk.kty !== "EC" || jwk.crv !== "P-256") return false;
++    if (typeof jwk.x !== "string" || typeof jwk.y !== "string") return false;
++    if (jwk.use !== undefined && jwk.use !== "sig") return false;
++    if (jwk.alg !== undefined && jwk.alg !== "ES256") return false;
++    if (jwk.key_ops !== undefined && !(Array.isArray(jwk.key_ops) && jwk.key_ops.includes("verify"))) return false;
++    return true;
++}
++
++export interface VerifyDidProofParams {
++    /** The compact JWS from the profile object's `proof` member. */
++    jws: string;
++    /** The DID that was SEARCHED for, already canonical (see `canonicaliseDid`). */
++    expectedDid: string;
++    /** The MXID of the profile the proof was read from. Mandatory: it is the replay guard. */
++    expectedMxid: string;
++    /**
++     * Resolves to the issuer the candidate's OWN homeserver advertises, or
++     * rejects when that cannot be learned. Called only after the checks that
++     * need no network have passed.
++     */
++    pinnedIssuer: () => Promise<string>;
++    /** Canonicalisation applied to `sub` before comparing (method-aware, see `canonicaliseDid`). */
++    canonicalise: (did: string) => string;
++    fetchFn: typeof fetch;
++}
++
++/**
++ * Verify an `io.inblock.did` proof. Never throws.
++ *
++ * Order, cheapest and network-free first:
++ *
++ * 1. three parts, a JSON header with `alg` ES256, no `crit`, a string `kid`
++ *    (algorithm confusion and `none` die here, before any key is fetched);
++ * 2. `sub` equals the searched DID and `mxid` equals the candidate MXID. A
++ *    genuine proof copied into another profile fails here: that is the replay
++ *    attack the `mxid` claim exists to stop;
++ * 3. the issuer is PINNED from the candidate's homeserver, and `iss` must equal
++ *    it. Keys are never looked up from the token's own `iss`;
++ * 4. the JWKS comes from that issuer's discovery `jwks_uri` and the key is
++ *    selected by `kid` with no fallback. An unknown `kid` forces one JWKS
++ *    refresh (a key may have rotated since it was cached) before rejecting;
++ * 5. the signature is exactly 64 raw bytes and is verified over the RECEIVED
++ *    signing input, never a re-serialisation of the decoded JSON.
++ */
++export async function verifyDidProof(params: VerifyDidProofParams): Promise<ProofVerdict> {
++    const reject = (reason: string): ProofVerdict => ({ kind: "rejected", reason });
++    const unchecked = (reason: string): ProofVerdict => ({ kind: "unchecked", reason });
++
++    const parts = params.jws.split(".");
++    if (parts.length !== 3) return reject("not a compact JWS");
++    const [headerB64, payloadB64, signatureB64] = parts;
++
++    let header: Record<string, unknown>;
++    let claims: Record<string, unknown>;
++    let signature: Uint8Array<ArrayBuffer>;
++    try {
++        header = decodeJsonPart(headerB64);
++        claims = decodeJsonPart(payloadB64);
++        signature = b64urlToBytes(signatureB64);
++    } catch {
++        return reject("malformed JWS encoding");
++    }
++
++    if (header.alg !== "ES256") return reject("alg is not ES256");
++    if (header.crit !== undefined) return reject("crit header present");
++    if (typeof header.kid !== "string" || !header.kid) return reject("no kid");
++    const kid = header.kid;
++
++    if (typeof claims.sub !== "string" || params.canonicalise(claims.sub) !== params.expectedDid) {
++        return reject("sub is not the searched DID");
++    }
++    // Byte-exact, deliberately not case-folded: a profile at `@Alice:server`
++    // must not satisfy a proof bound to `@alice:server`.
++    if (claims.mxid !== params.expectedMxid) return reject("mxid is not the candidate (replayed proof)");
++    if (typeof claims.iss !== "string") return reject("no iss");
++    if (signature.length !== 64) return reject("signature is not 64 raw bytes");
++
++    let issuer: string;
++    try {
++        issuer = await params.pinnedIssuer();
++    } catch {
++        return unchecked("the candidate homeserver's issuer could not be learned");
++    }
++    if (normaliseIssuer(claims.iss) !== normaliseIssuer(issuer)) {
++        return reject("iss is not the issuer the candidate's homeserver advertises");
++    }
++
++    let jwk: Record<string, unknown> | undefined;
++    try {
++        jwk = (await issuerKeys(issuer, params.fetchFn, false)).keys.find((k) => k.kid === kid);
++        if (!jwk) jwk = (await issuerKeys(issuer, params.fetchFn, true)).keys.find((k) => k.kid === kid);
++    } catch {
++        return unchecked("the issuer's discovery document or JWKS is unreachable");
++    }
++    if (!jwk) return reject("kid is not in the issuer's JWKS");
++    if (!usableForEs256(jwk)) return reject("the kid's JWK cannot verify ES256");
++
++    try {
++        const key = await crypto.subtle.importKey(
++            "jwk",
++            { kty: "EC", crv: "P-256", x: jwk.x as string, y: jwk.y as string, ext: true },
++            { name: "ECDSA", namedCurve: "P-256" },
++            false,
++            ["verify"],
++        );
++        const ok = await crypto.subtle.verify(
++            { name: "ECDSA", hash: "SHA-256" },
++            key,
++            signature,
++            new TextEncoder().encode(`${headerB64}.${payloadB64}`),
++        );
++        return ok ? { kind: "verified" } : reject("bad signature");
++    } catch {
++        return reject("the kid's JWK is not a valid P-256 key");
++    }
++}
+diff --git a/apps/web/src/utils/didSearchMember.ts b/apps/web/src/utils/didSearchMember.ts
+new file mode 100644
+index 0000000..a7c5e16
+--- /dev/null
++++ b/apps/web/src/utils/didSearchMember.ts
+@@ -0,0 +1,36 @@
++/**
++Copyright 2026 inblock.io
++
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++import { _t } from "../languageHandler";
++import { DirectoryMember } from "./direct-messages";
++import { type DidMatch } from "./didLocalpart";
++
++/**
++ * A user found by DID search, carrying how far the DID binding was checked, so
++ * the invite dialog can mark the result.
++ */
++export class DidSearchMember extends DirectoryMember {
++    public constructor(
++        userDirResult: { user_id: string; display_name?: string; avatar_url?: string },
++        public readonly didMatch: DidMatch,
++    ) {
++        super(userDirResult);
++    }
++}
++
++/**
++ * The marker shown next to a DID search result.
++ *
++ * Rendered from our own state, never from anything the found user controls: a
++ * display name reading "(DID verified)" must not be able to pass for this.
++ */
++export function didMatchMarker(match: DidMatch): string {
++    if (match.verification === "verified") return _t("user_info|did_search_verified");
++    return match.reason === "unpublished"
++        ? _t("user_info|did_search_unverified_unpublished")
++        : _t("user_info|did_search_unverified_unchecked");
++}
+diff --git a/apps/web/test/unit-tests/components/views/dialogs/SpotlightDialog-test.tsx b/apps/web/test/unit-tests/components/views/dialogs/SpotlightDialog-test.tsx
+index 01b3aea..d54c2dd 100644
+--- a/apps/web/test/unit-tests/components/views/dialogs/SpotlightDialog-test.tsx
++++ b/apps/web/test/unit-tests/components/views/dialogs/SpotlightDialog-test.tsx
+@@ -35,6 +35,7 @@ import SdkConfig from "../../../../../src/SdkConfig";
+ import { Action } from "../../../../../src/dispatcher/actions";
+ import { MetaSpace } from "../../../../../src/stores/spaces";
+ import { SDKContextClass } from "../../../../../src/contexts/SDKContextClass.ts";
++import { resolveDid } from "../../../../../src/utils/didLocalpart";
+ 
+ jest.useFakeTimers();
+ 
+@@ -51,6 +52,14 @@ jest.mock("../../../../../src/dispatcher/dispatcher", () => ({
+     dispatch: jest.fn(),
+ }));
+ 
++// DID search: the lookup itself is covered in utils/didLocalpart.test.ts. Here
++// it is stubbed so these tests pin only how Spotlight SHOWS a hit.
++jest.mock("../../../../../src/utils/didLocalpart", () => ({
++    // @ts-ignore
++    ...jest.requireActual("../../../../../src/utils/didLocalpart"),
++    resolveDid: jest.fn(),
++}));
++
+ interface IUserChunkMember {
+     user_id: string;
+     display_name?: string;
+@@ -504,6 +513,87 @@ describe("Spotlight Dialog", () => {
+         });
+     });
+ 
++    describe("DID search", () => {
++        const did = "did:pkh:eip155:1:0x7a760ea15d76f935c8646b449af488c2b0021734";
++        const didUserId = "@37rb2h7bdij3o1qm:example.tld";
++
++        beforeEach(() => {
++            mocked(resolveDid).mockReset();
++            mocked(mockedClient.getProfileInfo).mockImplementation(async (userId) =>
++                userId === didUserId || userId === testDMUserId
++                    ? { displayname: "Dora Did", avatar_url: undefined }
++                    : Promise.reject(new Error("M_NOT_FOUND")),
++            );
++        });
++
++        async function renderAndSettle(props: { initialFilter?: Filter }): Promise<Element> {
++            render(<SpotlightDialog initialText={did} onFinished={() => null} {...props} />);
++            // search is debounced
++            jest.advanceTimersByTime(200);
++            await flushPromisesWithFakeTimers();
++            return document.querySelector("#mx_SpotlightDialog_content")!;
++        }
++
++        it.each([
++            ["with no filter selected", {}],
++            ["with the people filter", { initialFilter: Filter.People }],
++        ])("shows a verified hit %s", async (_label, props) => {
++            mocked(resolveDid).mockResolvedValue({ userId: didUserId, verification: "verified" });
++            const content = await renderAndSettle(props);
++            await waitFor(() => {
++                const hit = [...content.querySelectorAll("li.mx_SpotlightDialog_option")].find((o) =>
++                    o.textContent?.includes("Dora Did"),
++                );
++                expect(hit).toBeDefined();
++                expect(hit).toHaveTextContent(didUserId);
++                expect(hit).toHaveTextContent("DID verified");
++            });
++            expect(content.querySelector("#mx_SpotlightDialog_button_noResults")).toBeNull();
++            expect(resolveDid).toHaveBeenCalledWith(mockedClient, did, expect.anything());
++        });
++
++        it("marks an unverified hit with no filter selected", async () => {
++            mocked(resolveDid).mockResolvedValue({
++                userId: didUserId,
++                verification: "unverified",
++                reason: "unpublished",
++            });
++            const content = await renderAndSettle({});
++            await waitFor(() => {
++                expect(content).toHaveTextContent("Dora Did");
++                expect(content).toHaveTextContent("DID unverified: not yet published");
++            });
++        });
++
++        it("with no filter selected, adds no suggestions besides the DID hit", async () => {
++            // A room member whose name happens to contain the query would be a
++            // Suggestion under the People filter; without a filter upstream
++            // shows no Suggestions, and that must stay true for everything but
++            // the DID hit.
++            const member = new RoomMember(testRoom.roomId, "@lookalike:example.tld");
++            member.name = member.rawDisplayName = did;
++            mocked(testRoom.getJoinedMembers).mockReturnValue([member]);
++            mocked(resolveDid).mockResolvedValue({ userId: didUserId, verification: "verified" });
++            const content = await renderAndSettle({});
++            await waitFor(() => expect(content).toHaveTextContent("Dora Did"));
++            expect(content).not.toHaveTextContent("@lookalike:example.tld");
++        });
++
++        it("shows the existing DM when the DID names someone we already have a DM with", async () => {
++            mocked(testDM.getJoinedMemberCount).mockReturnValue(2);
++            mocked(resolveDid).mockResolvedValue({ userId: testDMUserId, verification: "verified" });
++            const content = await renderAndSettle({});
++            await waitFor(() => expect(content).toHaveTextContent(testDM.name));
++            expect(content.querySelector("#mx_SpotlightDialog_button_noResults")).toBeNull();
++        });
++
++        it("shows no results when the DID names nobody", async () => {
++            mocked(resolveDid).mockResolvedValue(null);
++            const content = await renderAndSettle({});
++            await waitFor(() => expect(content.querySelector("#mx_SpotlightDialog_button_noResults")).not.toBeNull());
++        });
++    });
++
+     it("should start a DM when clicking a person", async () => {
+         render(
+             <SpotlightDialog

@@ -119,7 +119,9 @@ RUN git apply --verbose /tmp/ew-attested-did.patch
 # Applied AFTER show-attested-did and DEPENDS ON IT: it moves the shared
 # DID_PROFILE_FIELD constant into the new pure module and leaves that patch's
 # hook re-exporting it. Reordering these two, or dropping entry 7 alone, breaks
-# the build. Same fail-loudly contract as every patch above.
+# the build. It also adds the three DID-verification marker strings to
+# en_EN.json next to entry 7's, so its i18n hunk depends on that order too.
+# Same fail-loudly contract as every patch above.
 COPY patches/element-web/resolve-did-search.patch /tmp/ew-did-search.patch
 RUN git apply --verbose /tmp/ew-did-search.patch
 
