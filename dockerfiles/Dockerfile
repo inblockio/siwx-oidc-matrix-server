@@ -72,11 +72,17 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* /tmp/synapse-msc4133-acl.patch
 
 COPY ./entrypoints/matrix_server.sh /matrix_server.sh
+
+# LICENSE and NOTICE travel with the image. It redistributes this repository's
+# files (Apache-2.0 §4(a) and (d)), and NOTICE states the license of the patch
+# applied above and where the upstream source lives.
+COPY LICENSE NOTICE /usr/share/licenses/siwx-oidc-matrix-server/
+
 ENTRYPOINT ["/matrix_server.sh"]
 
-# Harmless content marker: proves the `dev` branch CI trigger produces a
+# Harmless content marker: proved that the `dev` branch CI trigger produced a
 # genuinely new, distinct :dev image (not a coalesced/reused build from a
-# simultaneous `main` push). See docs/2026-07-30-dev-staging-dev-aquafire.md
-# §9 (branch-based CI deploys).
+# simultaneous `main` push). The `dev` branch was folded into `main` on
+# 2026-09-01; the labels have been inert since.
 LABEL io.inblock.dev-branch-ci-test="2026-07-31"
 LABEL io.inblock.dev-branch-ci-test-s5-live-check="2026-07-31T00:48Z"

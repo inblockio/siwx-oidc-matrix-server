@@ -1,16 +1,16 @@
-# Builds Element Web from source at a pinned tag with our vendored
-# force-first-device-recovery patch applied, then serves it with the
-# inblock.io overlay (config, theme, favicons) via the existing entrypoint.
+# Builds Element Web from source at a pinned tag, applies every patch in
+# patches/element-web/ (listed, in apply order, in its README.md), and serves
+# the result with the inblock.io overlay (config, theme, favicons).
 #
-# Why from source: the prebuilt vectorim/element-web image cannot carry our
-# patch to apps/web/src/components/structures/MatrixChat.tsx, which makes a
-# recoverable identity (4S recovery key) mandatory on first login. The patch
-# in patches/element-web/ is the single source of truth (== the upstream PR).
+# Why from source: the prebuilt vectorim/element-web image cannot carry source
+# patches, such as force-first-device-recovery's change to MatrixChat.tsx that
+# makes a recoverable identity (4S recovery key) mandatory on first login.
 # See docs/element-web-source-build.md.
 
 # ---------------------------------------------------------------------------
-# Builder: clone element-web at the pinned tag, apply our patch, build webapp.
+# Builder: clone element-web at the pinned tag, apply our patches, build webapp.
 # Node >= 22.18 required by upstream; node:24-bullseye matches their builder.
+# TODO(bookworm): Debian bullseye left LTS on 2026-08-31.
 #
 # Every input here is pinned by name AND content: both base images by version
 # tag plus multi-arch index digest, the upstream source by tag plus the commit
@@ -85,7 +85,7 @@ RUN git apply --verbose /tmp/ew-checkcode.patch
 # config carries the new key; prod's bind-mounted config must be renamed too.
 #
 # Since 2026-09-13 this patch carries increments that are AHEAD of PR #34718
-# (Tim's decision). As of 2026-09-14 there are FIVE: A, the non-blocking
+# (a maintainer decision). As of 2026-09-14 there are FIVE: A, the non-blocking
 # initEventIndex, so a large index cannot block app start; B, batched writes /
 # O(1) getStats / sorted vocabulary / folded-text memo; C, the crawl window and
 # room cap (a shouldCrawl hook in the SHARED indexing/EventIndex.ts), the
@@ -202,15 +202,15 @@ USER root
 # Source-built web app bundle.
 COPY --from=builder /src/apps/web/webapp /app
 
-# Serve the SPA entrypoint (index.html) with no-cache so browsers always
-# revalidate it and load the current content-hashed bundles, preventing the
-# stale-bundle TDZ crash ("Your Element is misconfigured"). Replaces the stock
-# nginx-unprivileged conf.d/default.conf; only the HTML entrypoint is affected —
-# /bundles/<hash>/* assets keep nginx's default caching, so this changes zero
-# bundle bytes. See docs/superpowers/plans/2026-06-19-element-index-html-no-cache.md.
+# Serve the unhashed files that name content-hashed ones (index.html,
+# i18n/languages.json) with no-cache, so browsers always revalidate them and
+# load the current bundles instead of hitting the stale-bundle TDZ crash
+# ("Your Element is misconfigured"). Replaces the stock nginx-unprivileged
+# conf.d/default.conf and changes zero bundle bytes; config/element-nginx.conf
+# gives every location's Cache-Control and its reason.
 COPY config/element-nginx.conf /etc/nginx/conf.d/default.conf
 
-# Security-headers include (checklist S1, Section 1). Must land in conf.d/
+# Security-headers include. Must land in conf.d/
 # with a NON-.conf suffix: the base image's nginx.conf auto-includes
 # conf.d/*.conf at the http level (`include /etc/nginx/conf.d/*.conf;`), so a
 # .conf name would get this file loaded TWICE — once automatically at http
@@ -237,6 +237,12 @@ COPY config/favicon-180.png /app/favicon-180.png
 COPY config/favicon-512.png /app/favicon-512.png
 COPY config/favicon-1024.png /app/favicon-1024.png
 COPY entrypoints/element_entrypoint.sh /docker-entrypoint.sh
+
+# LICENSE and NOTICE travel with the image. It redistributes this repository's
+# files (Apache-2.0 §4(a) and (d)); NOTICE states the license of the patches
+# built into the bundle, and it carries the BSD notice that the nginx skeleton
+# in config/element-nginx.conf requires in a binary distribution.
+COPY LICENSE NOTICE /usr/share/licenses/siwx-oidc-matrix-server/
 
 # Service-worker media-auth boot shim (2026-07-31 download RCA). Must be a
 # separate same-origin file: index.html ships a CSP with script-src 'self' and
@@ -288,9 +294,9 @@ RUN chmod +x /docker-entrypoint.sh && chown -R nginx:nginx /app
 
 ENTRYPOINT ["/docker-entrypoint.sh"]
 
-# Harmless content marker: proves the `dev` branch CI trigger produces a
+# Harmless content marker: proved that the `dev` branch CI trigger produced a
 # genuinely new, distinct :dev image (not a coalesced/reused build from a
-# simultaneous `main` push). See docs/2026-07-30-dev-staging-dev-aquafire.md
-# §9 (branch-based CI deploys).
+# simultaneous `main` push). The `dev` branch was folded into `main` on
+# 2026-09-01; the labels have been inert since.
 LABEL io.inblock.dev-branch-ci-test="2026-07-31"
 LABEL io.inblock.dev-branch-ci-test-s5-live-check="2026-07-31T00:48Z"

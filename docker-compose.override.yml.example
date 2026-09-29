@@ -14,7 +14,9 @@
 #   - /etc/systemd/system/docker.service.d/10-matrix-volume.conf
 #       RequiresMountsFor=/mnt/volume_matrix_service   (Docker won't start before the volume mounts)
 #
-# See docs/2026-06-18-storage-bound-volume-controller.md for the full runbook.
+# scripts/matrix-storage-controller.sh keeps Synapse media inside that volume:
+# run it hourly from a timer, and `status` prints live utilization and the
+# retention windows it currently applies.
 
 services:
   matrix_synapse:

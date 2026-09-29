@@ -18,13 +18,14 @@
 # untouched, so `run.sh full` works immediately afterwards.
 #
 # Usage:
-#   e2e-harness/use-fixed-oidc.sh            # build + swap (default)
-#   SIWX_OIDC_SRC=/path/to/tree e2e-harness/use-fixed-oidc.sh
+#   SIWX_OIDC_SRC=/path/to/siwx-oidc e2e-harness/use-fixed-oidc.sh   # build + swap
 #
 # Env:
-#   SIWX_OIDC_SRC   source tree to build + mount (default: the investigate tree
-#                   ~/siwx-oidc-investigate, where the fix lives).
-#                   Must contain the working tree with the B1 fix and be buildable.
+#   SIWX_OIDC_SRC   REQUIRED. The siwx-oidc source tree to build and mount.
+#                   Must contain the working tree with the B1 fix and be
+#                   buildable. No default on purpose: the script runs
+#                   `cargo build` in that tree and serves whatever it
+#                   builds, so which tree is a choice the caller makes.
 #   CONTAINER       container to swap (default: siwx-e2eh-oidc)
 #   NET             network (default: siwx-e2eh-net)
 #   RUNNER_IMAGE    base image to run the binary in (default: Ubuntu 26.04, pinned
@@ -37,7 +38,7 @@
 # =============================================================================
 set -euo pipefail
 
-SIWX_OIDC_SRC="${SIWX_OIDC_SRC:-$HOME/siwx-oidc-investigate}"
+SIWX_OIDC_SRC="${SIWX_OIDC_SRC:-}"
 CONTAINER="${CONTAINER:-siwx-e2eh-oidc}"
 NET="${NET:-siwx-e2eh-net}"
 RUNNER_IMAGE="${RUNNER_IMAGE:-docker.io/library/ubuntu:26.04@sha256:da6fc2be547864451aa253836dd926da33623312df4a9a243e35dc877c378a78}"
@@ -46,6 +47,7 @@ BIN="${SIWX_OIDC_SRC}/${BIN_REL}"
 
 log() { printf '[use-fixed-oidc] %s\n' "$*" >&2; }
 
+[ -n "$SIWX_OIDC_SRC" ] || { log "FATAL: set SIWX_OIDC_SRC to the siwx-oidc source tree to build and mount"; exit 2; }
 [ -d "$SIWX_OIDC_SRC" ] || { log "FATAL: source tree $SIWX_OIDC_SRC not found"; exit 2; }
 
 # 1. Build the fixed binary (debug is fine; fast if already built).
