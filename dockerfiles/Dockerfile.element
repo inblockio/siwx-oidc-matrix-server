@@ -1,27 +1,40 @@
-# Builds Element Web from source at a pinned tag with our vendored
-# force-first-device-recovery patch applied, then serves it with the
-# inblock.io overlay (config, theme, favicons) via the existing entrypoint.
+# Builds Element Web from source at a pinned tag, applies every patch in
+# patches/element-web/ (listed, in apply order, in its README.md), and serves
+# the result with the inblock.io overlay (config, theme, favicons).
 #
-# Why from source: the prebuilt vectorim/element-web image cannot carry our
-# patch to apps/web/src/components/structures/MatrixChat.tsx, which makes a
-# recoverable identity (4S recovery key) mandatory on first login. The patch
-# in patches/element-web/ is the single source of truth (== the upstream PR).
+# Why from source: the prebuilt vectorim/element-web image cannot carry source
+# patches, such as force-first-device-recovery's change to MatrixChat.tsx that
+# makes a recoverable identity (4S recovery key) mandatory on first login.
 # See docs/element-web-source-build.md.
 
 # ---------------------------------------------------------------------------
-# Builder: clone element-web at the pinned tag, apply our patch, build webapp.
+# Builder: clone element-web at the pinned tag, apply our patches, build webapp.
 # Node >= 22.18 required by upstream; node:24-bullseye matches their builder.
+# TODO(bookworm): Debian bullseye left LTS on 2026-08-31.
+#
+# Every input here is pinned by name AND content: both base images by version
+# tag plus multi-arch index digest, the upstream source by tag plus the commit
+# the tag must resolve to. A tag re-pushed or moved upstream then fails the
+# build instead of changing what we ship. A bump changes both halves
+# (index digest: `skopeo inspect --raw docker://<image>:<tag> | sha256sum`;
+# commit: `git ls-remote <repo> 'refs/tags/<tag>^{}'`).
 # ---------------------------------------------------------------------------
-FROM node:24-bullseye AS builder
+FROM node:24.20.0-bullseye@sha256:25f3016fcdae6b5d65bd9bcb4064b7e4198ec8d49493fa40d73f9b463d04fb15 AS builder
 
 ARG ELEMENT_WEB_TAG=v1.12.29
+ARG ELEMENT_WEB_COMMIT=2d90d6b7b601ecb9ccdf81239a43b4396b4b0c9e
 
 WORKDIR /src
 
 # Shallow clone of the pinned tag. Keep .git: the build/version scripts run
 # `git describe` to stamp the version, and the lockfile install is reproducible.
 RUN git clone --depth 1 --branch "${ELEMENT_WEB_TAG}" \
-      https://github.com/element-hq/element-web.git /src
+      https://github.com/element-hq/element-web.git /src \
+    && actual="$(git -C /src rev-parse HEAD)" \
+    && if [ "$actual" != "${ELEMENT_WEB_COMMIT}" ]; then \
+         echo "FATAL: ${ELEMENT_WEB_TAG} resolves to $actual, expected ELEMENT_WEB_COMMIT=${ELEMENT_WEB_COMMIT}. Bump both together, or find out why upstream moved the tag." >&2; \
+         exit 1; \
+       fi
 
 # Apply our vendored patches. Fail the build loudly if any does not apply
 # cleanly, so a tag bump that breaks one is caught here, not at runtime. They are
@@ -41,9 +54,10 @@ RUN git clone --depth 1 --branch "${ELEMENT_WEB_TAG}" \
 #    Implements the stock EventIndex hook so E2EE search works in hosted
 #    Element Web, behind the labs flag feature_web_event_index (default OFF).
 #
-# Order matters only for en_EN.json, which five of them touch in different
-# places; applied in this order every hunk lands (verified against a pristine
-# v1.12.26 tree, 2026-08-30, and a pristine v1.12.29 tree, 2026-09-25).
+# Order is load-bearing: seven of the ten patches touch en_EN.json in different
+# places (entries 1 and 3-8), entry 8 builds on 7 and entry 10 on 9. Applied in
+# this order every hunk lands (verified against a pristine v1.12.26 tree,
+# 2026-08-30, and a pristine v1.12.29 tree, 2026-09-25).
 # Registry with why/evidence/retirement per patch:
 # patches/element-web/README.md — no patch ships without an entry there.
 COPY patches/element-web/force-first-device-recovery.patch /tmp/ew.patch
@@ -72,7 +86,7 @@ RUN git apply --verbose /tmp/ew-checkcode.patch
 # config carries the new key; prod's bind-mounted config must be renamed too.
 #
 # Since 2026-09-13 this patch carries increments that are AHEAD of PR #34718
-# (Tim's decision). As of 2026-09-14 there are FIVE: A, the non-blocking
+# (a maintainer decision). As of 2026-09-14 there are FIVE: A, the non-blocking
 # initEventIndex, so a large index cannot block app start; B, batched writes /
 # O(1) getStats / sorted vocabulary / folded-text memo; C, the crawl window and
 # room cap (a shouldCrawl hook in the SHARED indexing/EventIndex.ts), the
@@ -176,26 +190,53 @@ RUN grep -q 'not caching server support' /src/apps/web/webapp/sw.js \
     && grep -rqF 'mxMatrixClientPeg' /src/apps/web/webapp/bundles/
 
 # ---------------------------------------------------------------------------
+# License texts for the Alpine packages of the nginx-unprivileged base below
+# (Alpine 3.24.2), busybox's GPL-2.0-only among them. Canonical texts from SPDX
+# license-list-data v3.29.0, each checked against its SHA-256 as it is
+# downloaded. The set is not chosen here: dockerfiles/check-alpine-licenses.sh,
+# run at the end of the final stage, fails the build when an installed package
+# declares a license with no text below, when a text below is declared by no
+# package, or when NOTICE does not name the Alpine release. So a base bump that
+# changes the licenses stops the build until this list (and NOTICE) follows.
+# This list is the L: lines of /lib/apk/db/installed in the pinned base.
+# A remote ADD gets mode 0600, hence --chmod.
+# ---------------------------------------------------------------------------
+FROM scratch AS alpine_licenses
+ARG SPDX_TEXT=https://raw.githubusercontent.com/spdx/license-list-data/v3.29.0/text
+ADD --chmod=0644 --checksum=sha256:074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff ${SPDX_TEXT}/Apache-2.0.txt /alpine/Apache-2.0.txt
+ADD --chmod=0644 --checksum=sha256:f32fb3b417a194167cfad068223fc975ba96c5960513a10f66a3c28720aec1df ${SPDX_TEXT}/BSD-2-Clause.txt /alpine/BSD-2-Clause.txt
+ADD --chmod=0644 --checksum=sha256:5a93d5831e1297ab10fe643e1a631e83be392896da14ee2951285a79012df69d ${SPDX_TEXT}/BSD-3-Clause.txt /alpine/BSD-3-Clause.txt
+ADD --chmod=0644 --checksum=sha256:aaf135472f81c5b4a0dca9367e5bb5e9750032b5bebe5442b36e4c0a47430df3 ${SPDX_TEXT}/GPL-2.0-only.txt /alpine/GPL-2.0-only.txt
+ADD --chmod=0644 --checksum=sha256:aaf135472f81c5b4a0dca9367e5bb5e9750032b5bebe5442b36e4c0a47430df3 ${SPDX_TEXT}/GPL-2.0-or-later.txt /alpine/GPL-2.0-or-later.txt
+ADD --chmod=0644 --checksum=sha256:fb981668c18a279e285fc4d83fba1e836cc84dd4daa73c9697d3cfd2d8aca6e0 ${SPDX_TEXT}/GPL-3.0-or-later.txt /alpine/GPL-3.0-or-later.txt
+ADD --chmod=0644 --checksum=sha256:5749785c8bdefafcb5d798270ed0a967036fe2ca63dcedade1627565dfef81d2 ${SPDX_TEXT}/LGPL-2.1-or-later.txt /alpine/LGPL-2.1-or-later.txt
+ADD --chmod=0644 --checksum=sha256:b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5 ${SPDX_TEXT}/MIT.txt /alpine/MIT.txt
+ADD --chmod=0644 --checksum=sha256:66a3107d5ad6a058aab753eaac2047ccb2ed0e39465dd0fe5844da3e300d5172 ${SPDX_TEXT}/MPL-2.0.txt /alpine/MPL-2.0.txt
+ADD --chmod=0644 --checksum=sha256:bfb1112d49db5b1daecdfef24bd7e2f3ea0bafb33aa67aa0ab51e2bf8407c03d ${SPDX_TEXT}/Zlib.txt /alpine/Zlib.txt
+
+# ---------------------------------------------------------------------------
 # Runtime: unprivileged nginx (same base family as vectorim/element-web), with
 # the inblock.io overlay applied exactly as the previous config-only image did.
-# nginx-unprivileged serves on 8080 as the `nginx` user.
+# nginx-unprivileged serves on 8080 as the `nginx` user. Pinned like the
+# builder (version tag plus index digest; was the moving `alpine-slim`, which
+# resolved to this same 1.31.6 mainline build when it was pinned).
 # ---------------------------------------------------------------------------
-FROM nginxinc/nginx-unprivileged:alpine-slim
+FROM nginxinc/nginx-unprivileged:1.31.6-alpine-slim@sha256:c81a27f28bc2d9c2da8998444e653c7b85b9bbbaa92e44ef18d8920784e06507
 
 USER root
 
 # Source-built web app bundle.
 COPY --from=builder /src/apps/web/webapp /app
 
-# Serve the SPA entrypoint (index.html) with no-cache so browsers always
-# revalidate it and load the current content-hashed bundles, preventing the
-# stale-bundle TDZ crash ("Your Element is misconfigured"). Replaces the stock
-# nginx-unprivileged conf.d/default.conf; only the HTML entrypoint is affected —
-# /bundles/<hash>/* assets keep nginx's default caching, so this changes zero
-# bundle bytes. See docs/superpowers/plans/2026-06-19-element-index-html-no-cache.md.
+# Serve the unhashed files that name content-hashed ones (index.html,
+# i18n/languages.json) with no-cache, so browsers always revalidate them and
+# load the current bundles instead of hitting the stale-bundle TDZ crash
+# ("Your Element is misconfigured"). Replaces the stock nginx-unprivileged
+# conf.d/default.conf and changes zero bundle bytes; config/element-nginx.conf
+# gives every location's Cache-Control and its reason.
 COPY config/element-nginx.conf /etc/nginx/conf.d/default.conf
 
-# Security-headers include (checklist S1, Section 1). Must land in conf.d/
+# Security-headers include. Must land in conf.d/
 # with a NON-.conf suffix: the base image's nginx.conf auto-includes
 # conf.d/*.conf at the http level (`include /etc/nginx/conf.d/*.conf;`), so a
 # .conf name would get this file loaded TWICE — once automatically at http
@@ -222,6 +263,21 @@ COPY config/favicon-180.png /app/favicon-180.png
 COPY config/favicon-512.png /app/favicon-512.png
 COPY config/favicon-1024.png /app/favicon-1024.png
 COPY entrypoints/element_entrypoint.sh /docker-entrypoint.sh
+
+# LICENSE and NOTICE travel with the image. It redistributes this repository's
+# files (Apache-2.0 §4(a) and (d)); NOTICE states the license of the patches
+# built into the bundle, and it carries the BSD notice that the nginx skeleton
+# in config/element-nginx.conf requires in a binary distribution.
+COPY --chmod=0644 LICENSE NOTICE /usr/share/licenses/siwx-oidc-matrix-server/
+# Element Web's own license texts, from the upstream checkout the bundle was
+# built from. The bundle is sent to every browser that loads it, so it is
+# conveyed, and its license travels with it.
+COPY --chmod=0644 --from=builder /src/LICENSE-AGPL-3.0 /src/LICENSE-GPL-3.0 /usr/share/licenses/element-web/
+# The base image's Alpine packages carry their own licenses (stage
+# alpine_licenses); the check keeps texts, packages and NOTICE in step.
+COPY --from=alpine_licenses /alpine/ /usr/share/licenses/alpine/
+RUN --mount=type=bind,source=dockerfiles/check-alpine-licenses.sh,target=/tmp/check-alpine-licenses.sh \
+    sh /tmp/check-alpine-licenses.sh
 
 # Service-worker media-auth boot shim (2026-07-31 download RCA). Must be a
 # separate same-origin file: index.html ships a CSP with script-src 'self' and
@@ -273,9 +329,9 @@ RUN chmod +x /docker-entrypoint.sh && chown -R nginx:nginx /app
 
 ENTRYPOINT ["/docker-entrypoint.sh"]
 
-# Harmless content marker: proves the `dev` branch CI trigger produces a
+# Harmless content marker: proved that the `dev` branch CI trigger produced a
 # genuinely new, distinct :dev image (not a coalesced/reused build from a
-# simultaneous `main` push). See docs/2026-07-30-dev-staging-dev-aquafire.md
-# §9 (branch-based CI deploys).
+# simultaneous `main` push). The `dev` branch was folded into `main` on
+# 2026-09-01; the labels have been inert since.
 LABEL io.inblock.dev-branch-ci-test="2026-07-31"
 LABEL io.inblock.dev-branch-ci-test-s5-live-check="2026-07-31T00:48Z"

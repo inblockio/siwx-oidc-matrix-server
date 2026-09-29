@@ -8,10 +8,20 @@ services:
     # digests for the same tag string, and GHCR sha-tags have been observed to
     # be republishable (element-web:sha-4a3d434 drifted from the bytes
     # originally deployed under that tag), so tag-only pinning is not
-    # sufficient. Mirrors docker-compose.dev-staging.yml. Defaults track
-    # `:main` so a fresh checkout with no overrides still starts (same
-    # fallback behavior the old shared IMAGE_TAG had).
-    image: ${SYNAPSE_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/synapse:main}
+    # sufficient. Every image below follows the same pattern.
+    #
+    # The defaults are IMMUTABLE (2026-09-29): tag plus digest of the images CI
+    # published from main at 33a0c95, which carry exactly the Synapse version,
+    # Element tag and patch set the README's Dependencies table lists. They used
+    # to be `:main`, so a checkout with no overrides silently ran whatever main
+    # was at pull time, and start-matrix.sh pulls on every start. A required
+    # `${VAR:?}` would have broken start-matrix.sh, which writes no image refs.
+    # The digest decides the bytes; the `sha-` tag only names the commit that
+    # built them. Bump deliberately, with the README row and the SYNAPSE_IMAGE
+    # default in real-stack/Dockerfile.synapse: take the digest a later main
+    # build published under its `sha-<commit>` tag. A default can only name a
+    # build of an EARLIER commit: no commit can hold its own build's digest.
+    image: ${SYNAPSE_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/synapse:sha-33a0c95@sha256:32abd6fa5e312796926eb33a2aeebecfe2ec705768828d3f570004c8ba44d775}
     restart: unless-stopped
     expose:
       - "${MATRIX_PORT}"
@@ -40,12 +50,12 @@ services:
 
   redis:
     # REDIS_IMAGE_REF: env-overridable digest-pinned ref — same pattern as
-    # SYNAPSE_IMAGE_REF/ELEMENT_IMAGE_REF in docker-compose.dev-staging.yml.
+    # SYNAPSE_IMAGE_REF/ELEMENT_IMAGE_REF above.
     # Default (2026-09-25) = the version TESTED on dev-staging: redis 8.10.2
     # (Docker Official Image; index digest cross-checked against
     # docker-library/repo-info). PROD DOES NOT RUN THIS: it runs redis 8.8.0
     # (redis:latest@sha256:aa049e68..., verified 2026-07-31) and pins it via
-    # REDIS_IMAGE_REF in /home/deploy/matrix/stack/.env, which wins over this
+    # REDIS_IMAGE_REF in its own stack's .env, which wins over this
     # default. Taking prod to the default is a deliberate forward upgrade
     # (8.8 -> 8.10 against prod's AOF) and needs its own promotion step; a
     # DOWNGRADE of either box against an existing AOF is a data-loss risk.
@@ -66,11 +76,12 @@ services:
     # Built by the separate siwx-oidc repo, so it is versioned independently of
     # synapse + element-web. SIWX_OIDC_IMAGE_REF is a FULL image ref (not a
     # bare tag, which the old SIWX_OIDC_TAG was) so that a digest-only
-    # `ghcr.io/inblockio/siwx-oidc@sha256:…` pin is expressible — the promoted
-    # digests are tagged `:dev` on GHCR while `:main` resolves elsewhere
-    # (builds are not reproducible), so a tag name would misdescribe the bytes.
-    # Defaults to :main so a fresh checkout with no overrides still starts.
-    image: ${SIWX_OIDC_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc:main}
+    # `ghcr.io/inblockio/siwx-oidc@sha256:…` pin is expressible. CI builds are
+    # not reproducible, and a branch tag such as `:main` moves with every
+    # build, so a tag name alone can misdescribe the bytes a deployment runs.
+    # Default: immutable, like SYNAPSE_IMAGE_REF above. The build siwx-oidc's CI
+    # published from its main at 40efae9 (2026-09-29).
+    image: ${SIWX_OIDC_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc:sha-40efae9@sha256:54739f4813bfa5dcfb104cdfdf1fedd4c7b7ff7a4c307059128cf047a30ba12f}
     restart: unless-stopped
     depends_on:
       redis:
@@ -88,6 +99,12 @@ services:
       SIWEOIDC_SUPPORTED_DID_METHODS: '["pkh","key"]'
       SIWEOIDC_MATRIX_SERVER_NAME: ${MATRIX_HOST}
       RUST_LOG: ${RUST_LOG}
+      # Opt-ins, off when empty (set them in .env; see .env.example). The
+      # three names exist in siwx-oidc builds from 2026-09-30 on; an older
+      # build ignores the two URIs and also reads an empty ENS URL as off.
+      SIWXOIDC_ENS_API_URL: ${SIWXOIDC_ENS_API_URL:-}
+      SIWXOIDC_OP_TOS_URI: ${SIWXOIDC_OP_TOS_URI:-}
+      SIWXOIDC_OP_POLICY_URI: ${SIWXOIDC_OP_POLICY_URI:-}
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:${SIWEOIDC_PORT}/.well-known/openid-configuration"]
       interval: 10s
@@ -99,8 +116,9 @@ services:
       - default
 
   element-web:
-    # See SYNAPSE_IMAGE_REF comment above — same split-var rationale.
-    image: ${ELEMENT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/element-web:main}
+    # See SYNAPSE_IMAGE_REF comment above — same split-var rationale, same
+    # immutable default (main at 33a0c95: Element Web v1.12.29, all ten patches).
+    image: ${ELEMENT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/element-web:sha-33a0c95@sha256:1761832069bd37ba089f62a5f74ba847171738444a62146a5ca9685dc5dd56a0}
     restart: unless-stopped
     environment:
       MATRIX_BASE_URL: ${MATRIX_BASE_URL}
@@ -125,8 +143,8 @@ services:
 
   livekit:
     # Pinned: an unpinned :latest jumps SFU versions on any `docker compose pull`
-    # (deploy.sh), which can change call behavior unannounced. Bump deliberately.
-    # Default (2026-09-25) = v1.13.7 tag@digest, the version TESTED on
+    # (start-matrix.sh pulls on every start), which can change call behavior
+    # unannounced. Bump deliberately. Default (2026-09-25) = v1.13.7, TESTED on
     # dev-staging. Prod runs v1.12.0 (its stack dir carries server-local
     # edits); LIVEKIT_IMAGE_REF in prod's .env is the place to pin it, and the
     # move to v1.13.x is its own promotion step.
@@ -140,11 +158,12 @@ services:
       # Below the Linux ephemeral range (32768-60999) so these listeners cannot
       # collide with the host's own ephemeral source ports. MUST match
       # rtc.port_range_start/end in config/livekit.yaml exactly, and the host
-      # firewall must allow 20100:20200/udp before this is rolled out (T4,
-      # docs/superpowers/plans/2026-08-01-av-hardening-config.md).
+      # firewall must allow 20100:20200/udp before this is rolled out. The
+      # range moved here from 50100-50200, which sat inside the ephemeral range.
       - "20100-20200:20100-20200/udp"
-      # Embedded TURN (see docs/superpowers/plans/2026-08-03-turn-tls-edge-
-      # termination.md). UDP leg only: TURN-TLS terminates at the edge
+      # Embedded TURN, used only when `turn.enabled` is true in
+      # config/livekit.yaml (off by default; its `turn:` block lists what the
+      # edge needs). UDP leg only: TURN-TLS terminates at the edge
       # (caddy-l4 SNI split on 443 → plaintext TURN to container port 5349
       # over the proxy network), so 5349 must NOT be host-published. ufw must
       # allow 3478/udp.
@@ -175,8 +194,8 @@ services:
     # DOES NOT RUN THIS: it runs 0.5.0, pinned via LK_JWT_IMAGE_REF in its .env.
     # 0.7.0 behaviour change (#222): only LIVEKIT_FULL_ACCESS_HOMESERVERS users
     # and local users may publish; federated users get subscribe-only tokens.
-    # When prod is promoted to 0.7.0, re-enable the healthcheck below exactly
-    # as docker-compose.dev-staging.yml does (0.7.0's helper works, #215).
+    # When prod is promoted to 0.7.0, re-enable the healthcheck below with
+    # test ["CMD", "/lk-jwt-service-healthcheck"] (0.7.0's helper works, #215).
     image: ${LK_JWT_IMAGE_REF:-ghcr.io/element-hq/lk-jwt-service:0.7.0@sha256:e0c7cecfa74e2342a3e79d47e1d4ab4bd228fe05b1a4dc4ba7f807686b0c214b}
     restart: unless-stopped
     environment:
@@ -186,8 +205,12 @@ services:
       # is still no separate override for the latter (LIVEKIT_CS_API_URL_OVERRIDES
       # is the Matrix C-S API, not LiveKit). So the CreateRoom call hairpins back
       # in through Caddy, which is why the /livekit/sfu/twirp/* block there is
-      # scoped to non-private source IPs. Rationale + the live check this still
-      # needs: T6/H5, docs/superpowers/plans/2026-08-01-av-hardening-config.md.
+      # scoped to non-private source IPs (the twirp block in Caddyfile.local).
+      # That holds only while the hairpin reaches Caddy from a PRIVATE address.
+      # Docker's NAT normally ensures it; a floating IP, or an egress path that
+      # leaves and re-enters the network, does not, and then full-access room
+      # creation 403s and calls break. Check on each host that Caddy logs
+      # lk-jwt's CreateRoom with a private remote_ip.
       LIVEKIT_URL: "wss://${MATRIX_HOST}/livekit/sfu"
       LIVEKIT_KEY: "${LIVEKIT_KEY}"
       LIVEKIT_SECRET: "${LIVEKIT_SECRET}"
@@ -208,10 +231,11 @@ services:
     # "8080" fixes the helper but makes the SERVER exit 1 with
     # `listen tcp: address 8080: missing port in address` — mutually
     # exclusive, verified against the pinned digest on 2026-08-30. Left
-    # enabled it marks the container unhealthy and ci-deploy.sh's health
-    # gate fails EVERY converge, wedging dev-staging CD. Disabling restores
-    # the 0.5.0 behaviour this service was always documented to have
-    # ("no healthcheck by design"); probe /healthz externally instead.
+    # enabled it marks the container unhealthy, so any deploy that gates on
+    # container health fails EVERY converge, even of unrelated services.
+    # Disabling restores the 0.5.0 behaviour this service was always
+    # documented to have ("no healthcheck by design"); probe /healthz
+    # externally instead.
     # Still disabled HERE on purpose (2026-09-25): prod's .env pins 0.5.0, and
     # this file must not start health-gating an image it was never verified
     # against. Re-enable together with the prod 0.7.0 promotion.

@@ -298,8 +298,10 @@ Is feature_custom_themes enabled in config?
 **Cause:** The theme only has `colors` but no `compound` overrides. Newer Element
 UI components use the Compound design system and ignore legacy color keys.
 
-**Fix:** Add `compound` tokens to the theme. Use the inblock.io theme files as a
-reference for which tokens to include.
+**Fix:** Add `compound` tokens to the theme. Use the inblock.io themes inline in
+`config/element-config.json` (`setting_defaults.custom_themes`) as a reference for which
+tokens to include, and respect the protected tokens in
+`docs/element-theme-customization.md`.
 
 ### is_dark mismatch
 

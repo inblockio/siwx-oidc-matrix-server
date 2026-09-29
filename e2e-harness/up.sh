@@ -16,7 +16,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${REPO_ROOT}/.env.e2e"
 NET="siwx-e2eh-net"
 
-# Same env-overridable digest pin as docker-compose.yml / docker-compose.e2e.yml.
+# Same env-overridable digest pin as docker-compose.e2e.yml (0.6.0; see the
+# note there on why it is not docker-compose.yml's 0.7.0).
 LK_JWT_IMAGE_REF="${LK_JWT_IMAGE_REF:-ghcr.io/element-hq/lk-jwt-service:0.6.0@sha256:822f0c03a3bdd924da92afc2e8ec59de5dda17af42d32e71e11f269c3517abf7}"
 
 # siwx-oidc + Synapse image refs. Both are DERIVED from source and built on
@@ -33,7 +34,7 @@ LK_JWT_IMAGE_REF="${LK_JWT_IMAGE_REF:-ghcr.io/element-hq/lk-jwt-service:0.6.0@sh
 e2eh_ensure_images || { echo "[up] FATAL: harness images unavailable (see above)." >&2; exit 1; }
 echo "[up] siwx-oidc image: ${SIWX_OIDC_IMAGE_REF}"
 echo "[up] synapse image  : ${SYNAPSE_IMAGE_REF}"
-LIVEKIT_IMAGE_REF="${LIVEKIT_IMAGE_REF:-livekit/livekit-server:v1.13.6}"
+LIVEKIT_IMAGE_REF="${LIVEKIT_IMAGE_REF:-livekit/livekit-server:v1.13.6@sha256:e37d68f172556d02aa77968b9fc55ef481468c0315fa38e4fa6c56ce72e3a815}"
 
 FRESH=0
 [ "${1:-}" = "--fresh" ] && FRESH=1
@@ -78,7 +79,7 @@ echo "[up] starting siwx-e2eh-redis"
 podman run -d --name siwx-e2eh-redis --network "${NET}" --restart unless-stopped \
   -v siwx-e2eh-redis-data:/data \
   --health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5 \
-  docker.io/library/redis:7-alpine redis-server --appendonly yes >/dev/null
+  docker.io/library/redis:7.4.11-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499 redis-server --appendonly yes >/dev/null
 
 # 5. siwx-oidc (SIWX_OIDC_IMAGE_REF; listens on 8081 internally)
 echo "[up] starting siwx-e2eh-oidc"
@@ -99,7 +100,7 @@ podman run -d --name siwx-e2eh-oidc --network "${NET}" --restart unless-stopped 
   "${SIWX_OIDC_IMAGE_REF}" >/dev/null
 
 # 6. synapse (SYNAPSE_IMAGE_REF; internal 8008, published 18448)
-#    First boot generates homeserver.yaml from the env contract in synapse_entrypoint.sh.
+#    First boot generates homeserver.yaml from the env contract in entrypoints/matrix_server.sh.
 echo "[up] starting siwx-e2eh-synapse (host ${SYNAPSE_HOST_PORT} -> 8008)"
 podman run -d --name siwx-e2eh-synapse --network "${NET}" --restart unless-stopped \
   -p "127.0.0.1:${SYNAPSE_HOST_PORT}:8008" \
@@ -127,8 +128,8 @@ podman run -d --name siwx-e2eh-livekit --network "${NET}" --restart unless-stopp
   "${LIVEKIT_IMAGE_REF}" --config /etc/livekit.yaml >/dev/null
 
 # 8. lk-jwt-service (internal :8080; reached via caddy /livekit/jwt)
-#    Digest-pinned to the SAME ref production runs (docker-compose.yml), so the
-#    harness exercises the pinned binary rather than the moving `latest` label.
+#    Digest-pinned (LK_JWT_IMAGE_REF above), so the harness exercises one fixed
+#    binary rather than the moving `latest` label.
 #    LIVEKIT_FULL_ACCESS_HOMESERVERS is the harness's own server name, not "*":
 #    v0.5.0 refuses to boot without it, and an explicit host exercises the same
 #    allowlist parsing prod uses (startup echoes the parsed value).
@@ -162,7 +163,7 @@ podman run -d --name siwx-e2eh-fed-proxy --network "container:siwx-e2eh-lk-jwt" 
   -v "${REPO_ROOT}/config/fed-proxy.e2e.Caddyfile:/etc/caddy/Caddyfile:ro" \
   -v "${FED_CERT_DIR}/fed.crt:/certs/fed.crt:ro" \
   -v "${FED_CERT_DIR}/fed.key:/certs/fed.key:ro" \
-  docker.io/library/caddy:2-alpine >/dev/null
+  docker.io/library/caddy:2.11.4-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b >/dev/null
 
 # 9. caddy edge (publish 18080 + 18081)
 echo "[up] starting siwx-e2eh-caddy (host ${CADDY_EDGE_PORT} + ${SIWEOIDC_HOST_PORT})"
@@ -170,7 +171,7 @@ podman run -d --name siwx-e2eh-caddy --network "${NET}" --restart unless-stopped
   -p "${CADDY_EDGE_PORT}:18080" \
   -p "${SIWEOIDC_HOST_PORT}:18081" \
   -v "${REPO_ROOT}/Caddyfile.e2e:/etc/caddy/Caddyfile:ro" \
-  docker.io/library/caddy:2-alpine >/dev/null
+  docker.io/library/caddy:2.11.4-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b >/dev/null
 
 echo "[up] all siwx-e2eh-* containers launched. Current state:"
 podman ps --filter "name=siwx-e2eh-" --format '  {{.Names}}\t{{.Status}}\t{{.Ports}}'

@@ -1,15 +1,27 @@
-# Local real-stack Synapse image: base Synapse + yq + custom entrypoint that
-# writes homeserver.yaml with the stable matrix_authentication_service block.
-# Pinned to v1.159.0 (2026-08-30): matches what dockerfiles/Dockerfile pins, so
-# the harness exercises the same Synapse the deployed stack runs. An unpinned
-# :latest silently jumped Synapse versions on rebuild and broke the config
-# schema once already (1.157.0 removed experimental_features.msc3861).
-# Upgrades are deliberate; keep this in lockstep with dockerfiles/Dockerfile.
-# Bumped to v1.161.0 with it on 2026-09-25.
-FROM matrixdotorg/synapse:v1.161.0
-USER root
-RUN apt-get update && apt-get install -y wget curl && apt-get clean
-RUN wget -q https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/bin/yq && chmod +x /usr/bin/yq
-COPY synapse_entrypoint.sh /synapse_entrypoint.sh
-RUN chmod +x /synapse_entrypoint.sh
-ENTRYPOINT ["/synapse_entrypoint.sh"]
+# Local real-stack Synapse image: the Synapse of the hand-run `siwx-real-*`
+# stack (siwx-oidc's e2e/real-stack-edge.sh fronts a container named
+# siwx-real-synapse). It is the PUBLISHED Synapse image, not a second recipe.
+#
+# Until 2026-09-29 this file was its own recipe: the same `FROM` tag, yq from
+# `releases/latest`, and a trimmed copy of the entrypoint. So it ran WITHOUT the
+# MSC4133 write-policy patch and WITHOUT the DID-field startup guard, and a test
+# against it said nothing about the DID field of what ships. Building FROM the
+# published image runs the bytes a deployment pulls: the patched Synapse, the
+# pinned yq, and entrypoints/matrix_server.sh with its guard. That entrypoint
+# takes the same env contract the old copy did (MATRIX_HOST, MATRIX_PORT,
+# MATRIX_BASE_URL, SIWEOIDC_INTERNAL_URL, MAS_SHARED_SECRET), and on top writes
+# the MatrixRTC, retention and server-notice settings a deployment gets.
+#
+# The default is the same tag-plus-digest ref docker-compose.yml defaults
+# SYNAPSE_IMAGE_REF to; bump the two together. To run the real stack on a
+# working-tree build instead, pass that image (for example the e2e harness's,
+# see `e2e-harness/images.sh print`):
+#   podman build -f real-stack/Dockerfile.synapse \
+#     --build-arg SYNAPSE_IMAGE=localhost/siwx-e2eh-synapse:<tag> \
+#     -t localhost/siwx-real-synapse:local real-stack
+#
+# NOT a stock image any more. scripts/did-field-guard-accept.sh needs an
+# UNPATCHED Synapse with yq for its case 4; do not hand it an image built from
+# this file.
+ARG SYNAPSE_IMAGE=ghcr.io/inblockio/siwx-oidc-matrix-server/synapse:sha-33a0c95@sha256:32abd6fa5e312796926eb33a2aeebecfe2ec705768828d3f570004c8ba44d775
+FROM ${SYNAPSE_IMAGE}

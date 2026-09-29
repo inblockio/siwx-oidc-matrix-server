@@ -150,7 +150,7 @@ SMOKE_CHECKS=(
 # They are already `#[ignore = "requires live e2e stack (e2e/up.sh)"]`, so a
 # plain `cargo test` stays green. They only go red for someone running
 # `cargo test -- --ignored` WITHOUT that mock stack up, where they fail on
-# ConnectionRefused to :8090 (plan D16 — environmental, never a regression).
+# ConnectionRefused to :8090 (environmental, never a regression).
 # To run them:
 #     cd <siwx-oidc>; bash e2e/up.sh
 #     cargo test --test e2e_race_teardown -- --ignored --test-threads=1 --nocapture
@@ -571,7 +571,7 @@ rev_of() {
 }
 REV_HARNESS="$(rev_of "$REPO_ROOT")"
 REV_SIWX="$(rev_of "$SIWX_OIDC_DIR_FOR_SUMMARY")"
-REV_CONNECTOR="$(rev_of "${CONNECTOR_DIR:-/home/waldknoten-01/aqua-matrix-agent}")"
+REV_CONNECTOR="$(rev_of "${CONNECTOR_DIR:-$HOME/aqua-matrix-agent}")"
 
 jq -n \
   --arg run_id "$RUN_ID" \

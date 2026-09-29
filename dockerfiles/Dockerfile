@@ -1,7 +1,7 @@
 # Minimum version: v1.157.0. The stable matrix_authentication_service block
 # exists since v1.136.0 (2025-08-12); v1.157.0 is the first release that
 # REQUIRES it, because it removed experimental_features.msc3861.
-# Pinned to v1.159.0 (2026-08-30). This bump was FORCED: 1.157.2 is a security
+# Moved to v1.159.0 on 2026-08-30. That bump was FORCED: 1.157.2 is a security
 # release (6 high / 3 moderate / 2 low) with no backport to 1.156.x, and 1.157.0
 # removed experimental_features.msc3861 outright — so taking the security fix
 # required migrating the entrypoint to the stable matrix_authentication_service
@@ -20,32 +20,45 @@
 # SCHEMA_COMPAT_VERSION 84 at both tags), but 1.161 queues three new background
 # updates (9408-9410); roll back only once they have finished, see
 # patches/synapse/README.md "Rollback".
-FROM matrixdotorg/synapse:v1.161.0
-# apt-get (not the apt CLI, which is documented as script-unstable) with
-# --no-install-recommends so this layer stays deterministic in shape. Debian
-# security-repo package versions are not pinned here — pinning wget to an
-# exact Debian package version is impractical against a floating
-# `matrixdotorg/synapse` base (the base image's own apt sources rotate), so
-# this only removes the non-determinism we CAN control (the yq download
-# below, and unpinned recommends bloat).
-RUN apt-get update && apt-get install -y --no-install-recommends wget patch && apt-get clean
-# Pinned to yq v4.53.3 (resolved from the /releases/latest redirect at the
-# time this was written) with a SHA-256 check against the binary — was
-# `.../releases/latest/download/...`, which re-resolves to whatever is
-# newest on every image rebuild, churning the layer digest for a tool-fetch
-# reason unrelated to any actual dependency bump. Bump deliberately: update
-# both the version and the checksum together.
-RUN wget https://github.com/mikefarah/yq/releases/download/v4.53.3/yq_linux_amd64 -O /usr/bin/yq \
+#
+# Pinned by tag AND by the multi-arch index digest: the tag says which release,
+# the digest fixes the bytes (a re-pushed tag cannot change what we build on),
+# and it also fixes the Debian release the apt step below resolves against. A
+# bump changes both; resolve the digest with
+#   skopeo inspect --raw docker://docker.io/matrixdotorg/synapse:vX.Y.Z | sha256sum
+# and run the bump procedure in patches/synapse/README.md first.
+FROM matrixdotorg/synapse:v1.161.0@sha256:6b95dd129e35e97e8032cb759e5db4a516a5f7ef6c98d34d716fea1ae239b62a
+# yq, pinned by version and SHA-256 (was `.../releases/latest/download/...`,
+# which re-resolved to whatever was newest on every rebuild). Bump deliberately:
+# the version, the binary's checksum and the LICENSE's (below) change together.
+# Fetched with curl, which the base image already ships (its own HEALTHCHECK
+# uses it), so no package manager is involved.
+RUN curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.53.3/yq_linux_amd64 -o /usr/bin/yq \
     && echo "fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4  /usr/bin/yq" | sha256sum -c - \
     && chmod +x /usr/bin/yq
+# yq is MIT-licensed, and MIT requires its notice in every copy of the binary:
+# the LICENSE of the same release tag, checked like the binary. A remote ADD
+# gets mode 0600, hence --chmod.
+ADD --chmod=0644 --checksum=sha256:697db34dabb21562fe84487a2ccd031fbd45382b89c2cbdec8ef31682c486040 \
+    https://raw.githubusercontent.com/mikefarah/yq/v4.53.3/LICENSE /usr/share/licenses/yq/LICENSE
 # ---------------------------------------------------------------------------
 # Vendored Synapse patches. patches/synapse/README.md is the registry: no patch
 # ships without an entry there stating why, the evidence, and its retirement
 # condition.
 #
-# `patch`, not `git apply`: this base image ships neither `git` nor `patch`
-# (hence the apt line above), and the installed tree under site-packages is not
-# a git repository.
+# `patch`, not `git apply`: this base image ships neither `git` nor `patch`,
+# and the installed tree under site-packages is not a git repository.
+#
+# `patch` comes from apt and is NOT version-pinned, on purpose. Exact Debian
+# version pins break the build whenever the security archive supersedes that
+# version, and the digest-pinned base above already fixes the Debian release,
+# so the package floats only within that release and keeps getting its security
+# fixes. It is a build tool only: installed, used and purged in this ONE layer,
+# so no package from the floating index remains in the image, and what the
+# image carries is decided by the patch file (`--fuzz=0` applies it exactly or
+# fails), not by which `patch` build apt delivered. The cost: once that Debian
+# release leaves the mirrors, `apt-get update` fails and so does the build,
+# loudly. The fix then is a base-image bump, never an archive workaround.
 #
 # The synapse package directory is resolved at build time rather than
 # hard-coded as python3.13 — a base image that bumps its Python would otherwise
@@ -54,18 +67,27 @@ RUN wget https://github.com/mikefarah/yq/releases/download/v4.53.3/yq_linux_amd6
 # the build loudly if the patch no longer applies. That is the point: see rule 6
 # in the registry for why we do not COPY pre-patched files instead.
 COPY ./patches/synapse/msc4133-profile-field-write-policy.patch /tmp/synapse-msc4133-acl.patch
-RUN SYNAPSE_PKG="$(python -c 'import synapse, os; print(os.path.dirname(synapse.__file__))')" \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends patch \
+    && SYNAPSE_PKG="$(python -c 'import synapse, os; print(os.path.dirname(synapse.__file__))')" \
     && patch -p1 --forward --batch --fuzz=0 --verbose \
          -d "$(dirname "$SYNAPSE_PKG")" < /tmp/synapse-msc4133-acl.patch \
     && python -c 'import synapse.handlers.profile, synapse.config.experimental' \
-    && rm -f /tmp/synapse-msc4133-acl.patch
+    && apt-get purge -y patch \
+    && rm -rf /var/lib/apt/lists/* /tmp/synapse-msc4133-acl.patch
 
 COPY ./entrypoints/matrix_server.sh /matrix_server.sh
+
+# LICENSE and NOTICE travel with the image. It redistributes this repository's
+# files (Apache-2.0 §4(a) and (d)), and NOTICE states the license of the patch
+# applied above and where the upstream source lives.
+COPY --chmod=0644 LICENSE NOTICE /usr/share/licenses/siwx-oidc-matrix-server/
+
 ENTRYPOINT ["/matrix_server.sh"]
 
-# Harmless content marker: proves the `dev` branch CI trigger produces a
+# Harmless content marker: proved that the `dev` branch CI trigger produced a
 # genuinely new, distinct :dev image (not a coalesced/reused build from a
-# simultaneous `main` push). See docs/2026-07-30-dev-staging-dev-aquafire.md
-# §9 (branch-based CI deploys).
+# simultaneous `main` push). The `dev` branch was folded into `main` on
+# 2026-09-01; the labels have been inert since.
 LABEL io.inblock.dev-branch-ci-test="2026-07-31"
 LABEL io.inblock.dev-branch-ci-test-s5-live-check="2026-07-31T00:48Z"

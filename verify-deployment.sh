@@ -3,33 +3,45 @@ set -uo pipefail
 
 # Automated end-to-end verification of a live siwx-oidc-matrix-server deployment.
 #
-# Probes the PUBLIC endpoints (no SSH needed) and asserts the invariants that
-# matter for the cross-signing identity-stability fix:
+# By default it only READS: it probes the PUBLIC endpoints (no SSH needed) and
+# asserts the invariants that matter for the cross-signing identity-stability
+# fix:
 #   - siwx-oidc is up and its OIDC issuer byte-matches the well-known issuer
 #     (trailing slash per RFC 8414, or Element's strict discovery rejects it).
 #   - Synapse advertises siwx-oidc as its m.authentication issuer.
 #   - Element Web ships force_verification:true so 4S recovery is mandatory
 #     (device loss is recoverable instead of catastrophic).
 #
-# Optionally (--e2ee) runs the aqua-matrix-agent encrypted send/read smoke test,
-# which exercises the full login -> provision -> device -> E2EE round trip
-# against the live stack.
+# --e2ee is NOT read-only. It runs the aqua-matrix-agent encrypted send/read
+# smoke test against the named hosts: the agent signs in with its key, which
+# provisions a Matrix account and a device on first use, and sends a message.
+# Run it only against a deployment you operate.
 #
 # Usage:
-#   ./verify-deployment.sh [--e2ee]
+#   MATRIX_HOST=matrix.example.org SIWEOIDC_HOST=siwx-oidc.example.org \
+#   CLIENT_HOST=element.example.org ./verify-deployment.sh [--e2ee]
 #
-# Env overrides (defaults target the inblock.io production hostnames):
-#   MATRIX_HOST     (default matrix.inblock.io)
-#   SIWEOIDC_HOST   (default siwx-oidc.inblock.io)
-#   CLIENT_HOST     (default element.inblock.io)
+# Env (the three hosts are required; there is no default target):
+#   MATRIX_HOST, SIWEOIDC_HOST, CLIENT_HOST   host names, no scheme
 #   E2E_TEST_REPO       (default https://github.com/inblockio/aqua-matrix-agent.git)
 #   E2E_TEST_LOCAL_PATH (use a local checkout instead of cloning)
+#   E2E_CACHE_DIR       where the clone and its build are kept between runs
+#                       (default ${XDG_CACHE_HOME:-$HOME/.cache}/siwx-oidc-matrix-server/aqua-matrix-agent)
+#   E2E_AGENT_KEY       the agent's key file (default <checkout>/agent.pem)
 
-MATRIX_HOST="${MATRIX_HOST:-matrix.inblock.io}"
-SIWEOIDC_HOST="${SIWEOIDC_HOST:-siwx-oidc.inblock.io}"
-CLIENT_HOST="${CLIENT_HOST:-element.inblock.io}"
+MATRIX_HOST="${MATRIX_HOST:-}"
+SIWEOIDC_HOST="${SIWEOIDC_HOST:-}"
+CLIENT_HOST="${CLIENT_HOST:-}"
 E2E_TEST_REPO="${E2E_TEST_REPO:-https://github.com/inblockio/aqua-matrix-agent.git}"
 E2E_TEST_LOCAL_PATH="${E2E_TEST_LOCAL_PATH:-}"
+E2E_CACHE_DIR="${E2E_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/siwx-oidc-matrix-server/aqua-matrix-agent}"
+E2E_AGENT_KEY="${E2E_AGENT_KEY:-}"
+
+if [ -z "$MATRIX_HOST" ] || [ -z "$SIWEOIDC_HOST" ] || [ -z "$CLIENT_HOST" ]; then
+  echo "Set MATRIX_HOST, SIWEOIDC_HOST and CLIENT_HOST to the deployment to verify, e.g." >&2
+  echo "  MATRIX_HOST=matrix.example.org SIWEOIDC_HOST=siwx-oidc.example.org CLIENT_HOST=element.example.org $0" >&2
+  exit 2
+fi
 
 # Canonical issuer must carry the trailing slash (RFC 8414 3.3 byte-match).
 EXPECTED_ISSUER="https://${SIWEOIDC_HOST}/"
@@ -178,7 +190,8 @@ if [ "$DO_E2EE" = true ]; then
     E2E_DIR="$E2E_TEST_LOCAL_PATH"
     echo "  Using local test repo: $E2E_DIR"
   else
-    E2E_DIR="/tmp/aqua-matrix-agent-e2e"
+    E2E_DIR="$E2E_CACHE_DIR"
+    mkdir -p "$(dirname "$E2E_DIR")"
     if [ -d "$E2E_DIR/.git" ]; then
       git -C "$E2E_DIR" fetch origin >/dev/null 2>&1 && git -C "$E2E_DIR" checkout origin/main --detach >/dev/null 2>&1
     else
@@ -193,14 +206,16 @@ if [ "$DO_E2EE" = true ]; then
     echo "  Building test binary..."
     (cd "$E2E_DIR" && cargo build --release >/dev/null 2>&1) || true
     AGENT_BIN="$E2E_DIR/target/release/aqua-matrix-agent"
-    AGENT_KEY="$E2E_DIR/agent.pem"
+    AGENT_KEY="${E2E_AGENT_KEY:-$E2E_DIR/agent.pem}"
     if [ ! -f "$AGENT_BIN" ] || [ ! -f "$AGENT_KEY" ]; then
       fail "E2EE test binary or agent key missing"
     else
-      TEST_STORE="/tmp/aqua-verify-smoke-$$"
-      rm -rf "$TEST_STORE"
+      TEST_STORE="$(mktemp -d "${TMPDIR:-/tmp}/aqua-verify-smoke.XXXXXX")"
       MSG="verify-smoke-$(date +%s)"
+      # Name the targets explicitly: the agent's own defaults are not this
+      # deployment.
       OUTPUT=$("$AGENT_BIN" --key-file "$AGENT_KEY" --store-dir "$TEST_STORE" \
+        --siwx-url "https://${SIWEOIDC_HOST}" --matrix-url "https://${MATRIX_HOST}" \
         --message "$MSG" --read --read-limit 5 2>&1) || true
       if echo "$OUTPUT" | grep -q "$MSG"; then
         pass "E2EE message sent and read back"

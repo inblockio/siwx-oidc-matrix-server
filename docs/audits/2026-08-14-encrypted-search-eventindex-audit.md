@@ -3,20 +3,17 @@
 > **Superseded gate (note added 2026-09-25):** this audit describes the retired
 > `feature_inblock_encrypted_search` key and hostname allowlist. Since
 > 2026-09-13 the only gate is `features.feature_web_event_index` (true in
-> `config/element-config.json`, on both prod and dev-staging); nothing reads the
-> old key. See `patches/element-web/README.md` entry 6.
+> `config/element-config.json`); nothing reads the old key. See
+> `patches/element-web/README.md` entry 6.
 
 Date: 2026-08-14
-Target: `dev.element.inblock.io`, then prod `element.inblock.io` after
-explicit 2026-08-15 go-ahead.
-Image (staging-verified, promoted):
-`ghcr.io/inblockio/siwx-oidc-matrix-server/element-web@sha256:0013c05351ddcf0eb399d92e3f23e159cc7911e17034d05f55e2b1aeb964ecec`
-Prod enablement: `features.feature_inblock_encrypted_search: true` in the
-bind-mounted `config/element-config.json`. Hostname allowlist is unchanged
-(still staging/localhost); the flag is the prod switch.
+Target: the maintainers' staging deployment, then their production deployment.
+Enablement at the time: `features.feature_inblock_encrypted_search: true` in the
+bind-mounted `config/element-config.json`, with the hostname allowlist
+(staging/localhost) unchanged.
 
-This file is the blocking Phase-6 deliverable of
-`docs/2026-08-14-HANDOVER-encrypted-search-browser-eventindex.md`.
+This file is the blocking Phase-6 deliverable of the 2026-08-14
+encrypted-search implementation brief.
 
 ## Product choice (recorded)
 
@@ -183,7 +180,7 @@ export, no HTTP). `aqua-matrix-agent` is unchanged.
 
 ## Homeserver traffic
 
-Nothing is uploaded to `dev.matrix.inblock.io` except ordinary
+Nothing is uploaded to the homeserver except ordinary
 client-server traffic the stock app already does (sync, `/messages`
 pagination for the crawler, media). Search queries stay in the page.
 
@@ -194,7 +191,7 @@ pagination for the crawler, media). Search queries stay in the page.
 | Crypto / search invariants | `scripts/browser-eventindex-invariants.mjs` | 8/8 pass (2026-08-14) |
 | Manager unit | patch `BrowserEventIndexManager.test.ts` | shipped in image; run in Element vitest |
 | Patch apply | Dockerfile order on v1.12.24 | applies after the five existing patches |
-| UX1–UX8 | staging, throwaway account | see §Live staging |
+| UX1–UX8 | staging, throwaway account | see §Live UX run |
 
 `m.replace` behaviour (UX3): **new body is searchable, old body is
 not**; the hit keeps the **original** `event_id` so the timeline jump
@@ -207,19 +204,13 @@ local to the browser; rolling back the image does not need a server-side
 wipe. Users can also Settings → Message search → disable, or clear site
 data.
 
-## Live staging
+## Live UX run
 
-Executed 2026-08-14 after recreating **element-web only** on dev-aquafire.
-
-| Item | Value |
-|---|---|
-| Image | `ghcr.io/inblockio/siwx-oidc-matrix-server/element-web:dev` |
-| Digest | `sha256:f07affe02e36d197f098db53af488da334a6dbe77fd390ed42eee3134b75fd74` |
-| Previous digest (rollback) | `sha256:b14c927047e2ab3bf2cbce677b92c16dc31f9b9f26bf389cbf6d5bec797e3f60` |
-| Hook in served `init.js` | `inblock-ew-eventindex`, `inblock-ew-eventindex-v1`, `feature_inblock_encrypted_search`, `getEventIndexingManager` |
-| Prod `element.inblock.io` same strings | **0** (bundle `0c04db0c1d276ac6cb27`) |
-| UX runner | `~/siwx-oidc/e2e/element/ew-encrypted-search.spec.mjs` against `https://dev.element.inblock.io` |
-| UX result | **1 passed (45.1s)** — throwaway `did:pkh:eip155:1:0x…` wallets, not production consultants |
+Run on 2026-08-14 against the staging deployment, after recreating only its
+element-web container, with siwx-oidc's Playwright suite
+`e2e/element/ew-encrypted-search.spec.mjs` and throwaway `did:pkh` wallets: 1 passed
+(45.1 s). The served `init.js` carried the hook's markers (`inblock-ew-eventindex`,
+`feature_inblock_encrypted_search`, `getEventIndexingManager`).
 
 | Check | Result | Evidence |
 |---|---|---|
@@ -231,43 +222,11 @@ Executed 2026-08-14 after recreating **element-web only** on dev-aquafire.
 | UX6 second account cannot search the first | **pass** | New wallet, same Playwright browser context (shared profile); `search(firstToken).count === 0` |
 | UX7 reload while logged in still searches | **pass** | `page.reload()` then `mxEventIndexPeg.get() != null` |
 | UX8 SIWX login golden path unchanged | **pass** | Two fresh OIDC logins (account 1 + account 2) completed Secure Backup and reached the app shell; no CORS/issuer page errors |
-| Prod `element.inblock.io` still false | **pass** | hostname gate + no prod deploy; prod bundle marker count 0 |
 | I1 IDB dump is ciphertext | **pass** (unit + design) | Invariants script; live logout dump had no plaintext bodies. Ciphertext blobs optional. |
 | I7 no search request in Network | **pass** (code + design) | `searchEventIndex` is in-process; no query `fetch`. Crawl still uses stock `/messages`. |
 
-## Prod promotion (2026-08-15)
+## Promotion
 
-Explicit go-ahead. **Not** `deploy.sh --restart` (that would `compose down` the
-whole stack and override digest pins with floating tags).
-
-| Item | Value |
-|---|---|
-| Action | Recreate **element-web only** on `agentic.inblock.io` |
-| New digest | `sha256:0013c05351ddcf0eb399d92e3f23e159cc7911e17034d05f55e2b1aeb964ecec` (staging-verified) |
-| Previous digest (rollback) | `sha256:aa878627328dfa5a2f085a25bf92c3791d386b03b6d3becc73fa6d932ee0ed20` |
-| Enablement | `features.feature_inblock_encrypted_search: true` in bind-mounted `config/element-config.json` |
-| Config backup | `config/element-config.json.bak-ewsearch-20260814T222047Z` |
-| Env backup | `.env.bak-ewsearch-20260814T222047Z` |
-| Synapse / siwx-oidc / LiveKit | unchanged (10d / 2w / 10d uptime) |
-
-Stage 3a (2026-08-15): issuer slash, metadata byte-match, endpoints, S256,
-auth_metadata, CORS, config pins homeserver — **all PASS**. Served
-`config.json` has the flag `true`, `sso_redirect_options.immediate`,
-`force_verification`, permalink `https://element.inblock.io`. Bundle
-`3741aa948e19a2b4f8f0/init.js` contains `inblock-ew-eventindex` and
-`feature_inblock_encrypted_search`.
-
-Rollback (element-web only):
-
-```bash
-# on agentic.inblock.io, /home/deploy/matrix/stack
-# restore ELEMENT_IMAGE_REF from .env.bak-ewsearch-20260814T222047Z
-# restore config/element-config.json from the matching bak (or set the flag false)
-docker compose pull element-web
-docker compose up -d --no-deps --force-recreate element-web
-```
-
-Hard-reload the browser after deploy so the new hashed bundle loads. Existing
-sessions pick up the EventIndex on the next full reload while still logged in.
-
-Note: the staging `matrix-staging-deploy.timer` independently pulled the same CI run's rebuilt `synapse:dev` (~1 minute before the element-web recreate). LiveKit / siwx-oidc / redis stayed at 7 days uptime. This work's compose command was `up -d --no-deps element-web` only.
+The build was promoted to the maintainers' production deployment on 2026-08-15,
+recreating element-web only; that deployment's records are kept outside this
+repository.

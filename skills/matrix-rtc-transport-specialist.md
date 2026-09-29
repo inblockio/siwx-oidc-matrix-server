@@ -60,43 +60,46 @@ Synapse    lk-jwt-service   LiveKit SFU
 | MSC4222 | `state_after` in sync v2: correct room state tracking | `msc4222_enabled: true` |
 | MSC3266 | Room Summary API: federation knocking | `msc3266_enabled: true` |
 
-## New services (docker-compose.yml)
+## Services (docker-compose.yml)
 
-Two new services are added to `docker-compose.yml`:
+Two services carry MatrixRTC. Their full definitions, with the reasons for each
+setting, are in `docker-compose.yml`; the points that matter:
 
 ```yaml
 livekit:
-  image: livekit/livekit-server:v1.12.0   # pin; do not use :latest (deploy pulls would jump SFU versions)
-  restart: unless-stopped
+  image: ${LIVEKIT_IMAGE_REF:-livekit/livekit-server:v1.13.7@sha256:…}   # pinned; never :latest
   command: --config /etc/livekit.yaml
+  environment:
+    LIVEKIT_KEYS: "${LIVEKIT_KEY}: ${LIVEKIT_SECRET}"
   ports:
-    - "7881:7881/tcp"
-    - "20100-20200:20100-20200/udp"
+    - "7881:7881/tcp"                    # WebRTC over TCP fallback
+    - "20100-20200:20100-20200/udp"      # WebRTC media
+    - "3478:3478/udp"                    # embedded TURN, UDP leg (TLS leg: see Embedded TURN)
   volumes:
     - ./config/livekit.yaml:/etc/livekit.yaml:ro
-  networks:
-    - portal-net
-    - default
 
 lk-jwt-service:
-  image: ghcr.io/element-hq/lk-jwt-service:latest
-  restart: unless-stopped
+  image: ${LK_JWT_IMAGE_REF:-ghcr.io/element-hq/lk-jwt-service:0.7.0@sha256:…}   # pinned
   environment:
-    LIVEKIT_URL: "wss://${MATRIX_HOST}/livekit/sfu"
+    LIVEKIT_URL: "wss://${MATRIX_HOST}/livekit/sfu"    # the PUBLIC URL; see below
     LIVEKIT_KEY: "${LIVEKIT_KEY}"
     LIVEKIT_SECRET: "${LIVEKIT_SECRET}"
     LIVEKIT_JWT_BIND: ":8080"
-    LIVEKIT_INSECURE_SKIP_VERIFY_TLS: "${LIVEKIT_INSECURE_SKIP_VERIFY_TLS:-false}"
-  depends_on:
-    matrix_synapse:
-      condition: service_healthy
-  networks:
-    - portal-net
-    - default
+    LIVEKIT_FULL_ACCESS_HOMESERVERS: "${MATRIX_HOST}"  # explicit hostname, never "*"
+  healthcheck:
+    disable: true
 ```
 
-**Note:** lk-jwt-service uses a scratch/distroless image with no shell, wget, or
-curl. Do not add a Docker healthcheck; monitor via Caddy route (`/livekit/jwt/healthz`).
+- **`LIVEKIT_URL` stays the public `wss://` URL.** lk-jwt-service (verified through
+  0.6.0) uses it both for the SFU URL it hands to clients and for its own room-creation
+  (Twirp) call, so that call comes back in through the proxy. The proxy therefore admits `/livekit/sfu/twirp/*`
+  only from private source addresses (see `Caddyfile.local`).
+- **`LIVEKIT_FULL_ACCESS_HOMESERVERS` is mandatory** since lk-jwt-service 0.5.0 (it exits
+  at startup without it). Since 0.7.0, users of other homeservers get subscribe-only
+  tokens.
+- **The healthcheck is disabled.** lk-jwt-service 0.6.0's image-level healthcheck cannot
+  pass with any `LIVEKIT_JWT_BIND` value (the comment in `docker-compose.yml` has the
+  details). Probe `/livekit/jwt/healthz` through the proxy instead.
 
 ### Why these port choices
 
@@ -106,10 +109,14 @@ curl. Do not add a Docker healthcheck; monitor via Caddy route (`/livekit/jwt/he
   needs — the stack was on 50100-50200 until 2026-08-01 for exactly that reason.
   Keep the range small (100 ports); Docker creates individual iptables rules per
   port, and large ranges cause slow container startup. 100 ports supports ~50
-  concurrent participants.
-- **7880** is NOT exposed to host; Caddy proxies it internally via Docker network.
+  concurrent participants. The range must match `rtc.port_range_start/end` in
+  `config/livekit.yaml`.
+- **3478/udp**: TURN over UDP (embedded TURN).
+- **7880** is NOT exposed to host; the proxy reaches it over the Docker network.
 
-## New file: config/livekit.yaml
+## config/livekit.yaml
+
+The shape of the file (see the file itself for the comments):
 
 ```yaml
 port: 7880
@@ -120,48 +127,56 @@ rtc:
   port_range_start: 20100
   port_range_end: 20200
   use_external_ip: true
-  # If the LiveKit container is attached to more than one docker network (e.g.
-  # a compose-default net PLUS a shared reverse-proxy net so Caddy can reach
-  # :7880), STUN can succeed on one interface and fail with "context canceled"
-  # on the other — and LiveKit then advertises the OTHER network's private IP
-  # as if it were external. Exclude that subnet so it's never offered as an
-  # ICE candidate. See the troubleshooting entry below ("call connects, zero
-  # media").
-  ips:
-    excludes:
-      - "172.18.0.0/16"
+  # On a host where LiveKit sits on two docker networks, exclude the proxy
+  # network's subnet (host-specific, so not set in the shipped file). See the
+  # troubleshooting entry below ("call connects, zero media").
+  # ips:
+  #   excludes:
+  #     - "<subnet of portal-net>"
 room:
   auto_create: false
 logging:
   level: info
 turn:
-  enabled: false
+  enabled: false             # true only with the caddy-l4 edge; see "Embedded TURN"
+  domain: turn.example.org   # your TURN host name
+  external_tls: true
+  tls_port: 5349
+  udp_port: 3478
 ```
+
+The shipped file has TURN off and no `rtc.ips.excludes`: both depend on the host. Look
+the proxy network's subnet up with
+`docker network inspect portal-net -f '{{range .IPAM.Config}}{{.Subnet}}{{end}}'`.
 
 No `keys:` block: `LIVEKIT_KEYS` in the environment replaces file keys entirely,
 so a placeholder here is dead config that only invites someone to trust it.
 
-**Note:** The `keys` section uses placeholder values. The entrypoint or start-matrix.sh
-must template the actual `LIVEKIT_KEY` and `LIVEKIT_SECRET` into this file, or use
-environment variables `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` which override
-the config file.
+### LiveKit credentials
 
-### Generating LiveKit credentials
+`start-matrix.sh` generates them when it first writes `.env`:
 
 ```bash
 LIVEKIT_KEY="API$(openssl rand -hex 8)"
 LIVEKIT_SECRET="$(openssl rand -base64 32)"
 ```
 
-These go into `.env` and must match between lk-jwt-service and LiveKit.
+They must match between lk-jwt-service and LiveKit. An existing `.env` written before
+LiveKit was added has neither; add both by hand. **The correct server variable is
+`LIVEKIT_KEYS`** (not `LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET`, which are client SDK
+variables), in the YAML key-value form `"<key>: <secret>"`.
 
-## Changes to existing files
+## What the rest of the stack configures
 
-### 1. entrypoints/matrix_server.sh (first-boot block)
+### 1. Synapse (`entrypoints/matrix_server.sh`, every boot)
 
-Add after the MSC4108 line:
+`apply_matrixrtc_config()` runs on **every** boot, not only the first, so a change to it
+reaches an existing deployment at the next restart of an image that carries it:
 
 ```bash
+# Enable QR code login rendezvous server (MSC4108 2024 version)
+yq -i ".experimental_features.msc4108_enabled = true" /data/homeserver.yaml
+
 # MatrixRTC: enable experimental features for Element Call
 yq -i ".experimental_features.msc4143_enabled = true" /data/homeserver.yaml
 yq -i ".experimental_features.msc3266_enabled = true" /data/homeserver.yaml
@@ -184,173 +199,74 @@ yq -i ".matrix_rtc.transports[0].type = \"livekit\"" /data/homeserver.yaml
 yq -i ".matrix_rtc.transports[0].livekit_service_url = \"https://${MATRIX_HOST}/livekit/jwt\"" /data/homeserver.yaml
 ```
 
-### 2. Caddyfile.production
+Synapse 1.161 deprecates `livekit_service_url` in favour of `url`. Keep
+`livekit_service_url` and do not add `url`: a client that sees `url` reaches the LiveKit
+authorization service through the client-server API, which needs lk-jwt-service
+registered as an application service, and here it is not.
 
-Add `org.matrix.msc4143.rtc_foci` to the `.well-known/matrix/client` response:
+### 2. Reverse proxy
 
-```
-handle /.well-known/matrix/client {
-    header Access-Control-Allow-Origin *
-    respond `{"m.homeserver": {"base_url": "https://matrix.inblock.io"}, "m.authentication": {"issuer": "https://siwx-oidc.inblock.io"}, "org.matrix.msc4143.rtc_foci": [{"type": "livekit", "livekit_service_url": "https://matrix.inblock.io/livekit/jwt"}]}`
-}
-```
-
-Add LiveKit proxy routes (before the catch-all `handle`):
-
-```
-# MatrixRTC: lk-jwt-service (OpenID -> LiveKit JWT exchange)
-handle_path /livekit/jwt {
-    reverse_proxy lk-jwt-service:8080
-}
-handle_path /livekit/jwt/* {
-    reverse_proxy lk-jwt-service:8080
-}
-
-# MatrixRTC: LiveKit SFU WebSocket signaling
-handle_path /livekit/sfu/* {
-    reverse_proxy livekit:7880
-}
-```
-
-### 3. Caddyfile.local
-
-Same pattern but with `localhost` URLs:
+Add `org.matrix.msc4143.rtc_foci` to the `.well-known/matrix/client` response (the
+issuer keeps its trailing slash, byte-equal to siwx-oidc's own issuer):
 
 ```
 handle /.well-known/matrix/client {
     header Access-Control-Allow-Origin *
-    respond `{"m.homeserver": {"base_url": "http://localhost:8080"}, "m.authentication": {"issuer": "http://localhost:8081"}, "org.matrix.msc4143.rtc_foci": [{"type": "livekit", "livekit_service_url": "http://localhost:8080/livekit/jwt"}]}`
-}
-
-handle_path /livekit/jwt {
-    reverse_proxy lk-jwt-service:8080
-}
-handle_path /livekit/jwt/* {
-    reverse_proxy lk-jwt-service:8080
-}
-handle_path /livekit/sfu/* {
-    reverse_proxy livekit:7880
+    respond `{"m.homeserver": {"base_url": "https://matrix.example.org"}, "m.authentication": {"issuer": "https://siwx-oidc.example.org/", "account": "https://siwx-oidc.example.org/account"}, "org.matrix.msc4143.rtc_foci": [{"type": "livekit", "livekit_service_url": "https://matrix.example.org/livekit/jwt"}]}`
 }
 ```
 
-### 4. config/element-config.json
+Route `/livekit/jwt` and `/livekit/jwt/*` to `lk-jwt-service:8080`, and `/livekit/sfu`,
+`/livekit/sfu/*` to `livekit:7880`, with `/livekit/sfu/twirp/*` refused (403) for
+non-private source addresses. `Caddyfile.local` has the exact blocks, including the bare
+`/livekit/sfu` path that `/livekit/sfu/*` does not match.
 
-Add Element Call configuration:
+### 3. config/element-config.json
 
 ```json
-{
-  "default_server_config": {
-    "m.homeserver": {
-      "base_url": "%%MATRIX_BASE_URL%%",
-      "server_name": "%%MATRIX_HOST%%"
-    }
-  },
-  "disable_custom_urls": true,
-  "disable_guests": true,
-  "disable_login_language_selector": true,
-  "brand": "inblock.io Chat",
-  "element_call": {
-    "url": "https://call.element.io",
-    "use_exclusively": true,
-    "brand": "inblock.io Call"
-  },
-  "features": {
-    "feature_group_calls": true,
-    "feature_video_rooms": true,
-    "feature_element_call_video_rooms": true
-  }
+"element_call": {
+  "use_exclusively": true,
+  "brand": "inblock.io Call"
+},
+"features": {
+  "feature_group_calls": true,
+  "feature_video_rooms": true,
+  "feature_element_call_video_rooms": true
 }
 ```
 
+There is no `element_call.url`: Element Web uses the Element Call build embedded in its
+bundle (`@element-hq/element-call-embedded`, which moves with the Element Web tag).
 `use_exclusively: true` disables legacy 1:1 calls and Jitsi; all calls go
 through MatrixRTC. This is correct because the stack has no Jitsi or TURN
 for legacy calls.
 
-### 5. .env.example
+## Existing deployments
 
-Add new variables:
+The Synapse settings above are re-applied on every boot, so an existing deployment picks
+them up by restarting `matrix_synapse` on an image that carries them; no manual `yq` is
+needed. What an existing deployment may still lack:
 
-```bash
-#--- LiveKit (MatrixRTC / Element Call) ---
-# [auto] API key for LiveKit SFU (generated by start-matrix.sh):
-# LIVEKIT_KEY=API<random>
-# [auto] Shared secret between lk-jwt-service and LiveKit (generated by start-matrix.sh):
-# LIVEKIT_SECRET=<random-base64>
-# Skip TLS verification for lk-jwt-service -> Synapse OpenID validation (local dev only):
-# LIVEKIT_INSECURE_SKIP_VERIFY_TLS=true
-```
-
-### 6. start-matrix.sh
-
-Add LiveKit credential generation (alongside existing SIWEOIDC_SIGNING_KEY_PEM generation):
-
-```bash
-if ! grep -q '^LIVEKIT_KEY=' .env 2>/dev/null; then
-  LIVEKIT_KEY="API$(openssl rand -hex 8)"
-  LIVEKIT_SECRET="$(openssl rand -base64 32)"
-  echo "LIVEKIT_KEY=${LIVEKIT_KEY}" >> .env
-  echo "LIVEKIT_SECRET=${LIVEKIT_SECRET}" >> .env
-fi
-```
-
-### 7. config/livekit.yaml templating
-
-The `LIVEKIT_KEY` and `LIVEKIT_SECRET` values must be injected into
-`config/livekit.yaml` at container start. Two approaches:
-
-**The correct env var is `LIVEKIT_KEYS`** (not `LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET`,
-which are client SDK vars). Format: YAML key-value string.
-
-```yaml
-environment:
-  LIVEKIT_KEYS: "${LIVEKIT_KEY}: ${LIVEKIT_SECRET}"
-```
-
-This overrides the `keys:` section in the YAML config.
-
-## Existing deployment considerations
-
-### First-boot vs. existing deployments
-
-The `entrypoints/matrix_server.sh` changes only run on **first boot** (when
-`/data/homeserver.yaml` does not exist). For existing deployments (where
-homeserver.yaml already exists), apply the Synapse config manually:
-
-```bash
-SSH_CMD="ssh -i ~/.ssh/id_ed25519 root@agentic.inblock.io"
-
-$SSH_CMD "cd /home/matrix/stack && docker compose exec matrix_synapse sh -c '
-  yq -i \".experimental_features.msc4143_enabled = true\" /data/homeserver.yaml &&
-  yq -i \".experimental_features.msc3266_enabled = true\" /data/homeserver.yaml &&
-  yq -i \".experimental_features.msc4222_enabled = true\" /data/homeserver.yaml &&
-  yq -i \".max_event_delay_duration = \\\"24h\\\"\" /data/homeserver.yaml &&
-  yq -i \".rc_delayed_event_mgmt.per_second = 1\" /data/homeserver.yaml &&
-  yq -i \".rc_delayed_event_mgmt.burst_count = 20\" /data/homeserver.yaml &&
-  yq -i \".rc_message.per_second = 0.5\" /data/homeserver.yaml &&
-  yq -i \".rc_message.burst_count = 30\" /data/homeserver.yaml &&
-  yq -i \".matrix_rtc.transports[0].type = \\\"livekit\\\"\" /data/homeserver.yaml &&
-  yq -i \".matrix_rtc.transports[0].livekit_service_url = \\\"https://matrix.inblock.io/livekit/jwt\\\"\" /data/homeserver.yaml
-'"
-
-$SSH_CMD "cd /home/matrix/stack && docker compose restart matrix_synapse"
-```
+- `LIVEKIT_KEY` and `LIVEKIT_SECRET` in `.env` (see above);
+- the proxy routes and the `rtc_foci` entry in `.well-known/matrix/client`;
+- the firewall rules below.
 
 ### Firewall
 
-The production server must allow:
+The host must allow:
 
 | Port | Protocol | Purpose |
 |---|---|---|
 | 7881 | TCP | LiveKit WebRTC-over-TCP fallback |
 | 20100-20200 | UDP | WebRTC media (audio/video) |
+| 3478 | UDP | TURN over UDP (embedded TURN) |
 
-These are in addition to existing ports (22, 80, 443, 8448).
+These are in addition to 80 and 443 for the reverse proxy.
 
 ### Synapse version
 
 Synapse v1.140.0+ is required for `matrix_rtc` config and `/rtc/transports`.
-The stack uses `matrixdotorg/synapse:latest`, which satisfies this. If pinning
-versions, ensure >= 1.140.0.
+The stack pins `matrixdotorg/synapse:v1.161.0` (`dockerfiles/Dockerfile`).
 
 ## Verification checklist
 
@@ -358,26 +274,27 @@ After deployment, verify each component:
 
 ```bash
 # 1. .well-known includes rtc_foci
-curl -sf https://matrix.inblock.io/.well-known/matrix/client | jq '.["org.matrix.msc4143.rtc_foci"]'
-# Expected: [{"type":"livekit","livekit_service_url":"https://matrix.inblock.io/livekit/jwt"}]
+curl -sf https://matrix.example.org/.well-known/matrix/client | jq '.["org.matrix.msc4143.rtc_foci"]'
+# Expected: [{"type":"livekit","livekit_service_url":"https://matrix.example.org/livekit/jwt"}]
 
 # 2. Synapse exposes /rtc/transports (requires auth)
 # Get a valid access token first, then:
 curl -sf -H "Authorization: Bearer $TOKEN" \
-  https://matrix.inblock.io/_matrix/client/v1/rtc/transports | jq .
+  https://matrix.example.org/_matrix/client/v1/rtc/transports | jq .
 # Expected: {"transports":[{"type":"livekit","livekit_service_url":"..."}]}
 
 # 3. lk-jwt-service is healthy
-curl -sf https://matrix.inblock.io/livekit/jwt/healthz
+curl -sf https://matrix.example.org/livekit/jwt/healthz
 # Expected: 200 OK
 
-# 4. LiveKit SFU WebSocket reachable (should upgrade)
-curl -sf -o /dev/null -w '%{http_code}' https://matrix.inblock.io/livekit/sfu/
+# 4. LiveKit SFU reachable through the proxy
+curl -sf -o /dev/null -w '%{http_code}' https://matrix.example.org/livekit/sfu/
 # Expected: 200 or 101 (WebSocket upgrade)
 
-# 5. All containers healthy
+# 5. All containers up
 docker compose ps
-# Expected: livekit, lk-jwt-service, matrix_synapse, element-web, siwx-oidc, redis all "healthy" or "Up"
+# Expected: livekit, matrix_synapse, element-web, siwx-oidc, redis "healthy";
+# lk-jwt-service "Up" (its healthcheck is disabled)
 
 # 6. End-to-end call test
 # Open Element Web in two browser tabs, log in as different users,
@@ -392,18 +309,19 @@ docker compose ps
 | 1:1 call ends for both ~18s after one side's network blips, even though LiveKit logged a successful resume ("ice reconnected or switched pair") | MSC4140 delayed-leave dead-man's switch fired: that client's heartbeat (`POST .../delayed_events/<id>/restart`, every ~4-5s) stopped for >18s, so Synapse sent its scheduled `m.call.member` leave; the peer's client then hangs up cleanly (`CLIENT_REQUEST_LEAVE` in LiveKit + its own `/send`) | Not server-configurable: the 18s expiry is chosen by the client SDK, and Element Call v0.15.0 removed the `membership_server_side_expiry_timeout` config. Root cause is client connectivity; see "Diagnosing call drops" below |
 | MISSING_MATRIX_RTC_FOCUS | `.well-known/matrix/client` missing `rtc_foci` | Add `org.matrix.msc4143.rtc_foci` to well-known response |
 | Call connects but no audio/video | UDP ports blocked by firewall | Open 20100-20200/udp on the host |
-| "Failed to get SFU config" | lk-jwt-service unreachable or misconfigured | Check Caddy route for `/livekit/jwt`; check lk-jwt-service logs |
+| "Failed to get SFU config" | lk-jwt-service unreachable or misconfigured | Check the proxy route for `/livekit/jwt`; check lk-jwt-service logs |
 | lk-jwt-service rejects OpenID token | Synapse not reachable from lk-jwt-service container | Verify Docker network; lk-jwt-service validates tokens against Synapse's federation endpoint |
+| lk-jwt-service exits at startup | `LIVEKIT_FULL_ACCESS_HOMESERVERS` unset | Set it to the homeserver's name (never `*`) |
 | Calls stuck / never end | MSC4140 (delayed events) not configured | Set `max_event_delay_duration: 24h` in homeserver.yaml |
-| "Room not found" in LiveKit | `room.auto_create: true` but LIVEKIT_FULL_ACCESS_HOMESERVERS not set | Either set `auto_create: false` (lk-jwt-service creates rooms) or set LIVEKIT_FULL_ACCESS_HOMESERVERS |
-| WebSocket 502 on /livekit/sfu/ | Caddy not routing to LiveKit container | Check Caddy handle block; ensure LiveKit container is on `portal-net` network |
+| "Room not found" in LiveKit | `room.auto_create: false` and lk-jwt-service could not create the room | Check that its Twirp call through the proxy is admitted (private source address) and that `LIVEKIT_FULL_ACCESS_HOMESERVERS` names this homeserver |
+| WebSocket 502 on /livekit/sfu/ | Proxy not routing to the LiveKit container | Check the proxy's handle block; ensure the LiveKit container is on `portal-net` |
 | Call connects, zero media, DTLS timeouts in LiveKit logs; works when both peers are on-box but not for real external clients | LiveKit is multi-homed (attached to both the compose-default net and a shared reverse-proxy net). STUN fails on the proxy-net interface and LiveKit advertises that private bridge IP as an external ICE candidate alongside the real one. A remote client that selects the private candidate can never complete DTLS. | Check `docker logs <livekit> \| grep 'using external IPs'` — more than one IP in the list confirms it. Add `rtc.ips.excludes` for the private subnet (see the `config/livekit.yaml` example above); restart LiveKit; re-check the log line shows exactly one (public) IP. |
 
 ## Diagnosing call drops
 
 Worked example: 2026-06-11, five 1:1 drops in 15 min, root-caused to one
-participant's mobile connectivity (see `docs/2026-06-11-call-drop-analysis.md`).
-Recipe (read-only SSH to production):
+participant's mobile connectivity.
+Recipe (read-only, in the stack directory on the host):
 
 ```bash
 # 1. Who left, and why? CLIENT_REQUEST_LEAVE = deliberate client hangup;
@@ -429,16 +347,10 @@ if in-call key sharing is rate-limited, fix `rc_message` (values above).
 
 ## Embedded TURN
 
-**Status (2026-08-03): enabled on dev-staging only** (`config/livekit.dev-staging.yaml`),
-via **TLS-edge termination (caddy-l4)**, production stays `turn: enabled:
-false` (`config/livekit.yaml`) pending graduation (checklist below). Full
-hypothesis register, verification evidence, and the prod-graduation
-checklist live in
-`docs/superpowers/plans/2026-08-03-turn-tls-edge-termination.md` (current
-design) and its predecessor
-`docs/superpowers/plans/2026-08-02-livekit-embedded-turn.md` (original
-embedded-TURN rollout, dev-staging-only pre-edge-termination) — read both
-before touching prod TURN config. ~10-20% of real-world sessions need TURN
+**Status:** `config/livekit.yaml` ships with embedded TURN **off**. It is built for
+**TLS-edge termination (caddy-l4)**: enable it (`turn.enabled: true`, `turn.domain`
+set to your TURN host) only on a deployment whose edge carries the `layer4` wrapper
+described below. ~10-20% of real-world sessions need TURN
 (LiveKit guidance); before this, ICE-TCP on 7881 was the only
 UDP-hostile-network fallback.
 
@@ -446,7 +358,7 @@ UDP-hostile-network fallback.
 
 ```
 client
-  |  turns:dev.turn.matrix.inblock.io:443  (TLS, SNI = dev.turn.matrix.inblock.io)
+  |  turns:turn.example.org:443  (TLS, SNI = turn.example.org)
   v
 caddy-l4 (dockerfiles/Dockerfile.caddy-l4, layer4 listener_wrapper on :443)
   |  inspects ClientHello SNI BEFORE any TLS termination; only this exact
@@ -456,17 +368,15 @@ caddy-l4 (dockerfiles/Dockerfile.caddy-l4, layer4 listener_wrapper on :443)
 livekit (turn.external_tls: true, tls_port: 5349)
 ```
 
-Naming (operator-mandated, applies everywhere this is documented): **dev DNS
-puts `dev.` FIRST** — `dev.turn.matrix.inblock.io`, NOT
-`turn.dev.matrix.inblock.io`. Prod is the bare name,
-`turn.matrix.inblock.io`.
+The TURN domain (here `turn.example.org`) needs a DNS record pointing at the host and
+its own certificate at the edge.
 
-### The dev-staging turn block
+### The turn block
 
 ```yaml
 turn:
   enabled: true
-  domain: dev.turn.matrix.inblock.io
+  domain: turn.example.org
   external_tls: true
   tls_port: 5349
   udp_port: 3478
@@ -489,13 +399,13 @@ fmt.Sprintf("turns:%s:443?transport=tcp", domain)
 ```
 
 (`pkg/service/roommanager.go`, `iceServersForParticipant`, v1.12.0 tag; TURN
-server startup itself lives in `pkg/service/turn.go`.) Caddy owns 443 on both
-dev-staging and prod, and stock Caddy has no way to route a raw TLS stream by
+server startup itself lives in `pkg/service/turn.go`.) Caddy owns 443 on the host,
+and stock Caddy has no way to route a raw TLS stream by
 SNI to anything but its own HTTP handling — so a bare Caddy in front of
-LiveKit left this leg permanently inert (the state described in the
-predecessor plan doc). **caddy-l4's `layer4` listener_wrapper is what fixes
+LiveKit left this leg permanently inert (the state before the edge
+existed). **caddy-l4's `layer4` listener_wrapper is what fixes
 this**: it demuxes on SNI ahead of Caddy's normal `tls` wrapper, so the
-client's hardcoded `turns:dev.turn.matrix.inblock.io:443` now lands exactly
+client's hardcoded `turns:turn.example.org:443` now lands exactly
 where it needs to (see architecture diagram above). **TURN-UDP was never
 affected either way**: it's advertised correctly as
 `turn:<node-ip>:<udp_port>?transport=udp` straight against LiveKit's own
@@ -508,17 +418,16 @@ affected either way**: it's advertised correctly as
 `caddyserver/caddy/v2 v2.11.4` exactly — the Dockerfile's builder/final base
 tags must match that pin (see the Dockerfile header before bumping either
 version). Published by `.github/workflows/docker.yml` (matrix entry `image:
-caddy-l4`) to `ghcr.io/inblockio/siwx-oidc-matrix-server/caddy-l4` — this is
-the prod-graduation vehicle (portal-caddy-1 needs to adopt this image before
-prod TURN-TLS can graduate).
+caddy-l4`) to `ghcr.io/inblockio/siwx-oidc-matrix-server/caddy-l4`, so an
+edge can pull a digest-pinnable build instead of building on the host.
 
-`Caddyfile.dev-aquafire`'s global options block carries the actual wrapper:
+The edge Caddyfile's global options block carries the wrapper:
 
 ```
 servers :443 {
     listener_wrappers {
         layer4 {
-            @turn_sni tls sni dev.turn.matrix.inblock.io
+            @turn_sni tls sni turn.example.org
             route @turn_sni {
                 tls
                 proxy tcp/livekit:5349
@@ -539,7 +448,7 @@ from Caddy's shared cert cache, which is only populated if *something* in the
 Caddyfile owns automation for that hostname. That's this site block:
 
 ```
-dev.turn.matrix.inblock.io {
+turn.example.org {
     tls {
         issuer acme {
             disable_tlsalpn_challenge
@@ -558,49 +467,50 @@ port 80, which sits outside the `:443`-scoped `layer4` wrapper entirely.
 ### Cert-sync design — SUPERSEDED by edge termination
 
 The original design (LiveKit terminating TLS itself via
-`cert_file`/`key_file`, fed by a sync-copy of Caddy's ACME cert) is no longer
-what dev-staging runs. `scripts/livekit-turn-cert-sync.sh` and
-`systemd/livekit-turn-cert-sync.{service,timer}` are **retained in the repo**
-as tooling for the passthrough alternative (LiveKit terminating TLS directly,
-no edge SNI demux) — the plan doc's decision record explains why edge
-termination (variant 2) was chosen instead for dev/prod. They are unused by
-the current `config/livekit.dev-staging.yaml` / `docker-compose.dev-staging.yml`.
-Original description, for the passthrough variant: Caddy renews a Let's
-Encrypt cert by atomic rename inside its own ACME storage volume (700
-root:root); never bind-mount those files directly into the livekit container
-(pins the mount to a stale inode); the script sync-copies cert+key into
-`config/livekit-tls/` gated by a sha256 checksum state file, restarting
-`livekit` only when the bytes changed (no TLS hot reload in livekit-server).
+`cert_file`/`key_file`, fed by a sync-copy of Caddy's ACME cert) is retired;
+edge termination was chosen instead. It remains the passthrough alternative
+(LiveKit terminating TLS directly, no edge SNI demux). For that variant: Caddy
+renews a Let's Encrypt cert by atomic rename inside its own ACME storage
+volume (700 root:root); never bind-mount those files directly into the
+livekit container (pins the mount to a stale inode); sync-copy cert+key into
+`config/livekit-tls/` on a timer, gated by a sha256 checksum state file, and
+restart `livekit` only when the bytes changed (no TLS hot reload in
+livekit-server).
 
 ### Verification one-liners
 
 ```bash
-# TURN listeners bound on the box itself (dev-aquafire)
+# TURN listeners bound on the host itself
 ss -tlnp | grep 5349      # livekit's plaintext external_tls listener
 ss -ulnp | grep 3478      # TURN-UDP
 
 # End-to-end: dial :443 with the TURN SNI and confirm the LE cert for that
 # name comes back THROUGH the edge (proves the layer4 SNI match + the l4
 # `tls` terminator + the dummy site's cert automation all work together)
-openssl s_client -connect dev.turn.matrix.inblock.io:443 -servername dev.turn.matrix.inblock.io </dev/null 2>/dev/null | openssl x509 -noout -subject -enddate
+openssl s_client -connect turn.example.org:443 -servername turn.example.org </dev/null 2>/dev/null | openssl x509 -noout -subject -enddate
 
 # Caddy debug logs confirming the SNI match and the upstream dial (needs
 # `debug` log level; look for these two logger names specifically)
-docker logs caddy_proxy 2>&1 | grep 'caddy.listeners.layer4'   # the SNI matcher fired
-docker logs caddy_proxy 2>&1 | grep 'layer4.handlers.proxy'    # "dial upstream" to livekit:5349
+docker logs <caddy-container> 2>&1 | grep 'caddy.listeners.layer4'   # the SNI matcher fired
+docker logs <caddy-container> 2>&1 | grep 'layer4.handlers.proxy'    # "dial upstream" to livekit:5349
 
-# Force a client onto the relay path to prove the TLS leg actually carries
-# media end to end (aqua-agents, AQUA_E2E_FORCE_RELAY=1 — see T3 in the plan doc)
-AQUA_E2E_FORCE_RELAY=1 <aqua-e2e run command> # relay-forced round vs dev-staging
+# A real TURN-over-TLS allocation through the edge: scripts/turnprobe/main.go
+# mints TURN credentials from the LiveKit key and secret the way LiveKit does
+# (args: <LIVEKIT_KEY> <LIVEKIT_SECRET>) and allocates through TURN_PROBE_HOST:443.
+# It has no go.mod: build it in a scratch module that requires
+# github.com/jxskiss/base62 and github.com/pion/turn/v4.
+
+# To prove the TLS leg carries media end to end, force a test client onto the
+# relay path (ICE transport policy "relay") and run a call.
 ```
 
 ### Firewall
 
-`3478/udp` (TURN-UDP) must be allowed on **both** layers on dev-aquafire:
-`ufw allow 3478/udp` and the DigitalOcean cloud firewall for the droplet.
+`3478/udp` (TURN-UDP) must be allowed on **both** layers: the host firewall
+(`ufw allow 3478/udp`) and any cloud firewall in front of the host.
 `5349/tcp` (TURN-TLS) is **edge-internal only** — it is deliberately NOT
-host-published (see `docker-compose.dev-staging.yml`'s `livekit` service
-comment) and therefore needs **no** ufw rule; only the box's existing 443/tcp
+host-published (see the `livekit` service comment in `docker-compose.yml`)
+and therefore needs **no** ufw rule; only the host's existing 443/tcp
 rule (already open for the rest of the Caddy vhosts) matters for the TLS
 leg. Verify with `ss -tlnp | grep 5349` showing a listener bound only inside
 the container network namespace, not on a host-facing rule.
@@ -615,11 +525,10 @@ the default never blocks a real client and no override is needed.
 
 ## Known limitations
 
-- **LiveKit built-in TURN**: enabled on **dev-staging only** as of 2026-08-03,
-  via TLS-edge termination (see "Embedded TURN" above); production remains
-  disabled pending the prod-graduation checklist (needs portal-caddy-1 to
-  adopt the CI-built caddy-l4 image first). Until then, clients behind
-  symmetric NAT or strict corporate firewalls may fail to connect on prod.
+- **LiveKit built-in TURN** needs the caddy-l4 edge (see "Embedded TURN"
+  above). A deployment without it keeps the shipped `turn.enabled: false`, and
+  then clients behind symmetric NAT or strict corporate firewalls may fail to
+  connect.
 - **No TURN for legacy calls**: the stack has no coturn. Legacy 1:1 VoIP calls
   (non-MatrixRTC) will fail behind NAT. This is acceptable because
   `use_exclusively: true` routes all calls through MatrixRTC/LiveKit.
@@ -628,17 +537,15 @@ the default never blocks a real client and no override is needed.
   `.well-known` `rtc_foci` serves as the reliable fallback; Element Web
   checks both.
 
-## Implementation order
+## Checklist for a new deployment
 
-1. Add `config/livekit.yaml`
-2. Update `docker-compose.yml` (add livekit + lk-jwt-service services)
-3. Update `entrypoints/matrix_server.sh` (MSC flags + matrix_rtc block)
-4. Update `config/element-config.json` (element_call + features)
-5. Update `.env.example` (LIVEKIT_KEY, LIVEKIT_SECRET)
-6. Update `start-matrix.sh` (generate LiveKit credentials)
-7. Update `Caddyfile.production` (well-known rtc_foci + proxy routes)
-8. Update `Caddyfile.local` (same for local dev)
-9. Deploy: `./deploy.sh <ref> --build --restart`
-10. Apply Synapse config on existing deployment (yq commands above)
-11. Open firewall ports 7881/tcp and 20100-20200/udp
-12. Verify with checklist above
+1. `.env` has `LIVEKIT_KEY` and `LIVEKIT_SECRET` (`start-matrix.sh` writes them).
+2. `config/livekit.yaml`: to enable TURN, set `turn.enabled: true` and `turn.domain` to
+   your TURN host name; leave it off if your edge cannot split `:443` by SNI. If LiveKit
+   is on two docker networks, add the proxy network's subnet to `rtc.ips.excludes`.
+3. Reverse proxy: `rtc_foci` in `.well-known/matrix/client`, the `/livekit/jwt` and
+   `/livekit/sfu` routes, the Twirp restriction (see `Caddyfile.local`), and for TURN the
+   `layer4` wrapper plus the certificate site for the TURN host.
+4. Firewall: 7881/tcp, 20100-20200/udp, 3478/udp.
+5. Start or restart the stack; the Synapse settings are applied at every boot.
+6. Run the verification checklist above.

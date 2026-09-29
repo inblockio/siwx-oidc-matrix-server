@@ -1,7 +1,6 @@
 # Element-origin security headers — element-web upstream `apps/web/README.md`
-# "Important Security Notes" (checklist S1 in
-# docs/2026-07-31-element-deploy-audit-checklist.md; Section 1). These four
-# headers are exactly what S1 documents, no more:
+# "Important Security Notes" (called S1 below). These four headers are exactly
+# what S1 documents, no more:
 #
 #   X-Frame-Options: SAMEORIGIN
 #   Content-Security-Policy: frame-ancestors 'self'

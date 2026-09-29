@@ -37,8 +37,8 @@
 #               entrypoint). The suffix hashes the Dockerfile plus every file it
 #               COPYs, so editing the entrypoint or a patch yields a new tag and
 #               a rebuild, and an unchanged tree reuses the existing image.
-#               Not real-stack/Dockerfile.synapse: that one carries no MSC4133
-#               patch, and the full tier's did_field checks require it.
+#               Not real-stack/Dockerfile.synapse: that one runs the PUBLISHED
+#               image, and the harness exists to test the working tree.
 #
 # OVERRIDES (unchanged convention)
 #   SIWX_OIDC_IMAGE_REF / SYNAPSE_IMAGE_REF   use this image instead. An

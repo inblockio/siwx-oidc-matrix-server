@@ -5,15 +5,16 @@
 #
 # Checks security headers, cache-correctness (per the 2026-07-31 stale-cache/
 # wedged-SW incident), MSC1929 support well-known, and version-disclosure
-# banners. See docs/2026-07-31-element-deploy-audit-checklist.md for the
-# official-source citation behind every check below.
+# banners. The checks follow element-web's `apps/web/README.md` (security
+# notes, caching requirements), Synapse's `docs/reverse_proxy.md`, the MSC1929
+# support well-known in the Matrix spec, nginx's `server_tokens` and RFC 6797
+# (HSTS).
 #
 # Usage:
 #   element-deploy-audit.sh <element-origin> <matrix-origin> [--server-name <name>]
 #
 # Example:
-#   element-deploy-audit.sh https://dev.element.inblock.io https://dev.matrix.inblock.io
-#   element-deploy-audit.sh https://element.inblock.io https://matrix.inblock.io
+#   element-deploy-audit.sh https://element.example.org https://matrix.example.org
 #
 # Dependencies: curl, grep, awk (POSIX-ish). jq is used opportunistically for
 # the MSC1929 JSON check if present on PATH; a grep-level fallback covers its
@@ -30,7 +31,7 @@ FAIL_COUNT=0
 
 usage() {
     echo "Usage: $0 <element-origin> <matrix-origin> [--server-name <name>]" >&2
-    echo "Example: $0 https://dev.element.inblock.io https://dev.matrix.inblock.io" >&2
+    echo "Example: $0 https://element.example.org https://matrix.example.org" >&2
     exit 2
 }
 

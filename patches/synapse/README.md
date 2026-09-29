@@ -6,6 +6,13 @@ source for the Synapse image, and it applies exactly the patches listed here wit
 `patch --forward --batch --fuzz=0`, so **a patch that stops applying fails the image
 build loudly** — never silently at runtime.
 
+**License.** The patch and its test in this directory are licensed AGPL-3.0-or-later,
+not Apache-2.0 like the rest of the repository: the patch changes two Synapse files whose
+headers license them AGPL-3.0-or-later, and the test only runs inside Synapse's own test
+tree. The test's header says so (`SPDX-License-Identifier: AGPL-3.0-or-later`) and keeps
+the copyright notice of `tests/rest/client/test_profile.py`, whose set-up code it reuses.
+See [`NOTICE`](../../NOTICE) at the repository root.
+
 The rules are the same as `patches/element-web/README.md`, and for the same reason:
 
 1. **No patch without an entry here.** Every entry states *what*, *why*, the
@@ -38,8 +45,7 @@ The rules are the same as `patches/element-web/README.md`, and for the same reas
    porting it by reflex.
 
    Then run the patch's own regression tests against an upstream checkout of the
-   new tag carrying the patch (a clone under `~/.cache`, never `/tmp`), together
-   with upstream's profile suites:
+   new tag carrying the patch, together with upstream's profile suites:
 
    ```bash
    cd <synapse-checkout-at-TAG>
@@ -72,9 +78,9 @@ The rules are the same as `patches/element-web/README.md`, and for the same reas
 
 | Build | Applies the patch? |
 |---|---|
-| `dockerfiles/Dockerfile` (the published `synapse` image; CI, dev-staging, prod) | **yes**, lines 54-59 |
+| `dockerfiles/Dockerfile` (the published `synapse` image that CI builds) | **yes**, in its `patch` step |
 | `e2e-harness/images.sh` (local e2e harness) | **yes**: it builds `dockerfiles/Dockerfile` itself |
-| `real-stack/Dockerfile.synapse` (local real-stack image) | **no**: same `FROM` tag, no patch, and it fetches yq from `releases/latest`. Do not use it to test anything that depends on the DID field being protected; the startup guard in `entrypoints/matrix_server.sh` does not run there either, because that image has its own entrypoint (`real-stack/synapse_entrypoint.sh`) |
+| `real-stack/Dockerfile.synapse` (local real-stack image) | **yes**, since 2026-09-29: it builds `FROM` the published image (default: the same tag-plus-digest ref `docker-compose.yml` defaults to), so it carries this patch, the startup guard and `entrypoints/matrix_server.sh`. Until then it had its own recipe with neither |
 | `scripts/did-field-guard-accept.sh` | **no, on purpose**: it bind-mounts the guarded entrypoint into a STOCK image to prove the guard refuses to start |
 
 ---
@@ -90,15 +96,17 @@ raises `403 M_FORBIDDEN` when a **non-admin** tries to write or delete a listed
 custom profile field. Admins are exempt.
 
 **Why we need it.** siwx-oidc publishes each user's DID into their Matrix profile
-under the MSC4133 custom field `io.inblock.did`, as a provider-signed assertion —
-it is the one identifier a relying party can trust to name a user. On stock
+under the MSC4133 custom field `io.inblock.did`, as a provider-signed assertion, so
+that others can look up which DID stands behind a Matrix ID. (siwx-oidc treats that
+lookup as a discovery hint, never as authorization.) On stock
 Synapse 1.159.0 that field is **freely user-writable with no value validation**:
 `set_profile_field`'s only check is `if not by_admin and target_user != requester.user`,
 which is simply *not an error* when a user writes their own profile. So any user
 could overwrite their own `io.inblock.did` with **another user's DID** and
 misrepresent their cryptographic identity to every client and every federating
 server that reads it. The signed assertion (see the siwx-oidc repo) makes that
-tampering *detectable*; this patch makes it *impossible*.
+tampering *detectable*; this patch stops non-admin users from writing the field at
+all.
 
 **Evidence** (all read from the v1.159.0 source, 2026-09-10):
 
@@ -119,13 +127,15 @@ tampering *detectable*; this patch makes it *impossible*.
   API passes `by_admin=True` unconditionally, so `provision_user` and the
   displayname writes are likewise unaffected.
 
-**Upstream status.** #19980 (author `Barry3D`, successor to the abandoned #18562 by
-`anoadragon453`, both implementing issue
-[#18525](https://github.com/element-hq/synapse/issues/18525)) is **OPEN but stalled**:
-`CHANGES_REQUESTED` from anoadragon453 on 2026-08-13, last activity 2026-08-14, and
-now `mergeable: false` / `dirty` against `develop`. The maintainer has said he may
-prefer to stabilise MSC4133 *first*. We should not expect this to land soon, and we
-should not open a competing PR while the author is active.
+**Upstream status** (checked 2026-09-30 with `gh pr view`). #19980 (author `Barry3D`)
+is **OPEN but stalled**: `CHANGES_REQUESTED` from anoadragon453 on 2026-08-13, the
+author's last push 2026-08-14, last activity a comment on 2026-09-11, and
+`mergeable: CONFLICTING` against `develop`. It succeeds
+[#18562](https://github.com/element-hq/synapse/pull/18562) by `anoadragon453`, which is
+also still **OPEN**: no review since 2025-07-02, labels added 2026-09-23. Both implement
+issue [#18525](https://github.com/element-hq/synapse/issues/18525). The maintainer has
+said he may prefer to stabilise MSC4133 *first*. We should not expect this to land soon,
+and we should not open a competing PR while the author is active.
 
 **What we took, and what we deliberately left.** Only the
 `synapse/config/experimental.py` and `synapse/handlers/profile.py` hunks, taken from

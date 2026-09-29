@@ -35,7 +35,7 @@
 #   adapters/connector.sh <artifact_file> <test_name> [<test_name> ...]
 #
 # Env overrides (sane local defaults):
-#   CONNECTOR_DIR   default /home/waldknoten-01/aqua-matrix-agent
+#   CONNECTOR_DIR   default ~/aqua-matrix-agent
 #   SIWX_E2E_SIWX_URL   default http://localhost:18081
 #   SIWX_E2E_MATRIX_URL default http://localhost:18080
 #   CONNECTOR_EXPECT_SHA / CONNECTOR_EXPECT_REF
@@ -61,7 +61,7 @@ shift
 [ "$#" -ge 1 ] || adapter_die "$ARTIFACT" 2 \
   "ADAPTER PRECONDITION FAILED: connector.sh needs >=1 test name."
 
-CONNECTOR_DIR="${CONNECTOR_DIR:-/home/waldknoten-01/aqua-matrix-agent}"
+CONNECTOR_DIR="${CONNECTOR_DIR:-$HOME/aqua-matrix-agent}"
 SIWX_URL="${SIWX_E2E_SIWX_URL:-http://localhost:18081}"
 MATRIX_URL="${SIWX_E2E_MATRIX_URL:-http://localhost:18080}"
 

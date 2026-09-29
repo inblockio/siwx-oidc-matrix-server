@@ -15,7 +15,7 @@
 #   podman compose -f docker-compose.e2e.yml --env-file .env.e2e up -d
 services:
   siwx-e2eh-redis:
-    image: docker.io/library/redis:7-alpine
+    image: docker.io/library/redis:7.4.11-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
     container_name: siwx-e2eh-redis
     command: redis-server --appendonly yes
     restart: unless-stopped
@@ -94,7 +94,7 @@ services:
       - siwx-e2eh-net
 
   siwx-e2eh-livekit:
-    image: livekit/livekit-server:v1.13.6
+    image: livekit/livekit-server:v1.13.6@sha256:e37d68f172556d02aa77968b9fc55ef481468c0315fa38e4fa6c56ce72e3a815
     container_name: siwx-e2eh-livekit
     restart: unless-stopped
     command: --config /etc/livekit.yaml
@@ -115,17 +115,18 @@ services:
       - siwx-e2eh-net
 
   siwx-e2eh-lk-jwt:
-    # Same digest pin as docker-compose.yml, so the harness exercises the binary
-    # production runs instead of the moving `latest` label.
+    # Digest-pinned 0.6.0, the version this harness was last verified with (it
+    # disables 0.6.0's broken healthcheck below). docker-compose.yml defaults to
+    # 0.7.0, so this is NOT that binary; moving it is a harness change of its own.
     image: ${LK_JWT_IMAGE_REF:-ghcr.io/element-hq/lk-jwt-service:0.6.0@sha256:822f0c03a3bdd924da92afc2e8ec59de5dda17af42d32e71e11f269c3517abf7}
     container_name: siwx-e2eh-lk-jwt
     restart: unless-stopped
     environment:
       # Internal URL, unlike production's public wss:// one: nothing in this
       # harness consumes the SFU URL from a browser, so lk-jwt's RoomService
-      # hairpin never crosses the Caddy edge here (see T6 in
-      # docs/superpowers/plans/2026-08-01-av-hardening-config.md for why
-      # production cannot do the same).
+      # hairpin never crosses the Caddy edge here. Production cannot do the
+      # same: lk-jwt hands the same LIVEKIT_URL to browsers (see the lk-jwt
+      # service in docker-compose.yml).
       LIVEKIT_URL: "ws://siwx-e2eh-livekit:7880"
       LIVEKIT_KEY: "${LIVEKIT_KEY}"
       LIVEKIT_SECRET: "${LIVEKIT_SECRET}"
@@ -146,8 +147,8 @@ services:
     # "8080" fixes the helper but makes the SERVER exit 1 with
     # `listen tcp: address 8080: missing port in address` — mutually
     # exclusive, verified against the pinned digest on 2026-08-30. Left
-    # enabled it marks the container unhealthy and ci-deploy.sh's health
-    # gate fails EVERY converge, wedging dev-staging CD. Disabling restores
+    # enabled it marks the container unhealthy, so anything that gates on
+    # container health (a deploy, `up --wait`) fails. Disabling restores
     # the 0.5.0 behaviour this service was always documented to have
     # ("no healthcheck by design"); probe /healthz externally instead.
     healthcheck:
@@ -167,7 +168,7 @@ services:
   # into e2e-harness/certs/ (run scripts/gen-e2e-env.sh first). See
   # config/fed-proxy.e2e.Caddyfile.
   siwx-e2eh-fed-proxy:
-    image: docker.io/library/caddy:2-alpine
+    image: docker.io/library/caddy:2.11.4-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
     container_name: siwx-e2eh-fed-proxy
     restart: unless-stopped
     # Share lk-jwt's netns so localhost:8448 here == lk-jwt's loopback. This also
@@ -182,7 +183,7 @@ services:
       - ./e2e-harness/certs/fed.key:/certs/fed.key:ro
 
   siwx-e2eh-caddy:
-    image: docker.io/library/caddy:2-alpine
+    image: docker.io/library/caddy:2.11.4-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
     container_name: siwx-e2eh-caddy
     restart: unless-stopped
     depends_on:

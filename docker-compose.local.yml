@@ -40,7 +40,8 @@
 
 services:
   redis:
-    image: redis
+    # Pinned by version and digest, the same default docker-compose.yml uses.
+    image: redis:8.10.2@sha256:d5ac52db24d4e70566fe9944f22cf5bdc2bc739b05c0f426335161ea6c23f3b3
     command: redis-server --appendonly yes
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -134,7 +135,9 @@ services:
         condition: service_healthy
 
   caddy:
-    image: caddy:2-alpine
+    # Stock Caddy, pinned by version and digest to the release the custom
+    # caddy-l4 image builds on (dockerfiles/Dockerfile.caddy-l4).
+    image: caddy:2.11.4-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
     restart: unless-stopped
     ports:
       - "${MATRIX_HOST_PORT:-8080}:8080"

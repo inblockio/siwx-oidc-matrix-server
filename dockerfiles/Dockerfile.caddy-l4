@@ -1,15 +1,15 @@
 # Caddy + caddy-l4 (layer4) + caddy-ratelimit, custom-built via xcaddy.
 #
 # PURPOSE 1 — TURN-TLS SNI split on :443. Stock Caddy has no way to inspect the
-# raw TLS ClientHello SNI before termination, so a bare Caddy on this box
-# cannot divert only the TURN hostname (dev.turn.matrix.inblock.io /
-# turn.matrix.inblock.io) to LiveKit's plaintext external_tls listener while
-# leaving every other :443 vhost untouched. caddy-l4's `layer4` Caddyfile
-# app + `listener_wrappers` adds that SNI-based demux ahead of the `tls`
-# wrapper. See docs/superpowers/plans/2026-08-03-turn-tls-edge-termination.md
-# for the full design (Caddyfile.dev-aquafire carries the actual
-# `servers :443 { listener_wrappers { layer4 { ... } tls } }` block that
-# consumes this image).
+# raw TLS ClientHello SNI before termination, so a bare Caddy that owns :443
+# cannot divert only the TURN hostname (`turn.domain` in config/livekit.yaml)
+# to LiveKit's plaintext external_tls listener while leaving every other
+# :443 vhost untouched. caddy-l4's `layer4` Caddyfile app +
+# `listener_wrappers` adds that SNI-based demux ahead of the `tls` wrapper.
+# The edge Caddyfile consumes this image through a
+# `servers :443 { listener_wrappers { layer4 { ... } tls } }` block;
+# skills/matrix-rtc-transport-specialist.md shows one, and the `turn:` block
+# of config/livekit.yaml lists what else the edge needs.
 #
 # PURPOSE 2 — edge rate limiting for siwx-oidc's PUBLIC `GET /resolve`. That
 # route is unauthenticated by design and costs up to two Synapse probes per
@@ -18,29 +18,29 @@
 # already fronts this service (Caddy), where it can be shaped per-deployment
 # without a release. Do not add an in-process one here". Caddy ships NO
 # rate-limiting directive of any kind, so that delegation is unimplementable
-# without this module. The zones live in the `dev.siwx.inblock.io` /
-# `siwx-oidc.inblock.io` site blocks of Caddyfile.dev-aquafire /
-# Caddyfile.production.
+# without this module. The zones belong in the edge Caddyfile's site block
+# for siwx-oidc, matching GET/HEAD /resolve INSIDE its catch-all handle, so the
+# `header_down` lines that strip upstream CORS headers still apply to /resolve.
 #
 # DEPLOY ORDER — IMAGE FIRST, and be precise about what is new here.
 #
-# Both Caddyfiles ALREADY required this custom image before rate limiting
-# existed: each carries a `layer4` block, and stock `caddy:2-alpine` rejects
-# them identically before and after this change (verified: same error, same
-# line, on `git show HEAD:Caddyfile.production` and on the edited file). So
-# "fails on stock Caddy" is not the new risk.
+# An edge config with a `layer4` block ALREADY required this custom image
+# before rate limiting existed: stock Caddy rejects it, with or without a
+# `rate_limit` block (verified when the limiter was added: the same error on
+# the same line, before and after). So "fails on stock Caddy" is not the new
+# risk.
 #
-# The NEW risk is narrower and more likely: the image currently DEPLOYED
-# (`caddy-l4:2.11.4-l4v0.1.2` — layer4 only, no ratelimit) parses today's
-# config fine and will REJECT the new one. A `caddy reload` ahead of the image
-# bump therefore takes down every vhost on the box — 8 on dev, 12 on prod, not
-# just siwx-oidc. Rebuild and pull this image, THEN deploy the Caddyfile.
-# Same shape as the Synapse-then-publisher ordering in siwx-oidc's CLAUDE.md,
-# and for the same reason: the consumer of a capability must never arrive
-# before the capability.
+# The NEW risk is narrower and more likely: an older build of this image
+# (`caddy-l4:2.11.4-l4v0.1.2` — layer4 only, no ratelimit) parses a
+# layer4-only config fine and REJECTS one with `rate_limit`. A `caddy reload`
+# ahead of the image bump therefore takes down every vhost that edge serves,
+# not just siwx-oidc. Rebuild and pull this image, THEN deploy the Caddyfile.
+# Same rule as the patched-Synapse-before-DID-publisher order, and for the
+# same reason: the consumer of a capability must never arrive before the
+# capability.
 #
 # This is also why Caddyfile.local and Caddyfile.e2e carry NEITHER block —
-# both run stock `caddy:2-alpine` (docker-compose.local.yml,
+# both run stock `caddy:2.11.4-alpine` (docker-compose.local.yml,
 # docker-compose.e2e.yml), so adding one would break local dev and the e2e
 # harness.
 #
@@ -100,7 +100,8 @@
 # BUMP WARNING: if you bump any version here, you MUST re-check the pin
 # pairing first (read the target caddy-l4 tag's go.mod for its
 # `caddyserver/caddy/v2` requirement, and the target caddy-ratelimit tag's)
-# and update BOTH the builder tag below and the final-stage tag to match.
+# and update BOTH the builder tag below and the final-stage tag to match,
+# each with its new index digest.
 # Bumping just one, or bumping to a plugin tag whose go.mod requires a
 # different Caddy version than the builder ships, reintroduces the exact skew
 # this pin exists to prevent.
@@ -112,11 +113,51 @@
 #        http.handlers.rate_limit
 #        layer4 (+ its matchers/handlers)
 
+# Both stages are pinned by tag AND multi-arch index digest, so a re-pushed
+# tag cannot change the Caddy we build with or ship. Resolve a digest with
+#   skopeo inspect --raw docker://docker.io/library/caddy:<tag> | sha256sum
+# The Go modules below need no digest: the builder leaves Go's defaults on, so
+# each module version (the commit pin included) is checked against the public
+# checksum database, sum.golang.org, and always resolves to the same source.
+
 # ---- build stage ----
-FROM caddy:2.11.4-builder AS builder
+FROM caddy:2.11.4-builder@sha256:369218c81ca6d6af249981221b3a5c764d886dd5b058f51d144066de13f2418d AS builder
 RUN xcaddy build \
     --with github.com/mholt/caddy-l4@v0.1.2 \
     --with github.com/mholt/caddy-ratelimit@5625512f24f6f59d6f64fb3aafe5eecff0b286db
+# ---------------------------------------------------------------------------
+# License texts for the Alpine packages of the caddy:2.11.4 base below
+# (Alpine 3.23.6), busybox's GPL-2.0-only among them. Canonical texts from SPDX
+# license-list-data v3.29.0, each checked against its SHA-256 as it is
+# downloaded. The set is not chosen here: dockerfiles/check-alpine-licenses.sh,
+# run at the end of the final stage, fails the build when an installed package
+# declares a license with no text below, when a text below is declared by no
+# package, or when NOTICE does not name the Alpine release. So a base bump that
+# changes the licenses stops the build until this list (and NOTICE) follows.
+# This list is the L: lines of /lib/apk/db/installed in the pinned base.
+# A remote ADD gets mode 0600, hence --chmod.
+# ---------------------------------------------------------------------------
+FROM scratch AS alpine_licenses
+ARG SPDX_TEXT=https://raw.githubusercontent.com/spdx/license-list-data/v3.29.0/text
+ADD --chmod=0644 --checksum=sha256:074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff ${SPDX_TEXT}/Apache-2.0.txt /alpine/Apache-2.0.txt
+ADD --chmod=0644 --checksum=sha256:f32fb3b417a194167cfad068223fc975ba96c5960513a10f66a3c28720aec1df ${SPDX_TEXT}/BSD-2-Clause.txt /alpine/BSD-2-Clause.txt
+ADD --chmod=0644 --checksum=sha256:5a93d5831e1297ab10fe643e1a631e83be392896da14ee2951285a79012df69d ${SPDX_TEXT}/BSD-3-Clause.txt /alpine/BSD-3-Clause.txt
+ADD --chmod=0644 --checksum=sha256:272d1239bdcef73bb98bac206168ca1040bd4a31296755fadfb7515bcea18df3 ${SPDX_TEXT}/curl.txt /alpine/curl.txt
+ADD --chmod=0644 --checksum=sha256:aaf135472f81c5b4a0dca9367e5bb5e9750032b5bebe5442b36e4c0a47430df3 ${SPDX_TEXT}/GPL-2.0-only.txt /alpine/GPL-2.0-only.txt
+ADD --chmod=0644 --checksum=sha256:aaf135472f81c5b4a0dca9367e5bb5e9750032b5bebe5442b36e4c0a47430df3 ${SPDX_TEXT}/GPL-2.0-or-later.txt /alpine/GPL-2.0-or-later.txt
+ADD --chmod=0644 --checksum=sha256:996af0513df21f7496288951c41428a03c174e9e4a9d63665c57d670f845ccb1 ${SPDX_TEXT}/LGPL-3.0-or-later.txt /alpine/LGPL-3.0-or-later.txt
+ADD --chmod=0644 --checksum=sha256:b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5 ${SPDX_TEXT}/MIT.txt /alpine/MIT.txt
+ADD --chmod=0644 --checksum=sha256:66a3107d5ad6a058aab753eaac2047ccb2ed0e39465dd0fe5844da3e300d5172 ${SPDX_TEXT}/MPL-2.0.txt /alpine/MPL-2.0.txt
+ADD --chmod=0644 --checksum=sha256:bfb1112d49db5b1daecdfef24bd7e2f3ea0bafb33aa67aa0ab51e2bf8407c03d ${SPDX_TEXT}/Zlib.txt /alpine/Zlib.txt
+
 # ---- final stage ----
-FROM caddy:2.11.4
+FROM caddy:2.11.4@sha256:0c994536bddb66445885237f1a5dcc1916bccea922661c76b4e9fc24061f9b52
 COPY --from=builder /usr/bin/caddy /usr/bin/caddy
+# Published from this repository like the Synapse and Element images, so it
+# carries the same LICENSE and NOTICE at the same path.
+COPY --chmod=0644 LICENSE NOTICE /usr/share/licenses/siwx-oidc-matrix-server/
+# The base image's Alpine packages carry their own licenses (stage
+# alpine_licenses); the check keeps texts, packages and NOTICE in step.
+COPY --from=alpine_licenses /alpine/ /usr/share/licenses/alpine/
+RUN --mount=type=bind,source=dockerfiles/check-alpine-licenses.sh,target=/tmp/check-alpine-licenses.sh \
+    sh /tmp/check-alpine-licenses.sh

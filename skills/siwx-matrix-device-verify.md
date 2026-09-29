@@ -5,10 +5,6 @@ description: E2EE device verification, cross-signing key lifecycle, key backup t
 
 # siwx-matrix-device-verify: E2EE Architecture and Troubleshooting
 
-**Findings document:** `docs/2026-05-19-device-verification-analysis.md` contains the full
-root-cause analysis with cryptographic proof, server state snapshots, and the dependency chain.
-Read it first for deep context on verification failures.
-
 ## Section 1: Architecture Reference
 
 ### Cross-signing trust chain
@@ -37,34 +33,56 @@ All three signatures must be cryptographically valid over the CURRENT key materi
 - Generations MUST match between SSSS and server for verification to work
 - A mismatch between SSSS generation and server generation causes persistent verification failures
 
-### Device lifecycle under MSC3861/siwx-oidc (current, post-fix)
+### Device lifecycle with siwx-oidc (delegated auth)
 
-Login flow:
-1. siwx-oidc checks Redis for old device_id
-2. If found: delete_device on Synapse (cleanup old device + e2e keys)
-3. Generate fresh SIWX_{uuid} device_id (never recycled)
-4. Store new device_id in Redis (for logout cleanup)
-5. upsert_device (create device in Synapse)
-6. allow_cross_signing_reset (permits key upload without UIA)
-7. Element uploads device keys (POST /keys/upload)
-8. Element checks cross-signing state, restores from SSSS or creates new
+The lifecycle is implemented in siwx-oidc; its
+[Matrix integration guide](https://github.com/inblockio/siwx-oidc/blob/main/docs/matrix-integration.md)
+("Accounts and devices") is the reference. In short:
 
-Logout flow (both paths now do device cleanup):
-- OIDC path (POST /oauth2/revoke): look up token metadata, delete_device, delete token
-- Matrix path (POST /_matrix/client/v3/logout): look up token metadata, delete_device, delete token
+Sign-in (`oidc::provision_synapse_device`, both the browser flow and the device-code/QR
+grant):
+1. Provision the account if it is new (`provision_user`).
+2. Publish the `io.inblock.did` profile field.
+3. `upsert_device`: the device ID the client requested in its scope
+   (`urn:matrix:client:device:<id>` or the MSC2967 unstable form), otherwise a fresh
+   `SIWX_…` ID. An upsert never deletes a device and keeps an existing device's keys.
+4. `allow_cross_signing_reset` (opens a window in which the client may upload new
+   cross-signing keys without interactive auth).
+5. Element uploads device keys (POST /keys/upload), then checks cross-signing state and
+   restores from SSSS or creates new keys.
 
-**Critical design decision:** Device IDs are never recycled. Each login gets a fresh UUID.
-This prevents stale cross-signing signatures (see Synapse limitation below).
+Teardown (the policy keys on intent, not on the endpoint's transport):
+- `POST /oauth2/revoke` (RFC 7009): revokes the session's tokens and **never** deletes the
+  device. Clients call it on token rotation and when dialogs close; deleting the device
+  there raced key uploads and broke users' cross-signing identity in a June 2026 incident.
+- `POST /_matrix/client/v3/logout`: revokes the tokens and deletes this session's device.
+- `POST /_matrix/client/v3/logout/all`: deletes every device of the user and revokes all
+  tokens; it does not deactivate the account.
+- MSC4191 `device_delete` on `/account`: deletes the named device and revokes its tokens.
+
+**Critical design decision:** sign-in never deletes a device, and never deletes and then
+reuses a device ID. This prevents stale cross-signing signatures (see Synapse limitation
+below). Deleting a device that is ending (logout) is safe because siwx-oidc does not use
+its ID again; a client that later requests the same ID in its scope gets it re-created
+(see STALE DEVICE KEYS).
 
 ### Synapse signature limitation (known, upstream)
 
-`DELETE /_synapse/mas/delete_device` does NOT remove rows from `e2e_cross_signing_signatures`.
-Additionally, `POST /keys/signatures/upload` SKIPS uploads when a signature already exists
-for the same `(user_id, key_id, target_device_id)` tuple (`e2e_keys.py:1127-1132`).
+`POST /_synapse/mas/delete_device` does NOT remove rows from `e2e_cross_signing_signatures`
+(device deletion clears the device's own keys only). Additionally,
+`POST /keys/signatures/upload` SKIPS a device signature when the stored device already
+carries a signature from the same self-signing key (`synapse/handlers/e2e_keys.py:1226-1231`
+at v1.161.0; lines 1127-1132 in earlier releases).
+
+Synapse 1.161 ([#19915](https://github.com/element-hq/synapse/pull/19915)) added a unique
+index on `(user_id, target_user_id, target_device_id, key_id)` to
+`e2e_cross_signing_signatures` (built by background updates) and made the store upsert.
+That lets a new signature of a user's **master key** replace an old one; a **device**
+signature still stops at the handler's skip above.
 
 This means: if a device_id is recycled (same ID, new keys), the old stale signature persists
 and can never be replaced through normal client operations. The workaround is to never recycle
-device_ids, which is why siwx-oidc generates a fresh UUID on every login.
+device_ids, which is why siwx-oidc never deletes and then re-creates a device at sign-in.
 
 ### Key backup trust model
 
@@ -79,7 +97,8 @@ device_ids, which is why siwx-oidc generates a fresh UUID on every login.
 
 - Standard Matrix: cross-signing reset requires password re-entry (UIA)
 - MSC3861: no password exists; uses allow_cross_signing_reset (10-min window)
-- siwx-oidc calls allow_cross_signing_reset on every login (intentional, since every device is new)
+- siwx-oidc calls allow_cross_signing_reset on every sign-in, so a client halfway through
+  a key reset can publish replacement keys
 
 ## Section 2: Quick Diagnosis Flow
 
@@ -88,7 +107,7 @@ Device not verified after login?
   |
   +-- Cross-signing signature exists but INVALID over current device keys
   |     -> STALE SIGNATURE (was the #1 issue before fresh-device-id fix)
-  |     -> Should not occur with current code (fresh device_ids)
+  |     -> Should not occur with current code (no device_id is re-created)
   |     -> If it recurs: check if device_id is being recycled somehow
   |     -> See: STALE SIGNATURE
   |
@@ -98,7 +117,7 @@ Device not verified after login?
   |     -> See: GENERATION MISMATCH
   |
   +-- keys/upload returns 400 "One time key already exists"
-  |     -> STALE DEVICE KEYS (should not occur with fresh device_ids)
+  |     -> STALE DEVICE KEYS (should not occur: sign-in never re-creates a device)
   |
   +-- "Backup decryption key cached" but still VERIFY_THIS_SESSION
   |     -> CROSS-SIGNING MISMATCH (single generation drift)
@@ -121,22 +140,23 @@ Device not verified after login?
 ### STALE SIGNATURE (historically #1 cause, now prevented)
 
 **Context:** This was the primary verification failure mode before the 2026-05-19 fix.
-See `docs/2026-05-19-device-verification-analysis.md` for the full root-cause analysis
-with cryptographic proof.
 
 **Mechanism:** Synapse's `delete_device` (MAS API) removes e2e keys but not
 cross-signing signatures. When the same device_id was recycled with new keys,
 the old signature persisted and was cryptographically invalid over the new key material.
-Synapse's signature-upload handler (`e2e_keys.py:1127`) refuses to replace existing
-signatures, making the state unrecoverable.
+Synapse's signature-upload handler skips a device signature when one from the same
+self-signing key is already stored (`e2e_keys.py:1226-1231` at v1.161.0), so the new
+signature is never written and the state cannot be repaired by the client.
 
-**Prevention (current code):** siwx-oidc generates a fresh SIWX_{uuid} device_id on
-every login. No device_id is ever reused, so no stale signatures can accumulate.
+**Prevention (current code):** siwx-oidc never deletes a device at sign-in, and never
+deletes and then re-creates a device ID, so sign-in cannot leave a stale signature.
 
 **If it recurs despite the fix:**
-1. Verify siwx-oidc is running the fixed code (check for "cleaning up old device_id" in logs)
-2. Check if something else is recycling device_ids (e.g., a cached Redis mapping)
-3. Use the nuclear reset below to clear the state
+1. Check which siwx-oidc image runs (`docker compose images siwx-oidc`) and that it is
+   a current build
+2. Check whether something else deletes and re-creates devices with the same ID (a
+   script, an admin tool, a client that reuses a device ID after logout)
+3. Use the identity reset below (GENERATION MISMATCH → Fix) to clear the state
 
 ### GENERATION MISMATCH
 
@@ -158,18 +178,17 @@ every login. No device_id is ever reused, so no stale signatures can accumulate.
 **Diagnosis:**
 
 ```bash
-# SSH to server, check cross-signing key generations
-ssh root@agentic.inblock.io
+# On the host, check cross-signing key generations.
 # `docker compose exec` resolves the running container by service name, so it
 # survives Docker renaming the container on a name-conflict restart (the
 # compose-generated name matrix-matrix_synapse-1 is not stable) — stay in
 # this directory for the rest of this session's docker compose commands.
-cd /home/deploy/matrix/stack
+cd <stack-dir>   # the directory holding docker-compose.yml and .env
 cat << 'SCRIPT' | docker compose exec -T matrix_synapse python3 -
 import sqlite3
 from collections import Counter
 db = sqlite3.connect("/data/homeserver.db")
-USER = "@LOCALPART:matrix.inblock.io"  # <-- replace
+USER = "@LOCALPART:matrix.example.org"  # <-- replace
 
 keys = db.execute("SELECT keytype, stream_id FROM e2e_cross_signing_keys WHERE user_id = ? ORDER BY stream_id", (USER,)).fetchall()
 gen_counts = Counter(k[0] for k in keys)
@@ -188,66 +207,66 @@ if len(versions) > 1:
 SCRIPT
 ```
 
-**Fix (nuclear reset):**
+**Fix (reset the cryptographic identity through the client):** in Element, use the
+"Reset identity" / "Reset cryptographic identity" action in the encryption settings.
+Element asks the homeserver for permission, and the homeserver sends the user to
+siwx-oidc's `/account?action=org.matrix.cross_signing_reset` (MSC4312). After the user
+re-authenticates there, siwx-oidc calls `allow_cross_signing_reset`, and the client
+uploads a fresh set of cross-signing keys and a new recovery key in one go. This is the
+supported path: Synapse replaces the keys itself, so its caches stay consistent.
 
-```bash
-cat << 'SCRIPT' | docker compose exec -T matrix_synapse python3 -
-import sqlite3
-db = sqlite3.connect("/data/homeserver.db")
-USER = "@LOCALPART:matrix.inblock.io"  # <-- replace
-
-r1 = db.execute("DELETE FROM e2e_cross_signing_signatures WHERE user_id = ?", (USER,))
-r2 = db.execute("DELETE FROM e2e_cross_signing_keys WHERE user_id = ?", (USER,))
-print(f"Deleted {r1.rowcount} sigs, {r2.rowcount} cross-signing keys")
-db.commit()
-SCRIPT
-docker compose restart matrix_synapse
-```
-
-After reset: user must log out, clear browser data, log back in, and choose "Set up encryption" (NOT "Enter recovery key"). This creates a fresh generation 1 with a new recovery key.
+**Last resort only (operator, with a backup):** never write to `homeserver.db` while
+Synapse is running. Synapse caches cross-signing state, and a live write can leave the
+database and the caches disagreeing. If the client-side reset is impossible, stop
+Synapse first (`docker compose stop matrix_synapse`), back up the database file, delete
+the user's rows from `e2e_cross_signing_signatures` and `e2e_cross_signing_keys`, then
+start Synapse again. The user then signs in and chooses "Set up encryption" (not "Enter
+recovery key") to create a fresh generation with a new recovery key.
 
 ### STALE DEVICE KEYS
 
 **Symptom:** `POST /keys/upload` returns 400 with "One time key already exists"
 
-**Should not occur with current code** (fresh device_ids mean no pre-existing keys).
+**Should not occur with current code**: sign-in never deletes and re-creates a device,
+so a device ID never gets new keys on top of old ones.
 
 If it occurs, check whether:
-1. siwx-oidc is running the fixed code
-2. The `delete_device` call succeeded (check logs for warnings)
+1. siwx-oidc is running a current image
+2. The client reused a device ID it had logged out with (logout deletes the device, and
+   a later sign-in with the same requested ID creates it anew)
 3. Some other process created the device before siwx-oidc's `upsert_device`
 
-### STALE DEVICE ACCUMULATION
+### MANY DEVICES
 
-**Symptom:** User has many devices in `devices` table but only 1 in `e2e_device_keys_json`.
+Several devices per user are normal: every signed-in client, browser profile and agent
+has its own, and sign-in never deletes one. A device with no uploaded keys is not
+necessarily stale either (a client still setting up, or one without E2EE). Remove a
+device only when it is known to be unused, and only through a supported path, never by
+editing `homeserver.db`: Synapse caches device and key state, and a row deleted under a
+running server leaves those caches and the device-list stream out of step.
 
-**Diagnosis and cleanup:**
+- **The user:** the account page on siwx-oidc,
+  `https://siwx-oidc.example.org/account?action=org.matrix.devices_list`, then
+  `org.matrix.device_delete` for the device (MSC4191). siwx-oidc deletes the Synapse
+  device and revokes that device's tokens.
+- **A server admin:** Synapse's admin API with a minted admin token (Synapse 1.157+ takes
+  no other admin credential). The admin API is not exposed at the edge, so run it inside
+  the Synapse container; the token never leaves it:
 
-```bash
-cat << 'SCRIPT' | docker compose exec -T matrix_synapse python3 -
-import sqlite3
-db = sqlite3.connect("/data/homeserver.db")
-USER = "@LOCALPART:matrix.inblock.io"  # <-- replace
+  ```bash
+  cd <stack-dir>   # the directory holding docker-compose.yml and .env
+  docker compose exec -T -e MXID='@LOCALPART:matrix.example.org' matrix_synapse sh -c '
+    tok=$(curl -fsS -X POST -H "Authorization: Bearer $MAS_SHARED_SECRET" \
+            "http://siwx-oidc:${SIWEOIDC_PORT:-8081}/oauth2/admin_token" \
+          | python3 -c "import json, sys; print(json.load(sys.stdin)[\"access_token\"])")
+    curl -fsS -H "Authorization: Bearer $tok" \
+      "http://localhost:${MATRIX_PORT:-8080}/_synapse/admin/v2/users/$MXID/devices"'
+  ```
 
-devs = db.execute("SELECT device_id FROM devices WHERE user_id = ?", (USER,)).fetchall()
-e2e = db.execute("SELECT device_id FROM e2e_device_keys_json WHERE user_id = ?", (USER,)).fetchall()
-active_ids = [r[0] for r in e2e]
-stale = [d[0] for d in devs if d[0] not in set(active_ids)]
-print(f"Total devices: {len(devs)}, Active (with e2e keys): {len(active_ids)}, Stale: {len(stale)}")
-
-if stale and active_ids:
-    placeholders = ",".join(["?"] * len(active_ids))
-    r = db.execute(f"DELETE FROM devices WHERE user_id = ? AND device_id NOT IN ({placeholders})", (USER, *active_ids))
-    db.commit()
-    print(f"Deleted {r.rowcount} stale devices")
-elif stale:
-    r = db.execute("DELETE FROM devices WHERE user_id = ?", (USER,))
-    db.commit()
-    print(f"Deleted {r.rowcount} stale devices (no active devices)")
-else:
-    print("No stale devices to clean up")
-SCRIPT
-```
+  Delete one with `DELETE /_synapse/admin/v2/users/<mxid>/devices/<device_id>` (or
+  several with `POST /_synapse/admin/v2/users/<mxid>/delete_devices`) the same way. That
+  path does not revoke the device's tokens in siwx-oidc; Synapse refuses them anyway,
+  because it rejects a token whose device no longer exists.
 
 ### CROSS-SIGNING UPLOAD BLOCKED
 
@@ -260,7 +279,7 @@ SCRIPT
 cat << 'SCRIPT' | docker compose exec -T matrix_synapse python3 -
 import sqlite3, time
 db = sqlite3.connect("/data/homeserver.db")
-USER = "@LOCALPART:matrix.inblock.io"  # <-- replace
+USER = "@LOCALPART:matrix.example.org"  # <-- replace
 
 row = db.execute("SELECT updatable_without_uia_before_ms FROM e2e_cross_signing_keys WHERE user_id = ? AND keytype = 'master' ORDER BY stream_id DESC LIMIT 1", (USER,)).fetchone()
 if row and row[0]:
@@ -275,21 +294,30 @@ else:
 SCRIPT
 ```
 
-**Fix:** User must log out and back in. The login flow calls `allow_cross_signing_reset` which refreshes the 10-minute window.
+**Fix:** User must sign in again (the sign-in calls `allow_cross_signing_reset`, which
+refreshes the 10-minute window), or re-authenticate at
+`/account?action=org.matrix.cross_signing_reset` on siwx-oidc.
 
 ### LOGOUT PATH ANALYSIS
 
-Element has two logout paths under MSC3861 (both now do device cleanup):
+Every path that ends a session revokes its tokens. Which ones also delete a Synapse
+device (siwx-oidc's
+[Matrix integration guide](https://github.com/inblockio/siwx-oidc/blob/main/docs/matrix-integration.md),
+"Session teardown" and "Account management"):
 
-| Path | Trigger | Endpoint | Device cleanup |
+| Path | Typical trigger | Endpoint | Device deleted? |
 |---|---|---|---|
-| OIDC logout | User menu "Sign out" | `POST /oauth2/revoke` | Yes (looks up token, calls delete_device) |
-| Matrix logout | Session list "Sign out" | `POST /_matrix/client/v3/logout` | Yes (looks up token, calls delete_device) |
+| OAuth token revocation | token rotation, closing a dialog, some sign-out flows | `POST /oauth2/revoke` | **No**, tokens only |
+| Matrix logout | "Sign out" of a session | `POST /_matrix/client/v3/logout` | Yes, this session's device |
+| Matrix logout of all sessions | "Sign out of all sessions" | `POST /_matrix/client/v3/logout/all` | Yes, every device of the user |
+| Session manager, legacy routes | removing sessions in the client's session list | `DELETE /_matrix/client/v3/devices/{id}`, `POST /_matrix/client/v3/delete_devices` | Yes, the named devices of the caller's own account |
+| Account page (MSC4191) | `org.matrix.device_delete` / `org.matrix.session_end` | `/account` on siwx-oidc | Yes, the named device |
+| Account deactivation or erasure | `org.matrix.account_deactivate` / `org.matrix.account_erase` | `/account` on siwx-oidc | Yes: Synapse deletes every device when it deactivates the account |
 
 If verification works on first login but fails after logout/re-login, check:
-1. Which logout path was used (check siwx-oidc logs for `revoke` vs `logout` requests)
-2. Whether `delete_device` succeeded (look for `revoke: delete_device failed` or `logout: delete_device failed` warnings)
-3. Whether siwx-oidc generated a fresh device_id (look for `new device_id=SIWX_...` in logs)
+1. Which path was used (siwx-oidc's request log names the path)
+2. Whether the proxy routes `/_matrix/client/v3/logout` to siwx-oidc (not Synapse)
+3. Which device ID the new sign-in used (the client's requested ID, or a new `SIWX_…`)
 
 ## Section 4: Server-Wide Health Check
 
@@ -310,10 +338,10 @@ for (user_id,) in users:
     gens = db.execute("SELECT keytype, COUNT(*) FROM e2e_cross_signing_keys WHERE user_id = ? GROUP BY keytype", (user_id,)).fetchall()
     sigs = db.execute("SELECT COUNT(*) FROM e2e_cross_signing_signatures WHERE user_id = ?", (user_id,)).fetchone()[0]
     max_gen = max((c for _, c in gens), default=0)
-    stale = devs - e2e
+    without_keys = devs - e2e
 
     flags = []
-    if stale > 0: flags.append(f"stale_devs={stale}")
+    if without_keys > 0: flags.append(f"devices_without_keys={without_keys}")
     if max_gen > 1: flags.append(f"max_gen={max_gen}")
 
     if flags:
@@ -321,36 +349,40 @@ for (user_id,) in users:
         problems.append(f"  {short}: {', '.join(flags)}")
 
 if problems:
-    print(f"PROBLEMS FOUND ({len(problems)} users):")
+    print(f"TO REVIEW ({len(problems)} users):")
     for p in problems:
         print(p)
 else:
-    print("ALL USERS HEALTHY")
+    print("NOTHING TO REVIEW")
 print(f"\nTotal users checked: {len(users)}")
 SCRIPT
 ```
 
-Healthy state per user: 1 device, 1 e2e key set, 0 stale devices, 1 generation per keytype.
+The script only reads. More than one generation of a cross-signing key type points to a
+GENERATION MISMATCH (above). `devices_without_keys` is for review, not a fault: several
+devices per user are normal, and a device without keys may still be setting up. Remove
+one only through a supported path (MANY DEVICES, above).
 
 ## Section 5: Prevention Checklist
 
 After fixing a verification issue, verify:
 
-- [ ] siwx-oidc generates a fresh device_id on every login (no recycling)
-- [ ] `allow_cross_signing_reset` fires on every login
-- [ ] Revoke handler calls `delete_device` before deleting the token
-- [ ] Logout handler calls `delete_device` before deleting the token
-- [ ] Login path deletes old device before creating new one
+- [ ] Sign-in never deletes a device, and never deletes and then reuses a device ID
+- [ ] `allow_cross_signing_reset` fires on every sign-in
+- [ ] `/oauth2/revoke` revokes tokens only and does **not** delete the device
+- [ ] `/_matrix/client/v3/logout` deletes the ending session's device
 - [ ] Only 1 generation per keytype in `e2e_cross_signing_keys`
 - [ ] Only 1 backup version active
-- [ ] Device count matches e2e key count (no stale devices)
 - [ ] Caddy routes `/_matrix/client/v3/logout` to siwx-oidc (not Synapse)
 
 ## Section 6: Reference
 
-- **Full root-cause analysis:** `docs/2026-05-19-device-verification-analysis.md`
-- **Code (login path):** `siwx-oidc/src/oidc.rs` lines 1084-1131
-- **Code (logout handlers):** `siwx-oidc/src/compat.rs` revoke() and logout()
-- **Code (device trait):** `siwx-oidc/src/db/mod.rs` DBClient trait
-- **Synapse signature handler:** `synapse/handlers/e2e_keys.py:1127-1132`
-- **Synapse schema:** `e2e_cross_signing_signatures` table (no unique constraint)
+- **Code (sign-in path):** siwx-oidc `src/oidc.rs`, `provision_synapse_device`
+- **Code (teardown):** siwx-oidc `src/compat.rs`, `revoke()`, `logout()`, `logout_all()`
+  and `TeardownPolicy`
+- **Behaviour reference:** siwx-oidc `docs/matrix-integration.md` ("Accounts and devices")
+- **Synapse signature handler:** `synapse/handlers/e2e_keys.py:1226-1231` (v1.161.0)
+- **Synapse schema:** `e2e_cross_signing_signatures` table; since 1.161
+  ([#19915](https://github.com/element-hq/synapse/pull/19915)) a unique index on
+  `(user_id, target_user_id, target_device_id, key_id)`, built by background updates, and
+  upserts in `store_e2e_cross_signing_signatures`
