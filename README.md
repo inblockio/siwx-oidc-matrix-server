@@ -72,12 +72,12 @@ their last update).
 |---|---|---|---|
 | Synapse | `v1.161.0` (`matrixdotorg/synapse:v1.161.0@sha256:6b95dd129e35…`, index digest) | `dockerfiles/Dockerfile:30` | **Patched**: 1 source patch, plus config written by `entrypoints/matrix_server.sh`. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/synapse` |
 | Synapse image the stack runs | default `…/synapse:sha-33a0c95@sha256:32abd6fa5e31…` (CI build of main at 33a0c95); dev-staging default `…/synapse@sha256:2f1b6c17406c…` | `docker-compose.yml:24`, `docker-compose.dev-staging.yml:65` (`SYNAPSE_IMAGE_REF`); `real-stack/Dockerfile.synapse:26` (same default, for the local real stack) | Built here |
-| Element Web | `v1.12.29` (git tag of element-hq/element-web) | `dockerfiles/Dockerfile.element:17` (`ARG ELEMENT_WEB_TAG`) | **Built from source and patched**: 10 source patches, plus a runtime overlay |
+| Element Web | `v1.12.29` (git tag of element-hq/element-web; the build fails unless it resolves to commit `2d90d6b7b601…`) | `dockerfiles/Dockerfile.element:24-25` (`ARG ELEMENT_WEB_TAG`, `ARG ELEMENT_WEB_COMMIT`) | **Built from source and patched**: 10 source patches, plus a runtime overlay |
 | Element Web image the stack runs | default `…/element-web:sha-33a0c95@sha256:1761832069bd…` (CI build of main at 33a0c95); dev-staging default `…/element-web@sha256:8cea1873e574…` | `docker-compose.yml:115`, `docker-compose.dev-staging.yml:174` (`ELEMENT_IMAGE_REF`) | Built here |
 | Element Call | `0.24.0` (`@element-hq/element-call-embedded`) | Not pinned here: Element Web `v1.12.29`'s `apps/web/package.json` and `pnpm-lock.yaml` | Stock, embedded in the Element Web bundle (`element_call.use_exclusively` in `config/element-config.json`). Moves only with the Element Web tag |
 | matrix-js-sdk | `42.4.0` | Not pinned here: same, via the Element Web tag | Stock, bundled |
-| Element Web build toolchain | `node:24-bullseye`; pnpm `11.23.0` (upstream `devEngines`, via corepack); `pnpm install --frozen-lockfile` | `dockerfiles/Dockerfile.element:15`, `:155` | Stock |
-| Element Web serving base | `nginxinc/nginx-unprivileged:alpine-slim` (**floating**) | `dockerfiles/Dockerfile.element:183` | Stock, with our `config/element-nginx.conf` and security headers |
+| Element Web build toolchain | `node:24.20.0-bullseye@sha256:25f3016fcdae…`; pnpm `11.23.0` (upstream `devEngines`, via corepack); `pnpm install --frozen-lockfile` | `dockerfiles/Dockerfile.element:22`, `:168` | Stock |
+| Element Web serving base | `nginxinc/nginx-unprivileged:1.31.6-alpine-slim@sha256:c81a27f28bc2…` | `dockerfiles/Dockerfile.element:198` | Stock, with our `config/element-nginx.conf` and security headers |
 | siwx-oidc | default `ghcr.io/inblockio/siwx-oidc:sha-40efae9@sha256:54739f4813bf…` (CI build of siwx-oidc main at 40efae9) | `docker-compose.yml:84`, `docker-compose.dev-staging.yml:120` (`SIWX_OIDC_IMAGE_REF`) | First-party, built in [inblockio/siwx-oidc](https://github.com/inblockio/siwx-oidc) |
 | Redis | `8.10.2` (`redis:8.10.2@sha256:d5ac52db24d4…`) | `docker-compose.yml:62`, `docker-compose.dev-staging.yml:100` (`REDIS_IMAGE_REF`) | Stock, run with `--appendonly yes` |
 | LiveKit server | `v1.13.7` (`livekit/livekit-server:v1.13.7@sha256:6fd3b7088874…`) | `docker-compose.yml:145`, `docker-compose.dev-staging.yml:202` (`LIVEKIT_IMAGE_REF`) | Stock, configured by `config/livekit.yaml` (embedded TURN) |
@@ -107,8 +107,6 @@ do:
   no longer floats: its defaults are the tag-plus-digest builds listed in the table
   above, so `start-matrix.sh` (which runs `docker compose up --pull always`) starts
   the same bytes every time. Pin by digest in `.env` to run anything newer.
-- **Base images by moving tag**: `node:24-bullseye` (`dockerfiles/Dockerfile.element:15`)
-  and `nginxinc/nginx-unprivileged:alpine-slim` (`dockerfiles/Dockerfile.element:183`).
 - **Build-time package**: Debian `patch` in the Synapse build
   (`dockerfiles/Dockerfile:66`) floats on purpose, within the Debian release the
   base digest fixes, and is purged before its layer ends.
@@ -122,10 +120,8 @@ do:
   (`actions/checkout@v4`, `docker/login-action@v3`, `docker/metadata-action@v5`,
   `docker/build-push-action@v6`) on `ubuntu-latest`.
 
-Pinned by tag only, without a digest: `caddy:2.11.4-builder` / `caddy:2.11.4`, and
-the Element Web git tag `v1.12.29`, which is cloned by name and not checked against a
-commit. Release tags are
-conventionally immutable, but nothing here enforces it.
+Pinned by tag only, without a digest: `caddy:2.11.4-builder` / `caddy:2.11.4`. Release
+tags are conventionally immutable, but nothing here enforces it.
 
 Production, per the repository's own records: its `.env` pins Redis as
 `redis:latest@sha256:aa049e68…` (`docker-compose.yml:54-61`). The tag reads `latest`,

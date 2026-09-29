@@ -11,17 +11,30 @@
 # ---------------------------------------------------------------------------
 # Builder: clone element-web at the pinned tag, apply our patch, build webapp.
 # Node >= 22.18 required by upstream; node:24-bullseye matches their builder.
+#
+# Every input here is pinned by name AND content: both base images by version
+# tag plus multi-arch index digest, the upstream source by tag plus the commit
+# the tag must resolve to. A tag re-pushed or moved upstream then fails the
+# build instead of changing what we ship. A bump changes both halves
+# (index digest: `skopeo inspect --raw docker://<image>:<tag> | sha256sum`;
+# commit: `git ls-remote <repo> 'refs/tags/<tag>^{}'`).
 # ---------------------------------------------------------------------------
-FROM node:24-bullseye AS builder
+FROM node:24.20.0-bullseye@sha256:25f3016fcdae6b5d65bd9bcb4064b7e4198ec8d49493fa40d73f9b463d04fb15 AS builder
 
 ARG ELEMENT_WEB_TAG=v1.12.29
+ARG ELEMENT_WEB_COMMIT=2d90d6b7b601ecb9ccdf81239a43b4396b4b0c9e
 
 WORKDIR /src
 
 # Shallow clone of the pinned tag. Keep .git: the build/version scripts run
 # `git describe` to stamp the version, and the lockfile install is reproducible.
 RUN git clone --depth 1 --branch "${ELEMENT_WEB_TAG}" \
-      https://github.com/element-hq/element-web.git /src
+      https://github.com/element-hq/element-web.git /src \
+    && actual="$(git -C /src rev-parse HEAD)" \
+    && if [ "$actual" != "${ELEMENT_WEB_COMMIT}" ]; then \
+         echo "FATAL: ${ELEMENT_WEB_TAG} resolves to $actual, expected ELEMENT_WEB_COMMIT=${ELEMENT_WEB_COMMIT}. Bump both together, or find out why upstream moved the tag." >&2; \
+         exit 1; \
+       fi
 
 # Apply our vendored patches. Fail the build loudly if any does not apply
 # cleanly, so a tag bump that breaks one is caught here, not at runtime. They are
@@ -178,9 +191,11 @@ RUN grep -q 'not caching server support' /src/apps/web/webapp/sw.js \
 # ---------------------------------------------------------------------------
 # Runtime: unprivileged nginx (same base family as vectorim/element-web), with
 # the inblock.io overlay applied exactly as the previous config-only image did.
-# nginx-unprivileged serves on 8080 as the `nginx` user.
+# nginx-unprivileged serves on 8080 as the `nginx` user. Pinned like the
+# builder (version tag plus index digest; was the moving `alpine-slim`, which
+# resolved to this same 1.31.6 mainline build when it was pinned).
 # ---------------------------------------------------------------------------
-FROM nginxinc/nginx-unprivileged:alpine-slim
+FROM nginxinc/nginx-unprivileged:1.31.6-alpine-slim@sha256:c81a27f28bc2d9c2da8998444e653c7b85b9bbbaa92e44ef18d8920784e06507
 
 USER root
 
