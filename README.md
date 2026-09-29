@@ -82,9 +82,9 @@ their last update).
 | Redis | `8.10.2` (`redis:8.10.2@sha256:d5ac52db24d4…`) | `docker-compose.yml:62`, `docker-compose.dev-staging.yml:100` (`REDIS_IMAGE_REF`) | Stock, run with `--appendonly yes` |
 | LiveKit server | `v1.13.7` (`livekit/livekit-server:v1.13.7@sha256:6fd3b7088874…`) | `docker-compose.yml:145`, `docker-compose.dev-staging.yml:202` (`LIVEKIT_IMAGE_REF`) | Stock, configured by `config/livekit.yaml` (embedded TURN) |
 | lk-jwt-service | `0.7.0` (`ghcr.io/element-hq/lk-jwt-service:0.7.0@sha256:e0c7cecfa74e…`) | `docker-compose.yml:192`, `docker-compose.dev-staging.yml:262` (`LK_JWT_IMAGE_REF`) | Stock, configured |
-| Caddy | `v2.11.4` (`caddy:2.11.4-builder`, `caddy:2.11.4`, tags only) | `dockerfiles/Dockerfile.caddy-l4:116`, `:121` | **Custom build** with xcaddy and the two modules below. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/caddy-l4` |
-| Caddy module `layer4` (mholt/caddy-l4) | `v0.1.2` | `dockerfiles/Dockerfile.caddy-l4:118` | Stock module (TURN-TLS SNI split on :443) |
-| Caddy module `rate_limit` (mholt/caddy-ratelimit) | commit `5625512f24f6` (upstream has no tag after `v0.1.0`) | `dockerfiles/Dockerfile.caddy-l4:119` | Stock module at a commit (edge rate limit for siwx-oidc `GET /resolve`) |
+| Caddy | `v2.11.4` (`caddy:2.11.4-builder@sha256:369218c81ca6…`, `caddy:2.11.4@sha256:0c994536bddb…`) | `dockerfiles/Dockerfile.caddy-l4:124`, `:129` | **Custom build** with xcaddy and the two modules below. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/caddy-l4` |
+| Caddy module `layer4` (mholt/caddy-l4) | `v0.1.2` | `dockerfiles/Dockerfile.caddy-l4:126` | Stock module (TURN-TLS SNI split on :443) |
+| Caddy module `rate_limit` (mholt/caddy-ratelimit) | commit `5625512f24f6` (upstream has no tag after `v0.1.0`) | `dockerfiles/Dockerfile.caddy-l4:127` | Stock module at a commit (edge rate limit for siwx-oidc `GET /resolve`) |
 | Caddy image the edge runs | `…/caddy-l4@sha256:1c9825f346b1…` (digest only) | `docker-compose.caddy-proxy.yml:72` (dev-staging). Production's Caddy is defined outside this repository; the `Caddyfile.production` header records the same digest | Built here |
 | yq (Synapse image) | `v4.53.3`, SHA-256 checked | `dockerfiles/Dockerfile:36-38` | Stock binary |
 | Debian `patch` (Synapse image build) | not version-pinned: floats within the Debian release (trixie) that the base digest fixes. Build tool only: installed, used and purged in one layer, so it is not in the image | `dockerfiles/Dockerfile:65-72` | Stock |
@@ -119,9 +119,6 @@ do:
 - **CI**: `.github/workflows/docker.yml` uses actions by major tag
   (`actions/checkout@v4`, `docker/login-action@v3`, `docker/metadata-action@v5`,
   `docker/build-push-action@v6`) on `ubuntu-latest`.
-
-Pinned by tag only, without a digest: `caddy:2.11.4-builder` / `caddy:2.11.4`. Release
-tags are conventionally immutable, but nothing here enforces it.
 
 Production, per the repository's own records: its `.env` pins Redis as
 `redis:latest@sha256:aa049e68…` (`docker-compose.yml:54-61`). The tag reads `latest`,
