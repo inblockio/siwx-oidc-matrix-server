@@ -175,13 +175,12 @@ siwx-oidc is the cheap follow-up.
   unblocked. Publishing needs Tim's delegation in the node UI.
 - Dev retired entry for kid `01797b65f97f018b`: remove once the 15 real dev users have signed in again
   (or at once on any sign of abuse).
-- The old exposed keys still exist inside the `.env` backups on both boxes (0600, needed for a full
-  rollback). Shred them after a clean soak: prod `.env.bak-20260927-pre-siwx-17d1461` and
-  `/home/deploy/matrix-backups/20260927T2103Z-siwx-promo/env`, dev
-  `.env.bak-20260927T205631Z-signingkeyrot-leak` plus the older dev `.env.bak-*` files, which hold
-  earlier keys too.
-- Remove `portal-caddy-rollback` (and the 7-week-old `portal-caddy-1-old`) after the soak.
-- Soak at +1 h / +24 h: e2e 13/13, fleet count, siwx-oidc log levels, `caddy_rate_limit_declined_requests_total`.
+- DONE 2026-09-29: every copy of the old exposed keys in the `.env` backups on both boxes was located
+  by fingerprint and shredded (27 files on prod, 10 on dev), see section 11.
+- DONE 2026-09-29: `portal-caddy-rollback` and `portal-caddy-1-old` removed, see section 11.
+- DONE: soak at +2 h (section 9) and +24 h (section 10), both green. The +1 h check was not recorded.
+  `caddy_rate_limit_declined_requests_total` stayed unreadable (admin :2019 refused); declines were
+  counted from the limiter's log lines instead.
 - Converting `portal-caddy-1` into a compose file is still open (see repo
   `docs/deployment-recovery-reference.md`).
 
@@ -196,3 +195,76 @@ siwx-oidc is the cheap follow-up.
   watcher quiet (phase ok, 2 ignored one-probe blips).
 - Open: rate-limit metric not reachable (admin :2019/metrics returned nothing). The +24 h check is still due
   around 2026-09-28 21:17 UTC.
+
+## 10. +24 h soak check (2026-09-28 23:04 UTC)
+
+Result: GREEN, all checks pass.
+
+- siwx-oidc: container up, 0 restarts, image still 17d1461.
+- /jwk: kid c8551128d18f71ff. /resolve answers correctly.
+- Logs since promotion: siwx-oidc 6 WARN / 0 ERROR. Synapse 0 OIDC errors.
+- e2e `prod-siwxpromo-soak24h-20260928` (`~/.cache/aqua-e2e-logs/prod-siwxpromo-soak24h-20260928.log`): 13/13.
+- Fleet: 21/21 connected, 0 x 401. Crash-loop watcher quiet.
+- /resolve rate limit: 0 declined requests since promotion, counted from the limiter's log lines. The
+  admin endpoint :2019 refused the metrics read and there is no access log, so the counter itself stayed
+  unreadable.
+- Scribe note (not a siwx-oidc fault): 52 M_UNKNOWN_TOKEN retries in two call windows, 0 refresh
+  failures. The cause is Scribe-side ("reconnect returned short TTL", "lock ... dirtied"); follow up in
+  aqua-agents.
+
+## 11. Post-soak housekeeping (2026-09-29)
+
+Done on Tim's explicit go, prod and dev. Leaked-key copies were located by fingerprint only: a pattern
+set derived from the old PRIVATE key scalar (PEM body windows, JWK `d`, hex) was grepped for, printing
+filenames only, never content. Every hit was shredded with `shred -u`. The pattern files were shredded
+too. The three prod Redis backup archives were also checked (decompressed, count only): 0 matches, kept.
+
+Prod (old key pubkey sha256 prefix 806143f21108), 27 files shredded:
+
+- `/home/deploy/matrix/stack/.env.bak-20260927-pre-siwx-17d1461`
+- `/home/deploy/matrix-backups/20260927T2103Z-siwx-promo/env`
+- `/home/deploy/matrix-backups/20260925T2125Z/env.bak`
+- `/home/deploy/matrix-backups/20260925T2125Z/env.pre-5.0`
+- `/home/deploy/matrix/stack/backups/20260913T020000Z-eventindex/.env.bak`
+- `/home/deploy/matrix/stack/backups/20260913T0930Z-bc/.env.bak`
+- `/home/deploy/matrix/stack/backups/20260914T0810Z-de/.env.bak`
+- `/home/deploy/secrets/env-history/`: all 20 files there (`.env.bak-20260731`, `.env.bak-20260731165137`,
+  `.env.bak-20260731171157`, `.env.bak-20260731b`, `.env.bak-20260803-prodav`, `.env.bak-20260804-keyrot`,
+  `.env.bak-element-20260831T213747Z`, `.env.bak-ewsearch-20260814T222047Z`,
+  `.env.bak-pre-passkey-scope-20260619`, `.env.bak-precutover-20260831T210306Z`,
+  `.env.bak-synapse-20260831T213848Z`, `.env.bak.20260611171235`, `.env.bak.20260611171357`,
+  `.env.bak.20260618061438`, `.env.bak.20260624073425`, `.env.bak.20260624124910`,
+  `.env.bak.20260629071350`, `.env.bak.20260731212458`, `.env.bak.20260731224347`,
+  `.env.bak.20260801102400`). The key had been the prod signing key since at least June.
+- Live prod `.env` contains the old key: no. Rescan after shredding: 0 matches under `/home/deploy`
+  (unreadable to `deploy`, not scanned: `caddy/data`, `caddy/config`, and the Synapse signing key in the
+  20260925T2125Z backup).
+
+Dev (old kid 01797b65f97f018b, pubkey sha256 prefix 047e2cc1fac8, matched against the served JWKS), 10
+files shredded:
+
+- `~/matrix-staging/.env.bak-20260927T205631Z-signingkeyrot-leak`
+- `~/matrix-staging/.env.bak-20260925-pre-main-pin`
+- `~/matrix-staging/.env.bak-20260925-pre-synapse-1161`
+- `~/matrix-staging/.env.bak-mainswitch-20260831T233955Z`
+- `~/matrix-staging/backups/2026-09-25-pre-upgrade-1.161/compose/env.snapshot`
+- `~/matrix-staging/backups/20260912-eventindex/.env.bak`
+- `~/matrix-staging/backups/20260913-bc/.env.bak`
+- `~/matrix-staging/backups/20260913-nonblocking/.env.bak`
+- `~/matrix-staging/backups/20260914-de/.env.bak`
+- `~/backups/env-20260831-003210.bak`
+- Live dev `.env` contains the old private key: no (it carries only the public form in
+  `SIWEOIDC_RETIRED_SIGNING_KEYS_PEM`, by design). The remaining older dev `.env.bak-*` files (before
+  2026-08-31) do not contain the leaked key; they hold earlier, unexposed dev keys and were kept.
+
+Edge: the stopped containers `portal-caddy-rollback` and `portal-caddy-1-old` were removed on prod
+(`docker rm`, images kept). `portal-caddy-1` stays Up; `https://matrix.inblock.io/_matrix/client/versions`
+returns 200 afterwards.
+
+Rollback after housekeeping: only the image-only path in section 6 remains. It keeps the new key.
+`SIWX_OIDC_IMAGE_REF` is present in the live prod `.env`, and the rollback image
+`ghcr.io/inblockio/siwx-oidc@sha256:458842fae04aa45539bce5040c11017d7c8eb56b13c801a03bbdb442324ee7f1`
+is present locally on prod. The "full restore" lines in section 6 (prod `.env.bak-20260927-pre-siwx-17d1461`,
+dev `.env.bak-20260927T205631Z-signingkeyrot-leak`) and the `portal-caddy-rollback` edge rename are void:
+those files and that container no longer exist. The MANIFEST.sha256 in
+`/home/deploy/matrix-backups/20260927T2103Z-siwx-promo/` still lists `env`, which is now gone.
