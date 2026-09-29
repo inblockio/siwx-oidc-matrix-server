@@ -124,9 +124,9 @@ services:
     environment:
       # Internal URL, unlike production's public wss:// one: nothing in this
       # harness consumes the SFU URL from a browser, so lk-jwt's RoomService
-      # hairpin never crosses the Caddy edge here (see T6 in
-      # docs/superpowers/plans/2026-08-01-av-hardening-config.md for why
-      # production cannot do the same).
+      # hairpin never crosses the Caddy edge here. Production cannot do the
+      # same: lk-jwt hands the same LIVEKIT_URL to browsers (see the lk-jwt
+      # service in docker-compose.yml).
       LIVEKIT_URL: "ws://siwx-e2eh-livekit:7880"
       LIVEKIT_KEY: "${LIVEKIT_KEY}"
       LIVEKIT_SECRET: "${LIVEKIT_SECRET}"
@@ -147,8 +147,8 @@ services:
     # "8080" fixes the helper but makes the SERVER exit 1 with
     # `listen tcp: address 8080: missing port in address` — mutually
     # exclusive, verified against the pinned digest on 2026-08-30. Left
-    # enabled it marks the container unhealthy and ci-deploy.sh's health
-    # gate fails EVERY converge, wedging dev-staging CD. Disabling restores
+    # enabled it marks the container unhealthy, so anything that gates on
+    # container health (a deploy, `up --wait`) fails. Disabling restores
     # the 0.5.0 behaviour this service was always documented to have
     # ("no healthcheck by design"); probe /healthz externally instead.
     healthcheck:
