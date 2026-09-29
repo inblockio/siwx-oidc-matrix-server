@@ -36,9 +36,38 @@ patches/element-web/*.patch
     "SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR
     LicenseRef-Element-Commercial". The third option names Element's
     commercial license, which only Element can grant, so the changes to
-    these files, and the code files the patches add, are licensed
-    AGPL-3.0-only OR GPL-3.0-only. The added code files carry Element's
-    standard file header so that they can be proposed upstream unchanged.
+    these files are licensed AGPL-3.0-only OR GPL-3.0-only.
+
+    The patches also add thirteen code files that inblock.io assets GmbH
+    wrote. inblock.io assets GmbH licenses them under AGPL-3.0-only OR
+    GPL-3.0-only, except the two service-worker tests named further down,
+    which are AGPL-3.0-only:
+
+        apps/web/playwright/e2e/crypto/web-event-index.spec.ts
+        apps/web/src/vector/platform/BrowserEventIndexManager.ts
+        apps/web/src/vector/platform/BrowserEventIndexManager.test.ts
+        apps/web/src/vector/platform/eventIndexBounds.ts
+        apps/web/src/vector/platform/eventIndexBounds.test.ts
+            (browser-eventindex.patch)
+        apps/web/src/hooks/useAttestedDid.ts
+            (show-attested-did.patch)
+        apps/web/src/components/views/dialogs/invite/DMRoomTile.test.tsx
+        apps/web/src/utils/didLocalpart.ts
+        apps/web/src/utils/didLocalpart.test.ts
+        apps/web/src/utils/didProof.ts
+        apps/web/src/utils/didSearchMember.ts
+            (resolve-did-search.patch)
+        apps/web/src/serviceworker/serverSupport.test.ts
+            (sw-versions-no-cache-on-error.patch)
+        apps/web/src/serviceworker/mediaTokenRetry.test.ts
+            (sw-media-401-token-retry.patch)
+
+    Each of them carries Element Web's standard file header, "Copyright
+    2026 inblock.io" and "SPDX-License-Identifier: AGPL-3.0-only OR
+    GPL-3.0-only OR LicenseRef-Element-Commercial", so that it can be
+    proposed upstream unchanged. The header is not a statement of what
+    inblock.io assets GmbH grants: it does not offer Element's commercial
+    license, and this NOTICE states the grant.
 
     AUTHORS.rst, docs/labs.md and apps/web/src/i18n/strings/en_EN.json
     have no header and fall under Element Web's README, which offers the
@@ -47,6 +76,11 @@ patches/element-web/*.patch
 
     The following changes are licensed differently. None of them is part
     of the built web application: they are documentation and tests.
+
+    - docs/web-event-index.md, added by browser-eventindex.patch, has no
+      header. Like Element Web's own headerless files above, it is
+      licensed AGPL-3.0-or-later OR GPL-3.0-or-later, the licenses Element
+      Web's README offers.
 
     - docs/.vitepress/config.ts, changed by browser-eventindex.patch, is
       offered by Element under "AGPL-3.0-only OR
@@ -80,7 +114,10 @@ Brand assets
 
 The following files are logos and brand material of inblock.io assets
 GmbH. They are not licensed under the Apache License or under any other
-license. A deployment of this bundle must replace them with its own:
+license: all rights are reserved. The license labels of the images call
+them LicenseRef-inblockio-brand-assets, which means exactly this: the
+files listed here, with no license granted. A deployment of this bundle
+must replace them with its own:
 
     config/element-welcome-background.svg
     config/favicon.ico
