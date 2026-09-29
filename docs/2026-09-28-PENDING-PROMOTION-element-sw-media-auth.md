@@ -13,6 +13,12 @@ this fix). If the DID-search work is not ready, this fix can ship alone with the
 Since 2026-09-28 23:12 UTC dev runs that joint build (`element-web@sha256:4cbcd901...`, rev 5fdc0b0),
 which serves all entry 9/10 markers.
 
+**Entry 9 re-vendored (2026-09-29):** main now carries entry 9 re-copied from PR #35242 head
+`246724f407` (SonarCloud follow-up, behaviour identical; entry 10 got a header-only refresh). Dev
+still runs an image with entry 9 at `4ea5f83813` (the 2e9eb93 image of section 2; the joint build
+5fdc0b0 carries the same copy). The promotion target digest in section 2 is unchanged. Moving it to
+a newer main digest is optional and Tim's call. No pins were changed.
+
 ---
 
 ## 1. Release notes
