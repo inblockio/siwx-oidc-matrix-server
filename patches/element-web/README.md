@@ -725,6 +725,69 @@ A tag bump must try every patch in this file's order.
     `node --test scripts/browser-eventindex-invariants.mjs` 12/12. One timing test
     (`per-flush cost ... < 10 ms`) read 12.4 ms under a 28-file parallel run and passed
     3/3 in isolation.
+- **FOURTH LEAD, 2026-10-03: an edited message is no longer found by its pre-edit body.**
+  A defect fix inside increment E, not a new increment. Same sanctioned-exception rule as
+  the carries above (rule 3); this bullet is the record it requires.
+  - **The defect** (in every build since the third carry). After an `m.replace`, a search
+    for the old text still found the message, showing its old body, until the edit's
+    encrypted rewrite left the live write buffer (`LIVE_WRITE_FLUSH_INTERVAL_MS`, up to
+    5 s, or an explicit flush). The edit updates the resident record at once. But once
+    anything is on disk every search opens a cold-scan session, and since the E3-F1 fix
+    (`c61dba1135`) the cold loop skips only `session.hotIds`, the hot *matches*: the
+    resident record the hot tier had correctly rejected was evaluated a second time,
+    against its decrypted chunk copy, which still held the pre-edit body. Both the
+    substring fallback and the term path were affected. The PR branch itself has no cold
+    tier and does not have this defect.
+  - **Found by** the siwx-oidc leg `e2e/element/ew-encrypted-search.spec.mjs`, step UX3
+    (`UX3 old body must leave the index`: expected 0 hits, got 1), failing the same way
+    on two images built from this repository's `main`.
+  - **Fix:** `coldScanSessionStep` evaluates and serves the resident record when the id
+    has one, and the decrypted chunk copy only when it does not. The E3-F1 case (a member
+    that became resident after the session snapshot) is still evaluated, now from its
+    authoritative copy.
+  - **Provenance commit: `f0ea812219`** on our fork's branch
+    **`fix/web-event-index-edit-removal`**, two commits on top of the third carry's
+    `7280a73f90`: `192e9c2312` (the fix and its first two tests) and `f0ea812219` (two
+    more tests, test file only). It supersedes `7280a73f90` as the base every
+    regeneration starts from. **That branch is LOCAL (one worktree on the build host) and
+    has not been pushed: until it is, neither commit is reachable from
+    `inblockio/element-web`, and a regeneration cannot start from the fork on GitHub.**
+  - **Regenerated** the way the tag-bump bullet above describes: patches 1-5 and the
+    previous patch 6 applied to a pristine `v1.12.29` tree (this first reproduced the
+    previous patch byte for byte), `git diff 7280a73f90 f0ea812219` applied on top, then
+    `git diff --cached -O <original file order>`. Only `BrowserEventIndexManager.ts` and
+    `BrowserEventIndexManager.test.ts` changed, both byte-identical to `f0ea812219`.
+    **Patch size: nineteen files, `+14991/-40`, 15420 lines** (was `+14884/-40`, 15313
+    lines at the third carry). All ten patches apply in Dockerfile order to a pristine
+    `v1.12.29` tree. `f0ea812219` adds only test-file lines (53 in the test file's hunk),
+    which are not in the shipped bundle: the image used for the end-to-end run in the next bullet was
+    built from the patch as of `192e9c2312`, so it carries the same shipped code as an
+    image built from this patch.
+  - **Gates, on the fork branch:** four new vitest cases in the `UX3` describe (substring
+    path and term path in `192e9c2312`; room scope and "the cold tier serves the resident
+    copy" in `f0ea812219`), all four red with the fix reverted and green with it. Each
+    later case is also red against the mutant it targets: matching on the resident copy
+    but serving the chunk copy fails the served-copy case, and dropping the cold loop's
+    room check fails the room-scope case. Vitest **298/298** across
+    `BrowserEventIndexManager`, `WebPlatform`, `eventIndexBounds`, `ElectronPlatform`,
+    `PWAPlatform`, `EventIndex` (was 294); `tsc --noEmit` 0 errors in project sources;
+    `oxlint` and `oxfmt --check` clean on both files. End to end, on a local stack, the
+    siwx-oidc leg above passes UX1-UX8 against an image built from this patch set and
+    still fails at UX3 against an image built from the previous one. (The leg needed
+    one fix of its own to get past UX6, siwx-oidc `ba5d411`: its signed-out first tab
+    held Element's one-tab session lock; the UX3 failure had hidden that. The same
+    commit also gives the second tab the page-error listener the first one has.)
+  - **No bundle marker.** The fix adds no string literal, property or method name, so no
+    grep tells this build from the third carry's; identify it by the image's revision
+    label.
+  - **Known residual, same class, cosmetic:** the *context* lines around a cold hit still
+    come from the decrypted chunk, so a neighbour edited in the last few seconds can show
+    its old body there until the flush.
+  - **Condition for closing the gap:** this fix belongs to increment E's cold tier, so it
+    closes with E's: when the cold tier, including `192e9c2312`, lands on
+    `feat/web-event-index` (and so in #34718), or is filed upstream as its own PR. Until
+    then every regeneration of this patch, and the next integration branch, must contain
+    `f0ea812219` (the E cleanup `1fde9ffe2b` is still uncarried, separately).
 - **Upstream status: FILED AND ACTIVELY TRACKED — we are trying to get this
   merged.** [element-hq/element-web#34718](https://github.com/element-hq/element-web/pull/34718)
   "Add a browser EventIndex so encrypted-room search works on the web"
@@ -800,11 +863,10 @@ A tag bump must try every patch in this file's order.
   but it does NOT yet cover the checkpoint HMAC or the v1 → v2 reset — a
   known gap, and the reason it is a supplement to the vitest rather than the
   proof. The siwx-oidc leg rule 2 asks for,
-  `e2e/element/ew-encrypted-search.spec.mjs`, exists only on the unmerged
-  branch `feat/ew-encrypted-search-eventindex` and is NOT on that repo's
-  checked-out tree; the in-patch Playwright spec now covers the same user
-  journey against upstream's own harness, so the honest statement is that
-  the behaviour is covered and the siwx-oidc leg is still unlanded. Default
+  `e2e/element/ew-encrypted-search.spec.mjs` (UX1-UX8 against a deployed
+  build, signing in through siwx-oidc), is on that repo's `main` since
+  2026-09-29 (`2c80f2a`); its UX3 step is what caught the defect the fourth
+  lead above fixes. Default
   `enableEventIndexing` stays upstream's `true` (same as Desktop).
 
 ---

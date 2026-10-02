@@ -997,10 +997,10 @@ index fe75a94..f9aedf6 100644
          labsGroup: LabGroup.Messaging,
 diff --git a/apps/web/src/vector/platform/BrowserEventIndexManager.test.ts b/apps/web/src/vector/platform/BrowserEventIndexManager.test.ts
 new file mode 100644
-index 0000000..5225cf8
+index 0000000..8cf1cb3
 --- /dev/null
 +++ b/apps/web/src/vector/platform/BrowserEventIndexManager.test.ts
-@@ -0,0 +1,6643 @@
+@@ -0,0 +1,6739 @@
 +/*
 +Copyright 2026 inblock.io
 +
@@ -7643,13 +7643,109 @@ index 0000000..5225cf8
 +        expect(ids.some((id) => resident.has(id))).toBe(true);
 +        expect(ids.some((id) => !resident.has(id))).toBe(true);
 +    });
++
++    // siwx-oidc e2e UX3 (e2e/element/ew-encrypted-search.spec.mjs): after an m.replace, the pre-edit body was
++    // still found. The edit updates the resident record at once, but its encrypted rewrite waits in the live
++    // write buffer (up to LIVE_WRITE_FLUSH_INTERVAL_MS) -- and since E3-F1 the cold scan skips only the hot
++    // *matches* (session.hotIds), so the resident record the hot tier had correctly rejected was re-evaluated
++    // against its stale disk copy, and the old body matched there. The resident record is the authoritative
++    // copy of anything it holds; the disk copy is only authoritative for what is not resident.
++    describe("UX3: an edit's pre-edit body is not served from the not-yet-rewritten disk copy", () => {
++        async function editedBeforeFlush(): Promise<BrowserEventIndexManager> {
++            const m = track(new BrowserEventIndexManager());
++            await m.initEventIndex(userId, DEVICE);
++            await m.waitForHydration();
++            await m.addEventToIndex(msg("$orig", "ewsearch-123-alpha", { room_id: ROOM }), {});
++            await m.addEventToIndex(msg("$other", "alpha other", { room_id: ROOM, origin_server_ts: 500 }), {});
++            await m.commitLiveEvents(); // both on disk, so every search below reaches the cold tier
++            await m.addEventToIndex({ ...edit("$edit", "$orig", "ewsearch-123-beta"), room_id: ROOM }, {});
++            // Deliberately no commitLiveEvents(): the rewrite of $orig's chunk is still buffered.
++            return m;
++        }
++
++        it("substring path: the old body is gone at once, the new body is found under the original id", async () => {
++            const m = await editedBeforeFlush();
++            const oldHit = await m.searchEventIndex(search("ewsearch-123-alpha"));
++            expect(resultIds(oldHit)).toEqual([]);
++            expect(oldHit.count).toBe(0);
++
++            const newHit = await m.searchEventIndex(search("ewsearch-123-beta"));
++            expect(resultIds(newHit)).toEqual(["$orig"]);
++            expect(newHit.results![0].result.content.body).toBe("ewsearch-123-beta");
++
++            await m.commitLiveEvents();
++            expect(resultIds(await m.searchEventIndex(search("ewsearch-123-alpha")))).toEqual([]);
++        });
++
++        it("term path: a token only the pre-edit body held matches only the record that still holds it", async () => {
++            const m = await editedBeforeFlush();
++            // `alpha` still has a resident match ($other), so this query takes the token path, not the substring
++            // fallback; $orig must not ride along on its stale disk copy.
++            const hit = await m.searchEventIndex(search("alpha"));
++            expect(resultIds(hit)).toEqual(["$other"]);
++            expect(hit.count).toBe(1);
++        });
++
++        it("room scope: the stale copy is not served to its own room, and the resident copy does not leak into another", async () => {
++            const m = track(new BrowserEventIndexManager());
++            await m.initEventIndex(userId, DEVICE);
++            await m.waitForHydration();
++            // The same old body in two rooms, written together so both land in one chunk: the walk for either
++            // room's search then decrypts a chunk that holds the other room's record too.
++            await m.addEventToIndex(msg("$orig", "ewsearch-123-alpha", { room_id: ROOM, origin_server_ts: 1000 }), {});
++            await m.addEventToIndex(msg("$twin", "ewsearch-123-alpha", { room_id: ROOM2, origin_server_ts: 900 }), {});
++            await m.commitLiveEvents();
++            await m.addEventToIndex({ ...edit("$edit", "$orig", "ewsearch-123-beta"), room_id: ROOM }, {});
++            // Deliberately no commitLiveEvents(): the chunk still holds $orig's pre-edit body.
++
++            // The room the edit happened in: neither the substring query nor the term query may find the old body.
++            for (const term of ["ewsearch-123-alpha", "alpha"]) {
++                const stale = await m.searchEventIndex(search(term, { room_id: ROOM }));
++                expect(resultIds(stale)).toEqual([]);
++                expect(stale.count).toBe(0);
++            }
++            // The other room still finds its own untouched record by that body (the cold tier is not muted) ...
++            const twin = await m.searchEventIndex(search("ewsearch-123-alpha", { room_id: ROOM2 }));
++            expect(resultIds(twin)).toEqual(["$twin"]);
++            // ... and the edited record, which now matches the NEW body, does not cross into it.
++            const leak = await m.searchEventIndex(search("ewsearch-123-beta", { room_id: ROOM2 }));
++            expect(resultIds(leak)).toEqual([]);
++            const own = await m.searchEventIndex(search("ewsearch-123-beta", { room_id: ROOM }));
++            expect(resultIds(own)).toEqual(["$orig"]);
++        });
++
++        it("the cold tier serves the resident copy of a record the hot snapshot rejected, not the chunk copy", async () => {
++            const m = track(new BrowserEventIndexManager());
++            await m.initEventIndex(userId, DEVICE);
++            await m.waitForHydration();
++            await m.addEventToIndex(msg("$x1", "ewsearchbeta one", { room_id: ROOM, origin_server_ts: 1000 }), {});
++            await m.addEventToIndex(msg("$x2", "ewsearchbeta two", { room_id: ROOM, origin_server_ts: 1001 }), {});
++            await m.addEventToIndex(msg("$y", "unrelated text", { room_id: ROOM, origin_server_ts: 1002 }), {});
++            await m.commitLiveEvents();
++
++            // Page one snapshots the hot matches ($x2, $x1) and opens a session; $y is resident but not a hit.
++            const first = await m.searchEventIndex(search("ewsearchbeta", { limit: 2 }));
++            expect(resultIds(first)).toEqual(["$x2", "$x1"]);
++            expect(first.next_batch).toBeDefined();
++
++            // $y is edited into a match while the session is open. Its chunk copy still says "unrelated text".
++            await m.addEventToIndex({ ...edit("$edit", "$y", "ewsearchbeta three"), room_id: ROOM }, {});
++
++            // Page two reaches $y only through the cold step. It must evaluate AND serve the resident copy.
++            const second = await m.searchEventIndex(search("ewsearchbeta", { limit: 2, next_batch: first.next_batch }));
++            expect(resultIds(second)).toEqual(["$y"]);
++            expect(second.results![0].result.content.body).toBe("ewsearchbeta three");
++            expect(second.count).toBe(3);
++            expect(second.next_batch).toBeUndefined();
++        });
++    });
 +});
 diff --git a/apps/web/src/vector/platform/BrowserEventIndexManager.ts b/apps/web/src/vector/platform/BrowserEventIndexManager.ts
 new file mode 100644
-index 0000000..51aee34
+index 0000000..b33a1a6
 --- /dev/null
 +++ b/apps/web/src/vector/platform/BrowserEventIndexManager.ts
-@@ -0,0 +1,5495 @@
+@@ -0,0 +1,5506 @@
 +/*
 +Copyright 2026 inblock.io
 +
@@ -10018,7 +10114,9 @@ index 0000000..51aee34
 +     * Never needs to flush {@link liveWriteBuffer} first: every structure this reads -- {@link events}, {@link
 +     * inverted}, {@link roomOrder} -- is updated synchronously by {@link upsertEvent} the moment a live event is
 +     * indexed, before {@link schedulePersistEvent} ever buffers anything for disk. A live event is therefore
-+     * searchable immediately, seconds before its encrypted copy exists anywhere.
++     * searchable immediately, seconds before its encrypted copy exists anywhere. The cold tier does read disk, which
++     * lags such a buffered write, so it prefers the resident record for any id that has one ({@link
++     * coldScanSessionStep}); that, not a flush, is what keeps an edit's pre-edit body out of the results.
 +     *
 +     * @param searchArgs - `search_term` is the raw user input; `room_id` scopes the search (and, once a session
 +     *     reaches the cold tier, restricts the chunk walk itself to chunks holding at least one of that room's
@@ -10360,8 +10458,10 @@ index 0000000..51aee34
 +     * with any concurrent {@link hydrate}/{@link materializeIfPending} call decrypting the same chunk, so a scan
 +     * racing hydration's own admission neither double-decrypts nor double-returns an event hydration just made
 +     * resident -- evaluating `useSubstring ? folded-substring : token-AND-with-prefix` ({@link
-+     * coldRecordMatchesTokens}) against every member not already resident, already tombstoned, or already returned
-+     * by this session, newest-member-first within the chunk to match {@link hydrate}'s own admission order.
++     * coldRecordMatchesTokens}) against every member not in the session's hot snapshot, already tombstoned, or already
++     * returned by this session, newest-member-first within the chunk to match {@link hydrate}'s own admission order.
++     * A member that is resident is evaluated (and served) from its resident record, never from the decrypted chunk,
++     * whose copy can lag a buffered rewrite such as an edit's.
 +     *
 +     * **Resuming needs no cursor at all, only `session.returned` (re-scoped from the previous `(originServerTs,
 +     * eventId)` boundary shape, which review-pr-e.md's second round -- E2-F1, E2-F4 -- found still unstable).**
@@ -10468,7 +10568,14 @@ index 0000000..51aee34
 +                ) {
 +                    continue;
 +                }
-+                const stored = entries.get(id)!;
++                // The resident record, when there is one, is the authoritative copy: every write reaches it
++                // synchronously, while the decrypted `entries` copy lags any rewrite still waiting in {@link
++                // liveWriteBuffer}. Matching that disk copy instead served an edited message under its pre-edit
++                // body (siwx-oidc e2e UX3): the hot tier had correctly rejected the resident record, and
++                // session.hotIds names only hot *matches*, so the stale copy got a second, wrong evaluation here.
++                // A member that is not resident (the cold case proper, or one that became resident after the
++                // snapshot, E3-F1) is evaluated exactly as before, from whichever copy is current.
++                const stored = this.events.get(id) ?? entries.get(id)!;
 +                if (session.roomId && stored.roomId !== session.roomId) continue;
 +                const isMatch = session.useSubstring
 +                    ? flattenCopy(foldText(stored.searchText)).includes(foldedQuery)

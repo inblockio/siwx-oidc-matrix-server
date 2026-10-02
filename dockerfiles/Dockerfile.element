@@ -96,10 +96,13 @@ RUN git apply --verbose /tmp/ew-checkcode.patch
 # v2 databases are RESET once rather than converted; and E, the cold-tier
 # streamed scan that finds on-disk content outside the resident window, plus the
 # Firefox/Safari desktop-tier fix. It is therefore regenerated from the
-# provenance commit 7280a73f90 on inblockio/element-web branch
-# integration/web-event-index-prod-20260914, NOT from the PR head. Do not
-# "resync to the PR" without reading entry 6 -- that would silently revert all
-# five on prod.
+# provenance commit f0ea812219 on inblockio/element-web branch
+# fix/web-event-index-edit-removal (the UX3 edit fix 192e9c2312 and its tests,
+# on top of 7280a73f90 of integration/web-event-index-prod-20260914; that
+# branch is LOCAL until pushed, see entry 6 "FOURTH LEAD"), NOT from the PR
+# head. Do not "resync to the PR" without reading entry 6 -- that would
+# silently revert all five on prod, and regenerating from 7280a73f90 would
+# silently revert the UX3 fix.
 #
 # Touches Settings.tsx, en_EN.json, docs/labs.md, SearchWarning.tsx,
 # BaseEventIndexManager.ts, indexing/EventIndex.ts and their tests as well as the
