@@ -169,10 +169,10 @@ index 93fdeec..18491e4 100644
          "create_account": "Create account",
 diff --git a/apps/web/src/utils/eventToMarkdown.test.ts b/apps/web/src/utils/eventToMarkdown.test.ts
 new file mode 100644
-index 0000000..a95350e
+index 0000000..ca8f961
 --- /dev/null
 +++ b/apps/web/src/utils/eventToMarkdown.test.ts
-@@ -0,0 +1,2679 @@
+@@ -0,0 +1,3061 @@
 +/**
 +Copyright 2026 inblock.io
 +
@@ -186,11 +186,13 @@ index 0000000..a95350e
 +import { EventType, MatrixEvent, MsgType } from "matrix-js-sdk/src/matrix";
 +import * as commonmark from "commonmark";
 +
++import { htmlSerializeFromMdIfNeeded } from "../editor/serialize";
 +import {
 +    canCopyMarkdown,
 +    convertEvent,
 +    displayedText,
 +    eventToMarkdown as publicEventToMarkdown,
++    gfmCellsSafe,
 +    isSafeMarkdown,
 +    lastResortMarkdown,
 +    withSafetyNet,
@@ -208,6 +210,13 @@ index 0000000..a95350e
 +    };
 +});
 +
++// Element's own send path behind a spy, so that a test can make it throw and tell the conversion from a cheap check
++// that never calls it.
++vi.mock("../editor/serialize", async (importOriginal) => {
++    const real = await importOriginal<typeof import("../editor/serialize")>();
++    return { ...real, htmlSerializeFromMdIfNeeded: vi.fn(real.htmlSerializeFromMdIfNeeded) };
++});
++
 +const lines = (...l: string[]): string => l.join("\n");
 +
 +/**
@@ -220,6 +229,38 @@ index 0000000..a95350e
 +    expect(fellBack).toBe(false);
 +    expect(isSafeMarkdown(md)).toBe(true);
 +    expect(publicEventToMarkdown(event)).toBe(md);
++    return md;
++}
++
++/**
++ * Plain bodies that Element sends as plain text and that CommonMark reads as exactly themselves. Rule 5 of R1 copies
++ * them verbatim, the sender's own source, where the converter alone would escape them (URLs, pipes) or strip private-use
++ * characters. [name, body]
++ */
++const VERBATIM_PLAIN: Array<[name: string, body: string]> = [
++    ["an underscore inside a word", "snake_case_name"],
++    ["a lone asterisk", "a * b"],
++    ["soft line breaks and a blank line", lines("one", "two", "", "three")],
++    ["a URL-only message", "https://matrix.org/_matrix/client/versions"],
++    ["a URL on each of two lines", "https://a.example/1\nhttps://b.example/2"],
++    ["a real URL after a long-s one", "http\u017f://a.example/x https://b.example/y"],
++    ["private-use characters", "a\uE001b\uE004c\uE007d\uE000e"],
++    ["a pipe", "a|b"],
++    ["a pipe between a URL and text", "https://a.example/x | y"],
++    ["a pipe, then a line that may be a delimiter row", "a | b\n:-:"],
++    ["a table and nothing else", lines("| train | driver |", "|---|---|", "| core | Alice |")],
++];
++
++/**
++ * The converter alone, as `eventToMarkdown` above checks it, for a plain body. The public entry point agrees with it,
++ * except for the bodies in `VERBATIM_PLAIN`: rule 5 of R1 applies to them and the public copy is the body itself.
++ */
++function converted(event: MatrixEvent): string {
++    const { md, fellBack } = convertEvent(event);
++    expect(fellBack).toBe(false);
++    expect(isSafeMarkdown(md)).toBe(true);
++    const body: string = event.getContent().body;
++    expect(publicEventToMarkdown(event)).toBe(VERBATIM_PLAIN.some(([, b]) => b === body) ? body : md);
 +    return md;
 +}
 +
@@ -805,7 +846,7 @@ index 0000000..a95350e
 +    ];
 +
 +    it.each(PLAIN)("plain body: %s", (_name, body, expected, rendered) => {
-+        const md = eventToMarkdown(plain(body));
++        const md = converted(plain(body));
 +        expect(md).toBe(expected);
 +        expectClean(md, rendered);
 +    });
@@ -1041,7 +1082,7 @@ index 0000000..a95350e
 +    it("private-use characters in the message are not mistaken for internal markers", () => {
 +        const marked = "a\uE001b\uE004c\uE007d\uE000e";
 +        expect(eventToMarkdown(html(`<p>${marked}<code>${marked}</code></p>`))).toBe("abcde`abcde`");
-+        expect(eventToMarkdown(plain(marked))).toBe("abcde");
++        expect(converted(plain(marked))).toBe("abcde");
 +    });
 +
 +    it("many edge repairs stay fast and correct", () => {
@@ -2085,7 +2126,7 @@ index 0000000..a95350e
 +    ];
 +
 +    it.each(PLAIN)("plain: %s", (_name, body, expected, links) => {
-+        const md = eventToMarkdown(plain(body));
++        const md = converted(plain(body));
 +        expect(md).toBe(expected);
 +        expectClean(md);
 +        expect(renderMd(md).split("<a href").length - 1).toBe(links);
@@ -2220,7 +2261,7 @@ index 0000000..a95350e
 +        ];
 +
 +        it.each(PLAIN)("plain body: %s", (_name, body, expected) => {
-+            const md = eventToMarkdown(plain(body));
++            const md = converted(plain(body));
 +            expect(md).toBe(expected);
 +            expectClean(md, [], ['<a href="javascript']);
 +        });
@@ -2271,7 +2312,7 @@ index 0000000..a95350e
 +        });
 +
 +        it("plain body", () => {
-+            expect(eventToMarkdown(plain("a | b\n:-:"))).toBe(lines("a \\| b\\", "\\:-:"));
++            expect(converted(plain("a | b\n:-:"))).toBe(lines("a \\| b\\", "\\:-:"));
 +        });
 +    });
 +
@@ -2807,11 +2848,352 @@ index 0000000..a95350e
 +    });
 +});
 +
++// A synthetic stand-in for a long status message: a heading, a task list, a pipe table, soft line breaks and a
++// fenced block, none of which Element's own renderer shows as typed.
++const CM5 = [
++    "### 1. +14.3% overall, driver Alice",
++    "",
++    "**core-client (main, dev): replace the `../core` path dependency with a git pin on the `vX.Y.Z` tag, then redeploy**",
++    "",
++    "- Moves: core +57.1%. Overall after this step: 53.9%.",
++    "- Repository: `core-client`. Kind: release.",
++    "- Tasks:",
++    "  - [ ] Alice: cut the first annotated `vX.Y.Z` tag of core.",
++    "  - [ ] `core-client`: switch to a git dependency on that tag, commit Cargo.lock, open a PR.",
++    "",
++    "| train | driver | score | cells |",
++    "|---|---|---|---|",
++    "| core | Alice | 🟥🟥🚂⬜⬜🏁 42.6% | 13 |",
++    "| client | Bob | 🚂⬜⬜⬜⬜🏁 0.0% | 7 |",
++    "",
++    '- `short-rev`: a `rev = "..."` shorter than 40 characters.',
++    "- `url-spelling`: the git URL is spelled differently from `https://example.org/<repo>`.",
++    "",
++    "Every **cell** is one (consumer, train) pair: each tracked branch that uses the",
++    "train, and each deployed service that runs it.",
++    "",
++    "```",
++    "cell  = max(0, value(status) - min(0.05 * flags, 0.15))",
++    "```",
++].join("\n");
++
++/** The event Element's composer sends for `md`: `body` verbatim, `formatted_body` as its renderer gives it. */
++function sentByElement(md: string, extra: object = {}): MatrixEvent {
++    const formatted = htmlSerializeFromMdIfNeeded(md);
++    return plain(
++        md,
++        formatted === undefined ? extra : { format: "org.matrix.custom.html", formatted_body: formatted, ...extra },
++    );
++}
++
++describe("r8 R1: the sender's own Markdown is copied when Element's send path reproduces the message", () => {
++    it("CM5: a Markdown message composed in Element is copied as typed", () => {
++        const ev = sentByElement(CM5);
++        const md = publicEventToMarkdown(ev);
++        expect(md).toBe(CM5);
++        expect(isSafeMarkdown(md)).toBe(true);
++        // What the converter alone gives is the lossy re-rendering of Element's display, which is why R1 exists.
++        expect(convertEvent(ev).md).toContain("\\| train \\| driver");
++    });
++
++    it("CM5 as a reply: the legacy reply fallback is removed from body and formatted_body", () => {
++        const ev = plain("> <@a:b.c> quoted\n\n" + CM5, {
++            "format": "org.matrix.custom.html",
++            "formatted_body":
++                '<mx-reply><blockquote><a href="https://matrix.to/#/!r:example.org/$orig">In reply to</a> ' +
++                '<a href="https://matrix.to/#/@a:b.c">@a:b.c</a><br>quoted</blockquote></mx-reply>' +
++                htmlSerializeFromMdIfNeeded(CM5),
++            "m.relates_to": { "m.in_reply_to": { event_id: "$orig" } },
++        });
++        expect(publicEventToMarkdown(ev)).toBe(CM5);
++    });
++
++    it("a plain reply: the legacy reply fallback is removed from the body", () => {
++        const ev = plain("> <@a:b.c> quoted\n\nsnake_case_name", {
++            "m.relates_to": { "m.in_reply_to": { event_id: "$orig" } },
++        });
++        expect(publicEventToMarkdown(ev)).toBe("snake_case_name");
++    });
++
++    it("an edit: the replacement's own body is copied when it matches its formatted_body", () => {
++        const source = lines("**t**", "", "| a | b |", "|---|---|", "| 1 | 2 |");
++        const original = html("<p>old</p>", MsgType.Text, "old");
++        const replacement = new MatrixEvent({
++            type: EventType.RoomMessage,
++            room_id: "!r:example.org",
++            event_id: "$edit",
++            sender: "@a:example.org",
++            content: {
++                "msgtype": MsgType.Text,
++                "body": "* " + source,
++                "m.new_content": {
++                    msgtype: MsgType.Text,
++                    body: source,
++                    format: "org.matrix.custom.html",
++                    formatted_body: htmlSerializeFromMdIfNeeded(source),
++                },
++                "m.relates_to": { rel_type: "m.replace", event_id: "$e" },
++            },
++        });
++        original.makeReplaced(replacement);
++        expect(publicEventToMarkdown(original)).toBe(source);
++    });
++
++    describe("a message Element's send path does not reproduce keeps the converter's output", () => {
++        it("a mention: the pill is a link the body cannot reproduce", () => {
++            const ev = html(
++                '<strong>hey</strong> <a href="https://matrix.to/#/@u:example.org">U</a>',
++                MsgType.Text,
++                "**hey** U",
++            );
++            expect(publicEventToMarkdown(ev)).toBe("**hey** [U](https://matrix.to/#/@u:example.org)");
++            expect(publicEventToMarkdown(ev)).toBe(convertEvent(ev).md);
++        });
++
++        it("another client: the body is a plain fallback of the formatted_body", () => {
++            const ev = html("<strong>Build 42</strong> passed<br>in 3 s", MsgType.Text, "Build 42 passed\nin 3 s");
++            expect(publicEventToMarkdown(ev)).toBe(lines("**Build 42** passed\\", "in 3 s"));
++            expect(publicEventToMarkdown(ev)).toBe(convertEvent(ev).md);
++        });
++    });
++
++    describe("an equal but unsafe candidate falls through to the converter, whose output is safe", () => {
++        it.each([
++            ["raw HTML that Element lets through", "**b** <u>x</u>", "**b** x"],
++            ["raw HTML that Element escapes", "**b** <b>x</b>", "**b** \\<b>x\\</b>"],
++            ["a link Element would not show", "**b** [x](javascript:alert(1))", "**b** x"],
++            ["an image that is not an mxc one", "**b** ![i](https://example.org/i.png)", "**b**"],
++        ])("%s", (_name, source, expected) => {
++            const ev = sentByElement(source);
++            expect(ev.getContent().format).toBe("org.matrix.custom.html");
++            // Element's send path reproduces the message, so only the safety net keeps the source from being copied.
++            expect(isSafeMarkdown(source)).toBe(false);
++            const md = publicEventToMarkdown(ev);
++            expect(md).toBe(expected);
++            expect(isSafeMarkdown(md)).toBe(true);
++        });
++    });
++
++    it("text Element sent as plain text with a backslash: the typed backslash is kept", () => {
++        const ev = sentByElement("a\\*b");
++        expect(ev.getContent().formatted_body).toBe("a*b");
++        expect(publicEventToMarkdown(ev)).toBe("a\\*b");
++    });
++
++    describe("a plain message with no formatted_body", () => {
++        // Rule 5: Element sent it as plain text and CommonMark reads it as exactly itself, so it is the sender's source.
++        it.each(VERBATIM_PLAIN)("is copied as typed: %s", (_name, body) => {
++            expect(htmlSerializeFromMdIfNeeded(body)).toBeUndefined();
++            const md = publicEventToMarkdown(plain(body));
++            expect(md).toBe(body);
++            expect(isSafeMarkdown(md)).toBe(true);
++        });
++
++        it("a table and nothing else: the converter alone would escape every pipe and break every line", () => {
++            const body = VERBATIM_PLAIN[VERBATIM_PLAIN.length - 1][1];
++            expect(convertEvent(plain(body)).md).toBe(
++                lines("\\| train \\| driver \\|\\", "\\|---\\|---\\|\\", "\\| core \\| Alice \\|"),
++            );
++        });
++
++        it.each([
++            ["a backslash escape, which Element would not have sent", "a\\*b", "a\\\\\\*b"],
++            ["a lone list item, which Element treats as text", "2021.", "2021\\."],
++            ["an entity", "&amp;", "\\&amp;"],
++            ["a tag", "<foo>", "\\<foo>"],
++            ["a leading indent", "    indented", "\u00a0\u00a0\u00a0\u00a0indented"],
++        ])("keeps the converter's output: %s", (_name, body, expected) => {
++            const ev = plain(body);
++            const md = publicEventToMarkdown(ev);
++            expect(md).toBe(expected);
++            expect(md).toBe(convertEvent(ev).md);
++            expect(isSafeMarkdown(md)).toBe(true);
++        });
++
++        describe("a table split could matter: pipes, a delimiter row, a backtick before the cut and one after it", () => {
++            // A GFM table splits the first line at its pipe, which cuts the code span open and exposes the tag.
++            const body = lines("a `x | <b>y</b>` z", "-|-");
++
++            it("a body Element would not send as plain text is not copied as typed", () => {
++                expect(htmlSerializeFromMdIfNeeded(body)).not.toBeUndefined();
++                const ev = plain(body);
++                const md = publicEventToMarkdown(ev);
++                expect(md).toBe(convertEvent(ev).md);
++                expect(md).not.toBe(body);
++                expect(md).toContain("\\|");
++                expect(isSafeMarkdown(md)).toBe(true);
++            });
++
++            it("and CommonMark sees a code node, so it is not copied as typed even if it was sent as plain text", () => {
++                const ev = plain(body);
++                vi.mocked(htmlSerializeFromMdIfNeeded).mockReturnValueOnce(undefined);
++                const md = publicEventToMarkdown(ev);
++                expect(md).toBe(convertEvent(ev).md);
++                expect(md).not.toBe(body);
++                expect(isSafeMarkdown(md)).toBe(true);
++            });
++        });
++    });
++
++    describe("a GFM table splits a row into cells before it parses inline syntax", () => {
++        // Each body is one paragraph with a code span for CommonMark (and so for Element), which is why it passes
++        // `isSafeMarkdown`. A GFM renderer cuts the row at the pipe first, and that cuts the code span open.
++        it.each([
++            ["a pipe inside a code span, then a delimiter row", lines("a `x | <b>y</b>` z", "-|-")],
++            ["a body row without a pipe is still a one-cell row", lines("a | `b", "-|-", "<b>c</b>`")],
++            ["a cell that starts with three backticks is not a fence", lines("a | ```<b>y</b>", "-|-", "foo```")],
++        ])("is not copied as typed: %s", (_name, body) => {
++            const ev = sentByElement(body);
++            // The premise: Element's send path reproduces the message and CommonMark finds the source safe.
++            expect(ev.getContent().format).toBe("org.matrix.custom.html");
++            expect(ev.getContent().formatted_body).toBe(htmlSerializeFromMdIfNeeded(body));
++            expect(isSafeMarkdown(body)).toBe(true);
++            const md = publicEventToMarkdown(ev);
++            expect(md).not.toBe(body);
++            expect(md).toBe(convertEvent(ev).md);
++            expect(isSafeMarkdown(md)).toBe(true);
++            expectClean(md, [], ["<b>"]);
++            expect(gfmCellsSafe(body)).toBe(false);
++        });
++
++        describe("an ordinary message is still copied as typed", () => {
++            it.each([
++                [
++                    "a fenced block that holds HTML, and a table elsewhere",
++                    lines(
++                        "```html",
++                        "<div>",
++                        "  <p>x | y</p>",
++                        "</div>",
++                        "```",
++                        "",
++                        "| a | b |",
++                        "|---|---|",
++                        "| 1 | 2 |",
++                    ),
++                ],
++                ["the CM5 fixture", CM5],
++                [
++                    "a table whose cell holds a code span with an escaped pipe",
++                    lines("| `a \\| b` | c |", "|---|---|", "| 1 | 2 |"),
++                ],
++                ["a pipe inside a code span in a paragraph that is not a table", "use `a|b` here"],
++            ])("%s", (_name, body) => {
++                const ev = sentByElement(body);
++                expect(isSafeMarkdown(body)).toBe(true);
++                expect(gfmCellsSafe(body)).toBe(true);
++                expect(publicEventToMarkdown(ev)).toBe(body);
++            });
++        });
++    });
++
++    describe("gfmCellsSafe", () => {
++        it("a pipe that a backslash escapes does not split a cell", () => {
++            expect(gfmCellsSafe("a `x \\| <b>y</b>` z")).toBe(true);
++        });
++
++        it("a pipe after an escaped backslash splits, and its cell holds the tag", () => {
++            expect(gfmCellsSafe("a `x \\\\| <b>y</b>` z")).toBe(false);
++        });
++
++        it("a cell is judged as inline content, so a leading block marker hides nothing", () => {
++            expect(gfmCellsSafe("a | ```<b>y</b>")).toBe(false);
++            expect(gfmCellsSafe("a | ~~~<b>y</b>")).toBe(false);
++            expect(gfmCellsSafe("a |     <b>y</b>")).toBe(false);
++            expect(gfmCellsSafe("a | # <b>y</b>")).toBe(false);
++            expect(gfmCellsSafe("a | > <b>y</b>")).toBe(false);
++            expect(gfmCellsSafe("a | - <b>y</b>")).toBe(false);
++        });
++
++        it("a line without a pipe is checked too", () => {
++            expect(gfmCellsSafe(lines("a | `b", "-|-", "<b>c</b>`"))).toBe(false);
++            expect(gfmCellsSafe(lines("a `b", "<b>c</b>` d"))).toBe(false);
++        });
++
++        it("a cell holding a link Element would not show, or an image that is not an mxc one, is unsafe", () => {
++            expect(gfmCellsSafe("a | [x](javascript:alert(1))")).toBe(false);
++            expect(gfmCellsSafe("a | ![i](https://example.org/i.png)")).toBe(false);
++        });
++
++        it("the lines of a code block, fenced or indented, are not checked", () => {
++            expect(gfmCellsSafe(lines("```html", "<div>", "```"))).toBe(true);
++            expect(gfmCellsSafe(lines("~~~", "| <b>x</b> |", "~~~"))).toBe(true);
++            expect(gfmCellsSafe(lines("a", "", "    <b>x</b>"))).toBe(true);
++            expect(gfmCellsSafe(lines("> ```", "> <div>", "> ```"))).toBe(true);
++            expect(gfmCellsSafe(lines("- ```", "  <div>", "  ```"))).toBe(true);
++            // ...but the lines around them are, and so is an indented line that continues a paragraph
++            expect(gfmCellsSafe(lines("```", "<div>", "```", "<b>y</b>"))).toBe(false);
++            expect(gfmCellsSafe(lines("a", "    <b>x</b>"))).toBe(false);
++        });
++
++        it("plain text, a table and empty cells are safe", () => {
++            expect(gfmCellsSafe("")).toBe(true);
++            expect(gfmCellsSafe("|||")).toBe(true);
++            expect(gfmCellsSafe(lines("| a | b |", "|---|---|", "| 1 | 2 |"))).toBe(true);
++            expect(gfmCellsSafe("a < b and c > d | e")).toBe(true);
++        });
++    });
++
++    describe("R1 never makes eventToMarkdown throw, and the cheap check never runs it", () => {
++        it("the converter's output when Element's send path throws", () => {
++            const ev = sentByElement(CM5);
++            const expected = convertEvent(ev).md;
++            vi.mocked(htmlSerializeFromMdIfNeeded).mockImplementationOnce(() => {
++                throw new Error("boom");
++            });
++            expect(publicEventToMarkdown(ev)).toBe(expected);
++        });
++
++        it("canCopyMarkdown does not call Element's send path, the conversion does", () => {
++            const ev = sentByElement(CM5);
++            vi.mocked(htmlSerializeFromMdIfNeeded).mockClear();
++            expect(canCopyMarkdown(ev)).toBe(true);
++            expect(htmlSerializeFromMdIfNeeded).not.toHaveBeenCalled();
++            publicEventToMarkdown(ev);
++            expect(htmlSerializeFromMdIfNeeded).toHaveBeenCalled();
++        });
++    });
++});
++
++describe("r8 D2: heading text has no line-start escapes, no block can start in it", () => {
++    const CASES: Case[] = [
++        ["a number and a dot", "<h3>1. +14.3% overall</h3>", "### 1. +14.3% overall", ["<h3>1. +14.3% overall</h3>"]],
++        ["a dash", "<h2>- x</h2>", "## - x", ["<h2>- x</h2>"]],
++        ["a quote marker", "<h2>&gt; x</h2>", "## > x", ["<h2>&gt; x</h2>"]],
++        ["a plus", "<h2>+ x</h2>", "## + x", ["<h2>+ x</h2>"]],
++        ["a number and a parenthesis", "<h2>1) x</h2>", "## 1) x", ["<h2>1) x</h2>"]],
++        ["a setext underline", "<h2>===</h2>", "## ===", ["<h2>===</h2>"]],
++        ["a table delimiter row", "<h2>:-:</h2>", "## :-:", ["<h2>:-:</h2>"]],
++        ["a leading # followed by text", "<h2># x</h2>", "## # x", ["<h2># x</h2>"]],
++        ["a heading that is only #", "<h1>#</h1>", "# \\#", ["<h1>#</h1>"]],
++        ["a trailing # still ends the heading", "<h2>1. x #</h2>", "## 1. x \\#", ["<h2>1. x #</h2>"]],
++        ["a break joins the lines with a space", "<h2>a<br>- b<br>1. c</h2>", "## a - b 1. c", ["<h2>a - b 1. c</h2>"]],
++        [
++            "a newline in a code span stays on the line",
++            "<h2><code>a\nb</code> c</h2>",
++            "## `a b` c",
++            ["<h2><code>a b</code> c</h2>"],
++        ],
++        ["a paragraph keeps its line-start escapes", "<p>1. x</p>", "1\\. x", ["<p>1. x</p>"]],
++    ];
++
++    it.each(CASES)("%s", (_name, input, expected, rendered, absent) => {
++        const md = eventToMarkdown(html(input));
++        expect(md).toBe(expected);
++        expect(md).not.toContain("\n");
++        expectClean(md, rendered, absent);
++    });
++});
++
 +describe("e2e expectations (Playwright CM2 and CM4 assert exactly these)", () => {
 +    it("CM4: a plain body is escaped, not parsed", () => {
 +        const md = eventToMarkdown(plain("2*3*4 and <b>not bold</b>"));
 +        expect(md).toBe("2\\*3\\*4 and \\<b>not bold\\</b>");
 +        expect(htmlNodes(md)).toEqual([]);
++    });
++
++    it("CM5: a Markdown message composed in Element is copied as typed", () => {
++        expect(publicEventToMarkdown(sentByElement(CM5))).toBe(CM5);
 +    });
 +
 +    it("CM2: the edited formatted_body of the plan becomes the expected Markdown", () => {
@@ -2854,10 +3236,10 @@ index 0000000..a95350e
 +});
 diff --git a/apps/web/src/utils/eventToMarkdown.ts b/apps/web/src/utils/eventToMarkdown.ts
 new file mode 100644
-index 0000000..1fc2872
+index 0000000..140db6f
 --- /dev/null
 +++ b/apps/web/src/utils/eventToMarkdown.ts
-@@ -0,0 +1,1061 @@
+@@ -0,0 +1,1194 @@
 +/**
 +Copyright 2026 inblock.io
 +
@@ -2865,12 +3247,13 @@ index 0000000..1fc2872
 +Please see LICENSE files in the repository root for full details.
 +*/
 +
-+import { EventType, type MatrixEvent, MsgType } from "matrix-js-sdk/src/matrix";
++import { EventType, type IContent, type MatrixEvent, MsgType } from "matrix-js-sdk/src/matrix";
 +import { logger } from "matrix-js-sdk/src/logger";
 +import { PERMITTED_URL_SCHEMES } from "@element-hq/web-shared-components";
 +import * as commonmark from "commonmark";
 +
 +import { longestBacktickSequence } from "../editor/deserialize";
++import { htmlSerializeFromMdIfNeeded } from "../editor/serialize";
 +import { stripPlainReply } from "./Reply";
 +
 +/**
@@ -2878,7 +3261,8 @@ index 0000000..1fc2872
 + *
 + * The HTML in `formatted_body` is converted, not stripped: everything Markdown can express is kept,
 + * everything it cannot is reduced to its text, and no HTML is ever emitted. A plain `body` is escaped
-+ * so it renders as the literal text Element displayed.
++ * so it renders as the literal text Element displayed. The one exception is a message composed in Element as Markdown,
++ * which is copied as the Markdown its sender typed (`senderMarkdown`).
 + *
 + * "No HTML" holds by construction: the converted Markdown is parsed back with commonmark (`isSafeMarkdown`), and
 + * a message whose Markdown holds raw HTML, a link Element would not show or a non-mxc image is copied as escaped
@@ -2984,11 +3368,81 @@ index 0000000..1fc2872
 + */
 +export function eventToMarkdown(event: MatrixEvent): string {
 +    try {
-+        return convertEvent(event).md;
++        return senderMarkdown(event) ?? convertEvent(event).md;
 +    } catch (e) {
 +        logger.error("Copy Markdown: conversion failed, copying the escaped text instead", e);
 +        return lastResortOfEvent(event);
 +    }
++}
++
++const REPLY_END = "</mx-reply>";
++
++/**
++ * The Markdown the sender typed, when the message provably came out of Element's composer: its `body`, verbatim.
++ * Contract change: for a Markdown message composed in Element the copy is the sender's own source, not a
++ * re-rendering of what Element displays. Element's renderer has no GFM tables or task lists and turns every newline
++ * into a `<br>`, so the converter would hand back a lossy copy (escaped pipes, a hard break at each line end).
++ *
++ * "Provably" means that Element's own send path (`htmlSerializeFromMdIfNeeded`, which the composers call) turns the
++ * `body` into exactly the `formatted_body` the event carries, or, for a message without one, into plain text that
++ * CommonMark reads back as the same characters. Element sends a message that is only a pipe table as plain text, so
++ * it comes back as the table that was typed. A plain body is accepted only when it is text-only paragraphs (no code,
++ * HTML, link or image node), so a table split cannot cut anything open in it. A message from another client, a bot,
++ * the rich text editor or one with a mention (a pill is a link the `body` cannot reproduce) fails the check, and so
++ * does a source that is not safe Markdown, or whose pieces are not safe once a GFM table cuts every line at its
++ * pipes (`gfmCellsSafe`, applied to both kinds of candidate). The result is `undefined` then, and the converter runs. Nothing in here
++ * throws, apart from the event's own content getter, which the caller's catch deals with.
++ */
++function senderMarkdown(event: MatrixEvent): string | undefined {
++    const content = event.getContent();
++    if (typeof content.body !== "string") return undefined;
++    try {
++        const candidate = (event.replyEventId ? stripPlainReply(content.body) : content.body).trimEnd();
++        if (candidate === "") return undefined;
++        let expected = usableFormattedBody(content);
++        // The reply fallback is not the sender's: Element prepends it to the `formatted_body` after serialising.
++        if (expected?.startsWith("<mx-reply>") && expected.includes(REPLY_END)) {
++            expected = expected.slice(expected.indexOf(REPLY_END) + REPLY_END.length);
++        }
++        const sent = htmlSerializeFromMdIfNeeded(candidate) || undefined;
++        if (expected) {
++            return sent === expected && isSafeMarkdown(candidate) && gfmCellsSafe(candidate) ? candidate : undefined;
++        }
++        // Element sent plain text: nothing to compare with, so the source must read as exactly its own characters.
++        return sent === undefined && readsAsItself(candidate) && gfmCellsSafe(candidate) ? candidate : undefined;
++    } catch (e) {
++        logger.error("Copy Markdown: cannot tell whether the sender's own Markdown can be copied", e);
++        return undefined;
++    }
++}
++
++/**
++ * Whether CommonMark reads `md` as exactly its own characters: paragraphs of text and soft breaks and nothing else (no
++ * markup, no escape, no entity, no hard break), so that it needs no escaping to render as itself.
++ */
++function readsAsItself(md: string): boolean {
++    const paragraphs: string[] = [];
++    const walker = new commonmark.Parser().parse(md).walker();
++    for (let step = walker.next(); step; step = walker.next()) {
++        if (!step.entering) continue;
++        const { node } = step;
++        switch (node.type) {
++            case "document":
++                break;
++            case "paragraph":
++                paragraphs.push("");
++                break;
++            case "text":
++                paragraphs[paragraphs.length - 1] += node.literal ?? "";
++                break;
++            case "softbreak":
++                paragraphs[paragraphs.length - 1] += "\n";
++                break;
++            default:
++                return false;
++        }
++    }
++    return paragraphs.join("\n\n") === md;
 +}
 +
 +/** The escaped displayed text of a message, for when the conversion threw. */
@@ -3001,16 +3455,20 @@ index 0000000..1fc2872
 +    }
 +}
 +
++/** The `formatted_body` of a message when it has a usable one: HTML, a string, and not blank. */
++function usableFormattedBody(content: IContent): string | undefined {
++    return content.format === "org.matrix.custom.html" &&
++        typeof content.formatted_body === "string" &&
++        content.formatted_body.trim() !== ""
++        ? content.formatted_body
++        : undefined;
++}
++
 +/** What a message displays: its `formatted_body` when it has a usable one, else its plain `body` (reply fallback removed). */
 +function messageSource(event: MatrixEvent): { formatted?: string; body: string } {
 +    const content = event.getContent();
-+    if (
-+        content.format === "org.matrix.custom.html" &&
-+        typeof content.formatted_body === "string" &&
-+        content.formatted_body.trim() !== ""
-+    ) {
-+        return { formatted: content.formatted_body, body: "" };
-+    }
++    const formatted = usableFormattedBody(content);
++    if (formatted !== undefined) return { formatted, body: "" };
 +    let body = typeof content.body === "string" ? content.body : "";
 +    if (event.replyEventId) body = stripPlainReply(body);
 +    return { body };
@@ -3053,6 +3511,56 @@ index 0000000..1fc2872
 +        }
 +    }
 +    return true;
++}
++
++/**
++ * Whether no cell of a GFM table in `md` holds what `isSafeMarkdown` would refuse. `isSafeMarkdown` parses with
++ * CommonMark, which has no tables, but a GFM renderer cuts a row at every unescaped pipe BEFORE it parses inline
++ * syntax, so it can cut open a code span that CommonMark saw and expose raw HTML or a link in a cell. A line without
++ * a pipe can be a one-cell row, so every line is checked, not only those with a pipe. The lines of a code block
++ * (fenced or indented) are left out: a table cannot cut into one.
++ *
++ * Each line is split the way cmark-gfm does: a backslash escapes the next character, so `\|` does not split and
++ * the pipe of `\\|` does. In each piece `\|` becomes `|`, as GFM unescapes it before the inline parse, and the piece
++ * is trimmed. A cell is inline content, so it is judged after a prefix that rules out any block syntax: a cell
++ * that starts with a fence, an indent, `#`, `>` or `-` must not hide HTML inside a block. Over-rejecting only means
++ * a fallback to the converter. Exported for tests.
++ */
++export function gfmCellsSafe(md: string): boolean {
++    const inCode = new Set<number>();
++    const walker = new commonmark.Parser().parse(md).walker();
++    for (let step = walker.next(); step; step = walker.next()) {
++        const { node, entering } = step;
++        if (!entering || node.type !== "code_block" || !node.sourcepos) continue;
++        for (let line = node.sourcepos[0][0]; line <= node.sourcepos[1][0]; line++) inCode.add(line);
++    }
++    // The same line endings as CommonMark, so that its line numbers are ours
++    const mdLines = md.split(/\r\n|\n|\r/);
++    for (let i = 0; i < mdLines.length; i++) {
++        if (inCode.has(i + 1)) continue;
++        for (const piece of gfmCells(mdLines[i])) {
++            if (piece !== "" && !isSafeMarkdown("x " + piece)) return false;
++        }
++    }
++    return true;
++}
++
++/** The pieces a GFM renderer cuts a line into at its unescaped pipes: `\|` is a pipe in the piece, which is trimmed. */
++function gfmCells(line: string): string[] {
++    const pieces: string[] = [];
++    let piece = "";
++    for (let i = 0; i < line.length; i++) {
++        if (line[i] === "\\" && i + 1 < line.length) {
++            piece += line[i] + line[++i];
++        } else if (line[i] === "|") {
++            pieces.push(piece);
++            piece = "";
++        } else {
++            piece += line[i];
++        }
++    }
++    pieces.push(piece);
++    return pieces.map((p) => p.replace(/\\\|/g, "|").trim());
 +}
 +
 +/**
@@ -3182,9 +3690,11 @@ index 0000000..1fc2872
 +        case "H4":
 +        case "H5":
 +        case "H6": {
-+            // A run of # after a space ends the heading (the closing sequence), so its first # is escaped.
-+            const text = renderInlineRun(Array.from(el.childNodes), ctx)
-+                .replace(/\\\n/g, " ")
++            // Heading text is inline content, so no block can start in it and its line starts need no escape. A run of
++            // # after a space is the one thing that ends a heading (the closing sequence), so its first # is escaped.
++            const text = inlineRunLines(Array.from(el.childNodes), ctx)
++                .join(" ")
++                .replace(/\n/g, " ")
 +                .replace(/(^|[ \t])(#+)$/, "$1\\$2");
 +            return `${"#".repeat(Number(el.nodeName[1]))} ${text}`;
 +        }
@@ -3290,8 +3800,8 @@ index 0000000..1fc2872
 +    return isSafeMarkdown(escaped.replace(/\\\|/g, "|")) ? escaped : lastResortMarkdown(text);
 +}
 +
-+/** Renders a run of inline nodes as one block: lines split at hard breaks, trimmed, line starts escaped. */
-+function renderInlineRun(nodes: Node[], ctx: Ctx, emphasis?: number): string {
++/** The lines of a run of inline nodes: split at hard breaks, trimmed, blank lines at either end dropped. */
++function inlineRunLines(nodes: Node[], ctx: Ctx, emphasis?: number): string[] {
 +    let joined = nodes.map((n) => renderInline(n, ctx)).join("");
 +    if (emphasis !== undefined) joined = wrap(emphasis, joined);
 +    const lines = resolveInline(joined)
@@ -3299,7 +3809,12 @@ index 0000000..1fc2872
 +        .map((l) => l.trim());
 +    while (lines.length && lines[lines.length - 1] === "") lines.pop();
 +    while (lines.length && lines[0] === "") lines.shift();
-+    return lines.map(escapeLineStart).join("\\\n");
++    return lines;
++}
++
++/** Renders a run of inline nodes as one block: lines split at hard breaks, trimmed, line starts escaped. */
++function renderInlineRun(nodes: Node[], ctx: Ctx, emphasis?: number): string {
++    return inlineRunLines(nodes, ctx, emphasis).map(escapeLineStart).join("\\\n");
 +}
 +
 +function renderInline(node: Node, ctx: Ctx): string {
