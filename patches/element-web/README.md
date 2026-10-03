@@ -1297,10 +1297,31 @@ A tag bump must try every patch in this file's order.
   - A message without `formatted_body` is its plain `body`, escaped so that it renders as the
     literal text Element displayed, with its indentation kept as no-break spaces; a plain-text
     reply fallback is stripped (`stripPlainReply`).
+  - **Sender's source (added 2026-10-03, after a manual round-trip test on dev).** Before any
+    of the above, `senderMarkdown` checks whether the message provably came out of Element's
+    own composer, and if so copies its `body` verbatim (reply fallback stripped, trailing
+    whitespace trimmed): an HTML message qualifies when Element's send path
+    (`htmlSerializeFromMdIfNeeded`, the function the send and edit composers call) turns the
+    `body` into exactly the event's `formatted_body`; a plain message qualifies when Element
+    would send the `body` as plain text and CommonMark reads it back as exactly those
+    characters (text and soft breaks only). The candidate must still pass `isSafeMarkdown`,
+    and `gfmCellsSafe`: a GFM renderer splits a table row into cells at unescaped pipes
+    before it reads any inline syntax, so it can cut open a code span that commonmark saw and
+    expose the HTML inside (found by review on the PR), so every line outside a code block
+    is cut into cells the way GFM does and each cell must be safe on its own.
+    Anything else (another client, a bot, the rich text editor, a mention pill, Markdown
+    turned off, a different `feature_latex_maths` setting between sender and copier, or any
+    failure inside the check) falls through to the converter unchanged. Reason: Element's own
+    renderer has no GFM tables or task lists and turns every newline into `<br>`, so for a
+    message typed as Markdown the `formatted_body` is a lossy render and the converter handed
+    back escaped pipes, a `\` hard break at every line end and `\[ \]` for task boxes.
+  - Heading text gets no line-start escapes (`### 1. x` stays as is); only a trailing run of
+    `#` keeps its escape.
   - One new string, `action.copy_markdown` ("Copy Markdown"), in `en_EN.json`.
   - `apps/web/src/editor/` is **untouched** (the converter only imports
-    `longestBacktickSequence` from `editor/deserialize`, read-only).
-  Ships two vitest files: `utils/eventToMarkdown.test.ts` (new, 458 tests, including the
+    `longestBacktickSequence` from `editor/deserialize` and Element's send path
+    `htmlSerializeFromMdIfNeeded` from `editor/serialize`, both read-only).
+  Ships two vitest files: `utils/eventToMarkdown.test.ts` (new, 518 tests, including the
   seeded property test) and five new tests in `MessageContextMenu.test.tsx` (45 in the file;
   the two "not offered" tests first assert that an item which must be present is, so they
   cannot pass on a menu that failed to render).
@@ -1313,17 +1334,35 @@ A tag bump must try every patch in this file's order.
   links, headings, tables). Copying `body` verbatim is not good enough either: depending on
   the sender it is Markdown source, a lossy plain-text fallback, or plain text with an old
   reply quote prepended. Only `formatted_body` reliably carries the formatting the reader
-  saw, so it is converted, once, for every sender.
+  saw, so it is converted, once, for every sender, except where Element's own send path
+  proves that `body` is the sender's Markdown (see "Sender's source" above): there the copy
+  is the source, so a table typed in Element comes back as the table that was typed, even
+  though Element itself displays it as pipe text. This is a deliberate contract change of
+  2026-10-03 (#24).
 - **Evidence:**
   - Unit suites, run against the v1.12.29 tree with entries 1-10 applied: `eventToMarkdown`
-    458 tests (including the seeded property test), `MessageContextMenu` 45 tests, 503
+    518 tests (including the seeded property test), `MessageContextMenu` 45 tests, 563
     passed, all green; the untouched Edit composer's `serialize` suite (24 tests) passes
-    alongside (527 in the three files).
+    alongside (587 in the three files). The 2026-10-03 sender's-source change added 60
+    tests, among them a synthetic message with a GFM table, task boxes, soft breaks and a
+    `### 1.` heading whose `formatted_body` is produced in the test by Element's own
+    `htmlSerializeFromMdIfNeeded`; the new tests were red against the previous converter.
   - Playwright spec `e2e/element/ew-copy-markdown.spec.mjs` in the siwx-oidc repo (branch
     `feature/ew-copy-markdown`, commit `cdc248e`, unchanged between the two runs below), four
     legs: CM1 position above Pin, CM2 content after an edit, CM3 absent on an image, CM4 plain
     body escaped.
-  - **Green** (2026-10-03): the image built from this commit's `copy-markdown.patch`
+  - **Sender's source (2026-10-03).** The spec gained a fifth leg, CM5 (siwx-oidc branch
+    `e2e/ew-copy-markdown-cm5`, commit `40181ab`): a synthetic message with a GFM table, task
+    boxes, soft line breaks and a `### 1.` heading is pasted into Element's composer and sent
+    through Element's own send path (asserted: encrypted on the wire, `body` equals the typed
+    text, `formatted_body` present), then Copy Markdown must return exactly the typed text.
+    **Red** against the previous entry 11 image (`2db28d070673`, the one deployed until then):
+    CM1-CM4 passed, CM5 failed with the reported symptoms (`\|` rows with a trailing `\`, a
+    `\` at each soft break, `\[ \]`, `### 1\.`). **Green** against the image built from this
+    commit's patch (`localhost/ew-copy-md:patched6`, id `d16918fd6100`; rule-4 loop 11 `OK`
+    against v1.12.29): 5 passed, 0 failed, 0 skipped; `ew-sw-media-auth.spec.mjs` 3 passed.
+  - **Green** (2026-10-03, before the sender's-source change): the image built from the
+    first `copy-markdown.patch`
     (`localhost/ew-copy-md:patched4`, id `2db28d070673`, all five files applied cleanly, the
     served i18n JSON carries `copy_markdown`) served by the local stack: 4 passed, 0 failed,
     0 skipped. The regression spec `ew-sw-media-auth.spec.mjs` on the same image: 3 passed.
@@ -1347,7 +1386,8 @@ A tag bump must try every patch in this file's order.
   then fails to apply on the `MessageContextMenu.tsx` hunks or becomes redundant: check, and
   drop it, together with `utils/eventToMarkdown.ts` and the `action.copy_markdown` string.
 - **Coverage (rule 2):** Playwright spec `e2e/element/ew-copy-markdown.spec.mjs` (siwx-oidc
-  branch `feature/ew-copy-markdown`), plus the two vitest suites in the patch.
+  branch `feature/ew-copy-markdown`, CM5 added on `e2e/ew-copy-markdown-cm5`), plus the two
+  vitest suites in the patch.
 
 ## Runtime-stage deltas (not `.patch` files, still upstream deviations)
 
