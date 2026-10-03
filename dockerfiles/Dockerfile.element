@@ -54,10 +54,10 @@ RUN git clone --depth 1 --branch "${ELEMENT_WEB_TAG}" \
 #    Implements the stock EventIndex hook so E2EE search works in hosted
 #    Element Web, behind the labs flag feature_web_event_index (default OFF).
 #
-# Order is load-bearing: seven of the ten patches touch en_EN.json in different
-# places (entries 1 and 3-8), entry 8 builds on 7 and entry 10 on 9. Applied in
+# Order is load-bearing: eight of the eleven patches touch en_EN.json in different
+# places (entries 1, 3-8 and 11), entry 8 builds on 7 and entry 10 on 9. Applied in
 # this order every hunk lands (verified against a pristine v1.12.26 tree,
-# 2026-08-30, and a pristine v1.12.29 tree, 2026-09-25).
+# 2026-08-30, and a pristine v1.12.29 tree, 2026-10-02).
 # Registry with why/evidence/retirement per patch:
 # patches/element-web/README.md — no patch ships without an entry there.
 COPY patches/element-web/force-first-device-recovery.patch /tmp/ew.patch
@@ -164,6 +164,13 @@ RUN git apply --verbose /tmp/ew-sw-versions.patch
 # See patches/element-web/README.md, entry 10.
 COPY patches/element-web/sw-media-401-token-retry.patch /tmp/ew-sw-media-retry.patch
 RUN git apply --verbose /tmp/ew-sw-media-retry.patch
+
+# Entry 11: Copy Markdown (siwx-oidc-matrix-server#24). Adds the right-click
+# "Copy Markdown" entry above Pin and the HTML-to-Markdown converter it calls
+# (utils/eventToMarkdown.ts). Touches en_EN.json, so it is applied last.
+# Same fail-loudly contract as every patch above.
+COPY patches/element-web/copy-markdown.patch /tmp/ew-copy-markdown.patch
+RUN git apply --verbose /tmp/ew-copy-markdown.patch
 
 # Install exactly what the lockfile pins.
 RUN corepack enable && pnpm install --frozen-lockfile

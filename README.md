@@ -50,7 +50,7 @@ The Synapse and Element Web images built here are **not stock**: see
   its [Matrix integration guide](https://github.com/inblockio/siwx-oidc/blob/main/docs/matrix-integration.md).
 - **Clients must implement the Matrix OAuth 2.0 authentication API.** Clients that only
   know password login cannot sign in.
-- **Element Web is built from source** at `v1.12.29` with 10 vendored patches and a runtime
+- **Element Web is built from source** at `v1.12.29` with 11 vendored patches and a runtime
   overlay (configuration, theme, branding, a service-worker boot shim).
 - **Element X is used unmodified**, as distributed through the app stores. This repository
   does not patch it.
@@ -100,7 +100,7 @@ the `/siwx-matrix-setup` skill has the steps.
 | `matrix_synapse` | `ghcr.io/inblockio/siwx-oidc-matrix-server/synapse`, built from `dockerfiles/Dockerfile` (Synapse + 1 patch) | Matrix homeserver; authentication delegated to siwx-oidc |
 | `siwx-oidc` | `ghcr.io/inblockio/siwx-oidc` | OIDC provider (passkey, wallet and agent-key sign-in); takes the place of MAS as Synapse's auth service |
 | `redis` | `redis:8.10.2` | Session and token store for siwx-oidc |
-| `element-web` | `ghcr.io/inblockio/siwx-oidc-matrix-server/element-web`, built from source by `dockerfiles/Dockerfile.element` (Element Web + 10 patches) | Web client |
+| `element-web` | `ghcr.io/inblockio/siwx-oidc-matrix-server/element-web`, built from source by `dockerfiles/Dockerfile.element` (Element Web + 11 patches) | Web client |
 | `livekit` | `livekit/livekit-server` | MatrixRTC SFU for Element Call; embedded TURN is off by default |
 | `lk-jwt-service` | `ghcr.io/element-hq/lk-jwt-service` | Issues LiveKit access tokens to Matrix users |
 
@@ -194,7 +194,7 @@ that refuses to run without the patch, MatrixRTC experimental features (MSC4108,
 MSC4143, MSC3266, MSC4222), delayed-event and message rate limits, retention off by
 default, server notices, and `serve_server_wellknown: false`.
 
-**Element Web: 10 patches**, applied in this order by `dockerfiles/Dockerfile.element`
+**Element Web: 11 patches**, applied in this order by `dockerfiles/Dockerfile.element`
 with `git apply`; the order is load-bearing. Registry:
 [`patches/element-web/README.md`](patches/element-web/README.md).
 
@@ -227,6 +227,10 @@ with `git apply`; the order is load-bearing. Registry:
 10. [`sw-media-401-token-retry.patch`](patches/element-web/sw-media-401-token-retry.patch):
     a media request that gets a 401 waits up to 5 s for the app's token refresh and
     retries once. Depends on 9. UPSTREAM DEFECT.
+11. [`copy-markdown.patch`](patches/element-web/copy-markdown.patch): right-click
+    "Copy Markdown", directly above Pin, copies a text message as clean CommonMark
+    + GFM converted from its HTML (siwx-oidc-matrix-server#24). FEATURE, upstreamable,
+    not filed.
 
 Element Web also carries runtime deltas that are not `.patch` files: nginx caching
 and security headers, the service-worker boot shim, a per-build `sw.js` stamp, the

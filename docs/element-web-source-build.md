@@ -7,7 +7,7 @@ runs `entrypoints/element_entrypoint.sh`.
 
 ## Why from source
 
-We carry ten vendored patches that cannot ship on the prebuilt
+We carry eleven vendored patches that cannot ship on the prebuilt
 `vectorim/element-web` image. The **canonical list** — what, why, upstream status,
 retirement condition, and the order they are applied in — is
 [`patches/element-web/README.md`](../patches/element-web/README.md). A patch without an
