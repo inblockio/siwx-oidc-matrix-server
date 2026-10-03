@@ -163,6 +163,7 @@ re-litigated each time someone audits the registry.
 | 8 | `resolve-did-search` | A DID typed into Spotlight or the invite/DM dialog resolves to the user's MXID. Depends on 7. | none |
 | 9 | `sw-versions-no-cache-on-error` | The service worker never caches a failed `/versions` check, retries it anonymously, and shares one check per server. | none |
 | 10 | `sw-media-401-token-retry` | A media request that 401s with the stored token waits (5 s bound) for the app's refresh and retries once. | none |
+| 11 | `copy-markdown` | Right-click "Copy Markdown" directly above Pin: copies a text, notice or emote message as clean CommonMark + GFM, converted from `formatted_body` (no HTML emitted), instead of the lossy rendered-text copy or the JSON of View source. | none |
 
 Entry 6 is the only gated one:
 
@@ -183,9 +184,10 @@ recorded by that deployment, not here.
 
 ## Which Dockerfile applies what
 
-**One Dockerfile, all ten patches.** `dockerfiles/Dockerfile.element` applies every
+**One Dockerfile, all eleven patches.** `dockerfiles/Dockerfile.element` applies every
 numbered patch below, in this file's order. **8 depends on 7** and **10 depends on 9**;
-each must stay after the entry it depends on (see their Order notes). Until 2026-09-01 a
+each must stay after the entry it depends on (see their Order notes). **11 is applied
+last**: its `en_EN.json` hunk was generated against the tree with 1-10 applied. Until 2026-09-01 a
 separate `dev` branch applied a different subset; that branch was merged into `main` and
 deleted, so there is a single Dockerfile.
 
@@ -1255,6 +1257,97 @@ A tag bump must try every patch in this file's order.
 - **Coverage (rule 2):** Playwright leg SW-3 in `e2e/element/ew-sw-media-auth.spec.mjs`
   (siwx-oidc branch `test/ew-sw-media-auth`), plus the vitest file in the patch and the
   harness `live` mode.
+
+### 11. `copy-markdown.patch` - FEATURE, upstreamable (not filed; carry until upstream ships an equivalent)
+
+- **What:** the message context menu gets a **Copy Markdown** item, in the quick-actions
+  group directly above Pin (after Edit), on **right-click only**: the "..." options menu is
+  unchanged. It is offered for `m.text`, `m.notice` and `m.emote` room messages that are not
+  state events, redacted or undecryptable, and only when the message displays something to
+  copy (visible text, an image Element shows, or maths). `canCopyMarkdown` is that cheap
+  visibility check: it does not convert, because it runs on every menu render, and the
+  conversion runs only when the item is clicked; neither function ever throws. The click
+  copies through the existing `copyPlaintext` and closes the menu. The converter is the new
+  `apps/web/src/utils/eventToMarkdown.ts` (`canCopyMarkdown`, `eventToMarkdown`):
+  - A `formatted_body` (`org.matrix.custom.html`) is parsed with `DOMParser` into an inert
+    document and **converted, not stripped** to CommonMark + GFM: everything Markdown can
+    express is kept, everything it cannot is reduced to its text. `mx-reply`, `script`,
+    `style`, `noscript`, `textarea` and `option` are dropped. It copies what Element
+    displays, not what the sender wrote: a link is kept only when its scheme is one Element
+    permits (`PERMITTED_URL_SCHEMES`), otherwise only its text is copied, and only `mxc:`
+    images are kept (an image Element does not show is dropped). The output is kept valid
+    CommonMark: emphasis is always validly paired or degrades to plain text; a fence info
+    string is kept only when it is plain; a bare `http(s)` URL in text (its scheme matched as
+    ASCII) becomes an `<url>` autolink only when it is a grammar-valid URI; control
+    characters, `\`, `|` and an entity-like or numeric-reference `&` in link destinations
+    are percent-encoded; image alt text has its whitespace collapsed; maths tex is normalised the way TeX reads it (inline line breaks become
+    spaces, `%` comments are cut, blank lines in display maths are dropped, every display
+    maths line is indented by four spaces); adjacent code spans are merged and empty ones
+    dropped. No accidental GFM table can form: every `|` in text is escaped and every `|` in
+    a destination is percent-encoded, display maths lines are indented so that no block
+    syntax (a table delimiter row among them) starts inside maths, and each table cell is
+    judged on its own the way GFM parses it (GFM splits a row into cells before it reads any
+    inline syntax).
+  - **No HTML in the copy is a checked guarantee, not a property of an enumeration of
+    cases.** Every result is parsed back with commonmark (`isSafeMarkdown`); a result that
+    holds raw HTML, a link with a scheme Element does not permit or a non-`mxc:` image makes
+    the copy fall back to the escaped plain text of what Element displayed
+    (`withSafetyNet`). Ordinary messages never reach the fallback. A seeded property test
+    (1,000 messages and 200 plain bodies) pins the guarantee.
+  - A message without `formatted_body` is its plain `body`, escaped so that it renders as the
+    literal text Element displayed, with its indentation kept as no-break spaces; a plain-text
+    reply fallback is stripped (`stripPlainReply`).
+  - One new string, `action.copy_markdown` ("Copy Markdown"), in `en_EN.json`.
+  - `apps/web/src/editor/` is **untouched** (the converter only imports
+    `longestBacktickSequence` from `editor/deserialize`, read-only).
+  Ships two vitest files: `utils/eventToMarkdown.test.ts` (new, 458 tests, including the
+  seeded property test) and five new tests in `MessageContextMenu.test.tsx` (45 in the file;
+  the two "not offered" tests first assert that an item which must be present is, so they
+  cannot pass on a menu that failed to render).
+  Marker in the built bundle: the string `Copy Markdown` (not grepped at build time).
+- **Order:** applied last. Its single `en_EN.json` hunk was generated against the tree with
+  entries 1-10 applied.
+- **Why:** [siwx-oidc-matrix-server#24](https://github.com/inblockio/siwx-oidc-matrix-server/issues/24).
+  Today the only way to get at a message's source is View source, which shows the event
+  JSON. Selecting and copying the rendered text loses the structure (code fences, lists,
+  links, headings, tables). Copying `body` verbatim is not good enough either: depending on
+  the sender it is Markdown source, a lossy plain-text fallback, or plain text with an old
+  reply quote prepended. Only `formatted_body` reliably carries the formatting the reader
+  saw, so it is converted, once, for every sender.
+- **Evidence:**
+  - Unit suites, run against the v1.12.29 tree with entries 1-10 applied: `eventToMarkdown`
+    458 tests (including the seeded property test), `MessageContextMenu` 45 tests, 503
+    passed, all green; the untouched Edit composer's `serialize` suite (24 tests) passes
+    alongside (527 in the three files).
+  - Playwright spec `e2e/element/ew-copy-markdown.spec.mjs` in the siwx-oidc repo (branch
+    `feature/ew-copy-markdown`, commit `cdc248e`, unchanged between the two runs below), four
+    legs: CM1 position above Pin, CM2 content after an edit, CM3 absent on an image, CM4 plain
+    body escaped.
+  - **Green** (2026-10-03): the image built from this commit's `copy-markdown.patch`
+    (`localhost/ew-copy-md:patched4`, id `2db28d070673`, all five files applied cleanly, the
+    served i18n JSON carries `copy_markdown`) served by the local stack: 4 passed, 0 failed,
+    0 skipped. The regression spec `ew-sw-media-auth.spec.mjs` on the same image: 3 passed.
+  - **Red** (2026-10-02), the negative control: the same spec against the baseline image
+    (`localhost/ew-copy-md:baseline`, id `34121b8b6331`, v1.12.29 plus entries 1-10, no
+    feature): CM1, CM2 and CM4 failed with "the Copy Markdown menu entry is missing", CM3
+    (the entry must be absent on an image) passed.
+  - **Differential check** (2026-10-03): the converter's output was parsed with commonmark.js,
+    markdown-it and markdown-it with `html: true` (281 probe outputs by the orchestrator, 21,521
+    by the implementer's wider run): 0 outputs with raw HTML, a link with a scheme Element does
+    not permit or a non-`mxc:` image. Two residuals are documented, not fixed: markdown-it
+    with `linkify: true` turns visible `//host` text into a link (the text shown is the
+    destination), and marked, which is not CommonMark compliant, mis-parses some adversarial
+    link labels, code spans and alt text.
+- **Upstream status:** **not filed.** No element-hq issue or PR for a copy-as-Markdown action
+  exists (searched 2026-10-02). Filing is on hold by maintainer decision (2026-10-03), tracked
+  in #27, which also decides whether the 2026-09-01 filing policy above (today it gates
+  entries 2, 3 and 4 on #34718) extends to this entry. Rule 3 applies in the meantime: this is an interim carrier, and it becomes UPSTREAM-TRACKED, with
+  the vendored patch kept identical to the PR diff, the day it is filed.
+- **Retirement:** upstream ships a copy-as-Markdown (or equivalent) message action. The patch
+  then fails to apply on the `MessageContextMenu.tsx` hunks or becomes redundant: check, and
+  drop it, together with `utils/eventToMarkdown.ts` and the `action.copy_markdown` string.
+- **Coverage (rule 2):** Playwright spec `e2e/element/ew-copy-markdown.spec.mjs` (siwx-oidc
+  branch `feature/ew-copy-markdown`), plus the two vitest suites in the patch.
 
 ## Runtime-stage deltas (not `.patch` files, still upstream deviations)
 

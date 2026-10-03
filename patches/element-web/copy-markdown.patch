@@ -1,0 +1,3921 @@
+diff --git a/apps/web/src/components/views/context_menus/MessageContextMenu.test.tsx b/apps/web/src/components/views/context_menus/MessageContextMenu.test.tsx
+index 35fca79..f1c96ed 100644
+--- a/apps/web/src/components/views/context_menus/MessageContextMenu.test.tsx
++++ b/apps/web/src/components/views/context_menus/MessageContextMenu.test.tsx
+@@ -24,6 +24,7 @@ import {
+     Thread,
+     M_POLL_KIND_DISCLOSED,
+     EventTimeline,
++    MsgType,
+ } from "matrix-js-sdk/src/matrix";
+ import { PollStartEvent } from "matrix-js-sdk/src/extensible_events_v1/PollStartEvent";
+ import userEvent from "@testing-library/user-event";
+@@ -223,6 +224,86 @@ describe("MessageContextMenu", () => {
+         });
+     });
+ 
++    describe("copy markdown", () => {
++        let room: Room;
++
++        beforeEach(() => {
++            room = makeDefaultRoom();
++            vi.spyOn(SettingsStore, "getValue").mockReturnValue(true);
++            vi.spyOn(
++                room.getLiveTimeline().getState(EventTimeline.FORWARDS)!,
++                "mayClientSendStateEvent",
++            ).mockReturnValue(true);
++        });
++
++        afterAll(() => {
++            vi.spyOn(SettingsStore, "getValue").mockRestore();
++        });
++
++        function htmlEvent(formattedBody: string): MatrixEvent {
++            return new MatrixEvent({
++                type: EventType.RoomMessage,
++                room_id: roomId,
++                content: {
++                    msgtype: MsgType.Text,
++                    body: "fallback",
++                    format: "org.matrix.custom.html",
++                    formatted_body: formattedBody,
++                },
++            });
++        }
++
++        it("sits directly above Pin on right-click", () => {
++            createMenu(htmlEvent("<strong>hi</strong>"), { rightClick: true }, {}, undefined, room);
++
++            const items = screen.getAllByRole("menuitem");
++            const copy = screen.getByRole("menuitem", { name: "Copy Markdown" });
++            const pin = screen.getByRole("menuitem", { name: "Pin" });
++            expect(items.indexOf(pin)).toBe(items.indexOf(copy) + 1);
++        });
++
++        it("is still offered when the user cannot pin", () => {
++            vi.spyOn(
++                room.getLiveTimeline().getState(EventTimeline.FORWARDS)!,
++                "mayClientSendStateEvent",
++            ).mockReturnValue(false);
++
++            createMenu(htmlEvent("<strong>hi</strong>"), { rightClick: true }, {}, undefined, room);
++
++            expect(screen.getByRole("menuitem", { name: "Copy Markdown" })).toBeTruthy();
++            expect(screen.queryByRole("menuitem", { name: "Pin" })).toBeFalsy();
++        });
++
++        it("is not offered in the options menu", () => {
++            createMenu(htmlEvent("<strong>hi</strong>"), {}, {}, undefined, room);
++
++            // Anchor: the menu did render (Forward is offered in the options menu, see "message forwarding").
++            expect(screen.getByRole("menuitem", { name: "Forward" })).toBeTruthy();
++            expect(screen.queryByRole("menuitem", { name: "Copy Markdown" })).toBeFalsy();
++        });
++
++        it("is not offered for an image", () => {
++            const image = new MatrixEvent({
++                type: EventType.RoomMessage,
++                room_id: roomId,
++                content: { msgtype: MsgType.Image, body: "cat.png", url: "mxc://example.org/abc" },
++            });
++            createMenu(image, { rightClick: true }, {}, undefined, room);
++
++            // Anchor: the right-click menu did render (this block's beforeEach lets the user pin).
++            expect(screen.getByRole("menuitem", { name: "Pin" })).toBeTruthy();
++            expect(screen.queryByRole("menuitem", { name: "Copy Markdown" })).toBeFalsy();
++        });
++
++        it("copies the message as Markdown", async () => {
++            createMenu(htmlEvent("<strong>hi</strong> <del>there</del>"), { rightClick: true }, {}, undefined, room);
++
++            await userEvent.click(screen.getByRole("menuitem", { name: "Copy Markdown" }));
++
++            expect(copyPlaintext).toHaveBeenCalledWith("**hi** ~~there~~");
++        });
++    });
++
+     describe("message forwarding", () => {
+         it("allows forwarding a room message", () => {
+             const eventContent = createMessageEventContent("hello");
+diff --git a/apps/web/src/components/views/context_menus/MessageContextMenu.tsx b/apps/web/src/components/views/context_menus/MessageContextMenu.tsx
+index d320782..ee4a8c9 100644
+--- a/apps/web/src/components/views/context_menus/MessageContextMenu.tsx
++++ b/apps/web/src/components/views/context_menus/MessageContextMenu.tsx
+@@ -56,6 +56,7 @@ import { Action } from "../../../dispatcher/actions";
+ import { type RoomPermalinkCreator } from "../../../utils/permalinks/Permalinks";
+ import { type ButtonEvent } from "../elements/AccessibleButton";
+ import { copyPlaintext, getSelectedText } from "../../../utils/strings";
++import { canCopyMarkdown, eventToMarkdown } from "../../../utils/eventToMarkdown";
+ import ContextMenu, { toRightOf, type MenuProps } from "../../structures/ContextMenu";
+ import ReactionPicker from "../emojipicker/ReactionPicker";
+ import ViewSource from "../../structures/ViewSource";
+@@ -319,6 +320,11 @@ export default class MessageContextMenu extends React.Component<IProps, IState>
+         this.closeMenu();
+     };
+ 
++    private onCopyMarkdownClick = (): void => {
++        void copyPlaintext(eventToMarkdown(this.props.mxEvent));
++        this.closeMenu();
++    };
++
+     private onQuoteClick = (): void => {
+         const selectedText = getSelectedText();
+         if (selectedText) {
+@@ -673,6 +679,17 @@ export default class MessageContextMenu extends React.Component<IProps, IState>
+             );
+         }
+ 
++        let copyMarkdownButton: JSX.Element | undefined;
++        if (rightClick && canCopyMarkdown(mxEvent)) {
++            copyMarkdownButton = (
++                <IconizedContextMenuOption
++                    icon={<CopyIcon />}
++                    label={_t("action|copy_markdown")}
++                    onClick={this.onCopyMarkdownClick}
++                />
++            );
++        }
++
+         let pinButton: JSX.Element | undefined;
+         if (rightClick && this.state.canPin) {
+             const isPinned = PinningUtils.isPinned(MatrixClientPeg.safeGet(), this.props.mxEvent);
+@@ -708,13 +725,14 @@ export default class MessageContextMenu extends React.Component<IProps, IState>
+         }
+ 
+         let quickItemsList: JSX.Element | undefined;
+-        if (editButton || replyButton || reactButton || pinButton) {
++        if (editButton || replyButton || reactButton || copyMarkdownButton || pinButton) {
+             quickItemsList = (
+                 <IconizedContextMenuOptionList>
+                     {reactButton}
+                     {replyButton}
+                     {replyInThreadButton}
+                     {editButton}
++                    {copyMarkdownButton}
+                     {pinButton}
+                 </IconizedContextMenuOptionList>
+             );
+diff --git a/apps/web/src/i18n/strings/en_EN.json b/apps/web/src/i18n/strings/en_EN.json
+index 93fdeec..18491e4 100644
+--- a/apps/web/src/i18n/strings/en_EN.json
++++ b/apps/web/src/i18n/strings/en_EN.json
+@@ -35,6 +35,7 @@
+         "continue": "Continue",
+         "copy": "Copy",
+         "copy_link": "Copy link",
++        "copy_markdown": "Copy Markdown",
+         "create": "Create",
+         "create_a_room": "Create a room",
+         "create_account": "Create account",
+diff --git a/apps/web/src/utils/eventToMarkdown.test.ts b/apps/web/src/utils/eventToMarkdown.test.ts
+new file mode 100644
+index 0000000..a95350e
+--- /dev/null
++++ b/apps/web/src/utils/eventToMarkdown.test.ts
+@@ -0,0 +1,2679 @@
++/**
++Copyright 2026 inblock.io
++
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only
++Please see LICENSE files in the repository root for full details.
++*/
++
++// @vitest-environment happy-dom
++
++import { describe, it, expect, vi } from "vitest";
++import { EventType, MatrixEvent, MsgType } from "matrix-js-sdk/src/matrix";
++import * as commonmark from "commonmark";
++
++import {
++    canCopyMarkdown,
++    convertEvent,
++    displayedText,
++    eventToMarkdown as publicEventToMarkdown,
++    isSafeMarkdown,
++    lastResortMarkdown,
++    withSafetyNet,
++} from "./eventToMarkdown";
++
++// The real parser behind a spy, so that a test can tell the conversion (which parses its output to check it) from
++// a cheap check that never parses Markdown.
++vi.mock("commonmark", async (importOriginal) => {
++    const real = await importOriginal<typeof import("commonmark")>();
++    return {
++        ...real,
++        Parser: vi.fn(function (...args: ConstructorParameters<typeof real.Parser>) {
++            return new real.Parser(...args);
++        }),
++    };
++});
++
++const lines = (...l: string[]): string => l.join("\n");
++
++/**
++ * The converter under test. Every case in this file goes through the AC3 safety net check: an ordinary message
++ * must convert directly, as safe Markdown, without falling back to escaped text, and the public entry point must
++ * agree with `convertEvent`. Cases that expect a fallback call `convertEvent` themselves.
++ */
++function eventToMarkdown(event: MatrixEvent): string {
++    const { md, fellBack } = convertEvent(event);
++    expect(fellBack).toBe(false);
++    expect(isSafeMarkdown(md)).toBe(true);
++    expect(publicEventToMarkdown(event)).toBe(md);
++    return md;
++}
++
++function html(formattedBody: string, msgtype: string = MsgType.Text, body = "fallback"): MatrixEvent {
++    return new MatrixEvent({
++        type: EventType.RoomMessage,
++        room_id: "!r:example.org",
++        event_id: "$e",
++        sender: "@a:example.org",
++        content: { msgtype, body, format: "org.matrix.custom.html", formatted_body: formattedBody },
++    });
++}
++
++function plain(body: string, extra: object = {}): MatrixEvent {
++    return new MatrixEvent({
++        type: EventType.RoomMessage,
++        room_id: "!r:example.org",
++        event_id: "$p",
++        sender: "@a:example.org",
++        content: { msgtype: MsgType.Text, body, ...extra },
++    });
++}
++
++/** Every raw-HTML node CommonMark finds in `md`. Clean Markdown yields []. */
++function htmlNodes(md: string): string[] {
++    const walker = new commonmark.Parser().parse(md).walker();
++    const found: string[] = [];
++    let step;
++    while ((step = walker.next())) {
++        const { node, entering } = step;
++        if (entering && (node.type === "html_inline" || node.type === "html_block")) found.push(node.literal ?? "");
++    }
++    return found;
++}
++
++/** Splits a GFM table row on every `|` that a backslash does not escape; `\|` becomes `|` inside a cell. */
++function gfmCells(row: string): string[] {
++    const cells: string[] = [];
++    let cell = "";
++    for (let i = 0; i < row.length; i++) {
++        if (row[i] === "\\" && row[i + 1] === "|") {
++            cell += "|";
++            i++;
++        } else if (row[i] === "|") {
++            cells.push(cell);
++            cell = "";
++        } else {
++            cell += row[i];
++        }
++    }
++    cells.push(cell);
++    return cells.slice(1, -1).map((c) => c.trim());
++}
++
++/** Renders Markdown with CommonMark, to prove what a renderer would show rather than only what we emit. */
++function renderMd(md: string): string {
++    return new commonmark.HtmlRenderer().render(new commonmark.Parser().parse(md));
++}
++
++/** [name, HTML input, expected Markdown, substrings the CommonMark rendering must contain, and must not contain] */
++type Case = [name: string, input: string, expected: string, rendered?: string[], absent?: string[]];
++
++/** The Markdown holds no raw HTML, and CommonMark renders it to contain (and not contain) the given substrings. */
++function expectClean(md: string, rendered: string[] = [], absent: string[] = []): void {
++    expect(htmlNodes(md)).toEqual([]);
++    const out = renderMd(md);
++    for (const part of rendered) expect(out).toContain(part);
++    for (const part of absent) expect(out).not.toContain(part);
++}
++
++const HTML_CASES: Array<[name: string, input: string, expected: string]> = [
++    ["strong/em/b/i", "<strong>bold</strong> and <em>it</em> and <b>b</b> <i>i</i>", "**bold** and *it* and **b** *i*"],
++    ["emphasis inside a word uses asterisks", "foo<em>bar</em>baz", "foo*bar*baz"],
++    ["edge whitespace moves outside emphasis", "a<strong> b </strong>c", "a **b** c"],
++    ["del/s", "<del>gone</del> <s>struck</s>", "~~gone~~ ~~struck~~"],
++    [
++        "degraded inline formatting keeps its text",
++        '<u>under</u> x<sub>2</sub> e<sup>x</sup> <font color="red">red</font> <span data-mx-color="#ff0000">c</span> <span data-mx-bg-color="#00ff00">bg</span>',
++        "under x2 ex red c bg",
++    ],
++    [
++        "spoiler keeps its text, no /spoiler",
++        'a <span data-mx-spoiler>secret</span> and <span data-mx-spoiler="why">another</span>',
++        "a secret and another",
++    ],
++    ["headings", "<h1>One</h1>\n<h3>Three</h3>", lines("# One", "", "### Three")],
++    ["paragraphs", "<p>a</p>\n<p>b</p>", lines("a", "", "b")],
++    ["br is a backslash hard break", "line1<br>line2<br />line3", lines("line1\\", "line2\\", "line3")],
++    ["trailing br at the end of a block is dropped", "<p>x<br></p>", "x"],
++    ["whitespace collapses outside pre", "<p>a\n   b</p>", "a b"],
++    ["inline code", "use <code>a*b</code> here", "use `a*b` here"],
++    ["inline code containing a backtick", "<code>a`b</code>", "``a`b``"],
++    ["inline code starting with a backtick is padded", "<code>`x</code>", "`` `x ``"],
++    [
++        "fenced code with language",
++        '<pre><code class="language-rust">fn main() {}\n</code></pre>',
++        lines("```rust", "fn main() {}", "```"),
++    ],
++    [
++        "fence is longer than the inner backtick run",
++        "<pre><code>a ``` b\n</code></pre>",
++        lines("````", "a ``` b", "````"),
++    ],
++    [
++        "code block content is not escaped",
++        "<pre><code>*not* &lt;em&gt;\n</code></pre>",
++        lines("```", "*not* <em>", "```"),
++    ],
++    ["blockquote with two paragraphs", "<blockquote>\n<p>q1</p>\n<p>q2</p>\n</blockquote>", lines("> q1", ">", "> q2")],
++    ["nested blockquote", "<blockquote><blockquote><p>deep</p></blockquote></blockquote>", "> > deep"],
++    ["unordered list", "<ul>\n<li>a</li>\n<li>b</li>\n</ul>", lines("- a", "- b")],
++    ["ordered list honours start", '<ol start="3">\n<li>c</li>\n<li>d</li>\n</ol>', lines("3. c", "4. d")],
++    ["ordered list start 0", '<ol start="0">\n<li>z</li>\n</ol>', "0. z"],
++    [
++        "nested unordered list indents to the content column",
++        "<ul>\n<li>a\n<ul>\n<li>b</li>\n</ul>\n</li>\n</ul>",
++        lines("- a", "  - b"),
++    ],
++    [
++        "nested ordered list indents to the content column",
++        "<ol>\n<li>x\n<ol>\n<li>y</li>\n</ol>\n</li>\n</ol>",
++        lines("1. x", "   1. y"),
++    ],
++    [
++        "continuation paragraph stays inside its item",
++        "<ul>\n<li>\n<p>p1</p>\n<p>p2</p>\n</li>\n<li>\n<p>q</p>\n</li>\n</ul>",
++        lines("- p1", "", "  p2", "- q"),
++    ],
++    ["horizontal rule", "<p>above</p>\n<hr />\n<p>below</p>", lines("above", "", "---", "", "below")],
++    [
++        "link text escaped, URL percent-encoded",
++        '<a href="https://example.com/a b(c)">see [this]</a>',
++        "[see \\[this\\]](https://example.com/a%20b%28c%29)",
++    ],
++    [
++        "link whose text is its URL becomes an autolink",
++        '<a href="https://example.com/x_y">https://example.com/x_y</a>',
++        "<https://example.com/x_y>",
++    ],
++    [
++        "formatted link text",
++        '<a href="https://example.com/">a <strong>b</strong></a>',
++        "[a **b**](https://example.com/)",
++    ],
++    [
++        "user mention keeps its matrix.to link",
++        '<a href="https://matrix.to/#/@alice:example.org">Alice</a>: hi',
++        "[Alice](https://matrix.to/#/@alice:example.org): hi",
++    ],
++    [
++        "image keeps the mxc URI",
++        '<img src="mxc://example.org/abc" alt="cat *pic*">',
++        "![cat \\*pic\\*](mxc://example.org/abc)",
++    ],
++    [
++        "table with header",
++        "<table><thead><tr><th>a|b</th><th>c</th></tr></thead><tbody><tr><td><strong>1</strong></td><td>2<br>3</td></tr></tbody></table>",
++        lines("| a\\|b | c |", "| --- | --- |", "| **1** | 2 3 |"),
++    ],
++    [
++        "table without thead, with caption and a short row",
++        "<table><caption>Cap</caption><tr><td>h1</td><td>h2</td></tr><tr><td>x</td></tr></table>",
++        lines("Cap", "", "| h1 | h2 |", "| --- | --- |", "| x |  |"),
++    ],
++    ["inline maths", 'E = <span data-mx-maths="mc^2"><code>mc^2</code></span>', "E = $mc^2$"],
++    ["display maths", '<div data-mx-maths="\\int x"><code>\\int x</code></div>', lines("$$", "    \\int x", "$$")],
++    ["details and summary", "<details><summary>More</summary><p>hidden</p></details>", lines("**More**", "", "hidden")],
++    [
++        "mx-reply fallback is dropped",
++        '<mx-reply><blockquote><a href="https://matrix.to/#/!r:example.org/$e">In reply to</a> <a href="https://matrix.to/#/@bob:example.org">@bob:example.org</a><br>orig</blockquote></mx-reply>answer',
++        "answer",
++    ],
++    ["unknown tags keep their text", "<marquee>keep me</marquee>", "keep me"],
++    ["script and style content is dropped", "a<script>alert(1)</script><style>p{}</style>b", "ab"],
++    [
++        "text escaping is minimal",
++        "<p>2*3*4 and snake_case and _under_ and [x] and a &lt;b&gt; tag and ~t~ and &amp;amp;</p>",
++        "2\\*3\\*4 and snake_case and \\_under\\_ and \\[x\\] and a \\<b> tag and \\~t\\~ and \\&amp;",
++    ],
++    ["backslash and backtick in text are escaped", "<p>C:\\path and `tick`</p>", "C:\\\\path and \\`tick\\`"],
++    [
++        "line-start markers are escaped",
++        "<p># h<br>- l<br>+ p<br>1. o<br>&gt; q</p>",
++        lines("\\# h\\", "\\- l\\", "\\+ p\\", "1\\. o\\", "\\> q"),
++    ],
++    ["thematic-break-looking text is escaped", "<p>---</p>", "\\---"],
++    ["setext-looking text is escaped", "<p>a<br>===</p>", lines("a\\", "\\===")],
++];
++
++describe("eventToMarkdown", () => {
++    it("the HTML-residue detector is not vacuous", () => {
++        expect(htmlNodes("a <u>b</u>")).not.toEqual([]);
++        expect(htmlNodes("<div>\nx\n</div>")).not.toEqual([]);
++        expect(htmlNodes("<https://example.com/>")).toEqual([]);
++    });
++
++    it.each(HTML_CASES)("%s", (_name, input, expected) => {
++        const md = eventToMarkdown(html(input));
++        expect(md).toBe(expected);
++        expect(htmlNodes(md)).toEqual([]);
++    });
++
++    it("emote: no /me command", () => {
++        expect(eventToMarkdown(html("<em>waves</em>", MsgType.Emote, "waves"))).toBe("*waves*");
++    });
++
++    it("blank formatted_body falls back to the plain body", () => {
++        expect(eventToMarkdown(html("  ", MsgType.Text, "plain *b*"))).toBe("plain \\*b\\*");
++    });
++
++    it("plain body: escaped, newlines are hard breaks, blank lines are paragraphs", () => {
++        const md = eventToMarkdown(plain("hello *world*\nline two\n\n\nnew para"));
++        expect(md).toBe(lines("hello \\*world\\*\\", "line two", "", "new para"));
++        expect(htmlNodes(md)).toEqual([]);
++    });
++
++    it("plain body: literal HTML is escaped, never re-parsed", () => {
++        const md = eventToMarkdown(plain("a <b>bold</b> claim"));
++        expect(md).toBe("a \\<b>bold\\</b> claim");
++        expect(htmlNodes(md)).toEqual([]);
++    });
++
++    it("plain body: line-start markers are escaped", () => {
++        expect(eventToMarkdown(plain("# not a heading\n1. not a list"))).toBe(
++            lines("\\# not a heading\\", "1\\. not a list"),
++        );
++    });
++
++    it("plain body: the reply fallback is stripped", () => {
++        const ev = plain("> <@bob:example.org> orig\n\nanswer", {
++            "m.relates_to": { "m.in_reply_to": { event_id: "$orig" } },
++        });
++        expect(eventToMarkdown(ev)).toBe("answer");
++    });
++
++    it("edits: the latest revision is copied", () => {
++        const original = html("<p>old</p>", MsgType.Text, "old");
++        const replacement = new MatrixEvent({
++            type: EventType.RoomMessage,
++            room_id: "!r:example.org",
++            event_id: "$edit",
++            sender: "@a:example.org",
++            content: {
++                "msgtype": MsgType.Text,
++                "body": "* new",
++                "m.new_content": {
++                    msgtype: MsgType.Text,
++                    body: "**new**",
++                    format: "org.matrix.custom.html",
++                    formatted_body: "<strong>new</strong>",
++                },
++                "m.relates_to": { rel_type: "m.replace", event_id: "$e" },
++            },
++        });
++        original.makeReplaced(replacement);
++        expect(eventToMarkdown(original)).toBe("**new**");
++    });
++});
++
++describe("canCopyMarkdown", () => {
++    it.each([MsgType.Text, MsgType.Notice, MsgType.Emote])("true for %s", (msgtype) => {
++        expect(canCopyMarkdown(html("<b>x</b>", msgtype, "x"))).toBe(true);
++    });
++
++    it("false for an image", () => {
++        const ev = new MatrixEvent({
++            type: EventType.RoomMessage,
++            content: { msgtype: MsgType.Image, body: "cat.png", url: "mxc://example.org/abc" },
++        });
++        expect(canCopyMarkdown(ev)).toBe(false);
++    });
++
++    it("false for a state event", () => {
++        const ev = new MatrixEvent({ type: EventType.RoomTopic, state_key: "", content: { topic: "t" } });
++        expect(canCopyMarkdown(ev)).toBe(false);
++    });
++
++    it("false for an empty body", () => {
++        expect(canCopyMarkdown(plain(""))).toBe(false);
++    });
++
++    it("false for a decryption failure", () => {
++        const ev = plain("x");
++        vi.spyOn(ev, "isDecryptionFailure").mockReturnValue(true);
++        expect(canCopyMarkdown(ev)).toBe(false);
++    });
++
++    it("false for a redacted event", () => {
++        const ev = plain("x");
++        vi.spyOn(ev, "isRedacted").mockReturnValue(true);
++        expect(canCopyMarkdown(ev)).toBe(false);
++    });
++});
++
++describe("re-audit 3 perf: canCopyMarkdown is a cheap check that does not convert", () => {
++    const REPLY =
++        '<mx-reply><blockquote><a href="https://matrix.to/#/!r:example.org/$e">In reply to</a> <a href="https://matrix.to/#/@bob:example.org">@bob:example.org</a><br>orig</blockquote></mx-reply>';
++    const reply = { "m.relates_to": { "m.in_reply_to": { event_id: "$orig" } } };
++
++    const COPYABLE: Array<[name: string, ev: () => MatrixEvent]> = [
++        ["text", () => html("<p>hi</p>")],
++        ["text after a reply fallback", () => html(`${REPLY}answer`)],
++        ["text after a script", () => html("<script>s()</script>x")],
++        ["text in a link, a code span and a code block", () => html('<a href="javascript:x"><code>c</code></a>')],
++        ["text in a pre block", () => html("<pre><code>x\n</code></pre>")],
++        ["text in a table cell", () => html("<table><tr><td>a</td></tr></table>")],
++        ["a single character outside any element", () => html("x")],
++        ["an mxc image and nothing else", () => html('<img src="mxc://example.org/abc" alt="">')],
++        [
++            "a legacy media API image and nothing else",
++            () => html('<img src="https://hs.example/_matrix/media/r0/download/example.org/abc">'),
++        ],
++        ["inline maths with tex and no text", () => html('<span data-mx-maths="x^2"></span>')],
++        ["display maths with tex and no text", () => html('<div data-mx-maths="x^2"></div>')],
++        ["a notice", () => html("<p>n</p>", MsgType.Notice)],
++        ["an emote", () => html("<p>e</p>", MsgType.Emote)],
++        ["a plain body", () => plain("hello")],
++        ["a plain body after a reply fallback", () => plain("> <@bob:example.org> orig\n\nanswer", reply)],
++        ["a plain body whose only visible character is punctuation", () => plain("*")],
++        ["a plain body that is not a reply but starts with a quote", () => plain("> quoted")],
++        ["blank formatted_body with a plain body", () => html("  ", MsgType.Text, "plain")],
++    ];
++
++    const NOT_COPYABLE: Array<[name: string, ev: () => MatrixEvent]> = [
++        ["C01: a reply fallback and nothing else", () => html(REPLY)],
++        ["a reply fallback and whitespace", () => html(`${REPLY} \n`)],
++        ["a script and nothing else", () => html("<script>alert(1)</script>")],
++        ["a style and nothing else", () => html("<style>p { color: red }</style>")],
++        [
++            "scripts, styles, noscript, textarea and option",
++            () =>
++                html(
++                    "<noscript>n</noscript><textarea>t</textarea><select><option>o</option></select><script>s</script><style>x{}</style>",
++                ),
++        ],
++        ["a reply fallback, a script and a style", () => html(`${REPLY}<script>s</script><style>x{}</style>`)],
++        ["a plain body that is only a reply fallback", () => plain("> <@bob:example.org> orig", reply)],
++        ["a plain body that is a reply fallback and a blank line", () => plain("> <@bob:example.org> orig\n\n", reply)],
++        ["a whitespace-only plain body", () => plain(" \n\t \u00a0\n ")],
++        ["a plain body of private-use markers", () => plain("\uE000\uE007\uE008")],
++        ["whitespace-only formatted HTML", () => html("<p> </p>\n<p>\u00a0</p>")],
++        ["formatted HTML of private-use markers", () => html("<p>\uE000\uE001</p>")],
++        ["a remote image and nothing else", () => html('<img src="https://evil.example/t.png" alt="visible alt">')],
++        ["a data: image and nothing else", () => html('<img src="data:image/png;base64,AAAA" alt="x">')],
++        ["an image with no src", () => html('<img alt="x">')],
++        ["inline maths with empty tex and no text", () => html('<span data-mx-maths=""></span>')],
++        ["maths whose tex is only private-use markers", () => html('<span data-mx-maths="\uE000"></span>')],
++        ["an empty body", () => plain("")],
++        ["a body that is not a string", () => plain(42 as unknown as string)],
++    ];
++
++    it.each(COPYABLE)("true for %s", (_name, ev) => {
++        expect(canCopyMarkdown(ev())).toBe(true);
++    });
++
++    it.each(NOT_COPYABLE)("false for %s", (_name, ev) => {
++        expect(canCopyMarkdown(ev())).toBe(false);
++    });
++
++    it("never offers a copy that would be empty: every copyable case converts to something", () => {
++        for (const [, ev] of COPYABLE) expect(publicEventToMarkdown(ev())).not.toBe("");
++    });
++
++    it("does not convert: it never parses Markdown, the conversion always does", () => {
++        const parser = vi.mocked(commonmark.Parser);
++        parser.mockClear();
++        expect(canCopyMarkdown(html("<p>a <b>b</b> `c` <span data-mx-maths='x'>m</span></p>"))).toBe(true);
++        expect(canCopyMarkdown(plain("a *b* c"))).toBe(true);
++        expect(canCopyMarkdown(html(REPLY))).toBe(false);
++        expect(parser).not.toHaveBeenCalled();
++        publicEventToMarkdown(plain("a *b* c"));
++        expect(parser).toHaveBeenCalled();
++    });
++});
++
++describe("audit F1: maths never emits raw HTML", () => {
++    const CASES: Case[] = [
++        [
++            "inline maths holding an img tag",
++            '<span data-mx-maths="<img src=x onerror=alert(1)>">m</span>',
++            "$< img src=x onerror=alert(1)>$",
++        ],
++        [
++            "display maths holding a script tag",
++            '<div data-mx-maths="<script>alert(1)</script>">m</div>',
++            lines("$$", "    < script>alert(1)< /script>", "$$"),
++        ],
++        ["benign tag-like text in inline maths", '<span data-mx-maths="a <b> c">m</span>', "$a < b> c$"],
++        ["a plain less-than stays untouched", '<span data-mx-maths="a<b">m</span>', "$a<b$"],
++        ["a plain less-than stays untouched, even before text", '<span data-mx-maths="a<b">m</span>c>d', "$a<b$c>d"],
++        ["inline maths holding a comment", '<span data-mx-maths="x<!-- y -->">m</span>', "$x< !-- y -->$"],
++        ["inline maths holding a closing tag", '<span data-mx-maths="</b>">m</span>', "$< /b>$"],
++        ["inline maths holding a processing instruction", '<span data-mx-maths="<?php x ?>">m</span>', "$< ?php x ?>$"],
++        [
++            "inline maths holding an autolink",
++            '<span data-mx-maths="<https://evil.example/>">m</span>',
++            "$< https://evil.example/>$",
++        ],
++        [
++            "display maths holding an open script tag",
++            '<div data-mx-maths="<script">m</div>',
++            lines("$$", "    < script", "$$"),
++        ],
++        ["spaced less-than is unchanged", '<span data-mx-maths="a < b">m</span>', "$a < b$"],
++    ];
++
++    it.each(CASES)("%s", (_name, input, expected) => {
++        const md = eventToMarkdown(html(input));
++        expect(md).toBe(expected);
++        expectClean(md, [], ["<img", "<script", "<b>", "</b>", "<a ", "<!--", "<?php"]);
++    });
++});
++
++describe("audit F2: copy only what Element displays", () => {
++    const CASES: Case[] = [
++        ["javascript: link keeps only its text", '<a href="javascript:alert(1)">click</a>', "click", [], ["<a "]],
++        ["mixed-case javascript: link", '<a href="JaVaScRiPt:alert(1)">click</a>', "click", [], ["<a "]],
++        ["javascript: with an embedded tab", '<a href="java&#9;script:alert(1)">click</a>', "click", [], ["<a "]],
++        ["data: link keeps only its text", '<a href="data:text/html,<b>x</b>">click</a>', "click", [], ["<a "]],
++        ["protocol-relative link keeps only its text", '<a href="//evil.example/x">click</a>', "click", [], ["<a "]],
++        ["backslash protocol-relative link", '<a href="\\\\evil.example/x">click</a>', "click", [], ["<a "]],
++        [
++            "a dropped link keeps its formatted text",
++            '<a href="javascript:x"><strong>b</strong> c</a>',
++            "**b** c",
++            ["<strong>b</strong> c"],
++            ["<a "],
++        ],
++        [
++            "https link is unchanged",
++            '<a href="https://example.com/a">x</a>',
++            "[x](https://example.com/a)",
++            ['<a href="https://example.com/a">x</a>'],
++        ],
++        [
++            "mailto link is unchanged",
++            '<a href="mailto:a@example.org">mail</a>',
++            "[mail](mailto:a@example.org)",
++            ['<a href="mailto:a@example.org">mail</a>'],
++        ],
++        [
++            "matrix: link is unchanged",
++            '<a href="matrix:r/room:example.org">room</a>',
++            "[room](matrix:r/room:example.org)",
++            ['<a href="matrix:r/room:example.org">room</a>'],
++        ],
++        [
++            "a relative link is kept, as Element keeps it",
++            '<a href="/docs/page">x</a>',
++            "[x](/docs/page)",
++            ['<a href="/docs/page">x</a>'],
++        ],
++        [
++            "a non-mxc image is dropped, alt text included, as Element renders it with no attributes",
++            'a<img src="https://evil.example/t.png" alt="t">b',
++            "ab",
++            [],
++            ["<img"],
++        ],
++        ["data: image is dropped", 'a<img src="data:image/png;base64,AAAA" alt="t">b', "ab", [], ["<img"]],
++        ["an image with no src is dropped", 'a<img alt="t">b', "ab", [], ["<img"]],
++        [
++            "mxc image is unchanged",
++            '<img src="mxc://example.org/abc" alt="cat">',
++            "![cat](mxc://example.org/abc)",
++            ['<img src="mxc://example.org/abc" alt="cat" />'],
++        ],
++        [
++            "a media API URL becomes the mxc image Element shows",
++            '<img src="https://hs.example/_matrix/media/r0/download/example.org/abc?x=1" alt="cat">',
++            "![cat](mxc://example.org/abc)",
++            ['<img src="mxc://example.org/abc" alt="cat" />'],
++        ],
++    ];
++
++    it.each(CASES)("%s", (_name, input, expected, rendered, absent) => {
++        const md = eventToMarkdown(html(input));
++        expect(md).toBe(expected);
++        expectClean(md, rendered, absent);
++    });
++});
++
++describe("audit F3: bare URLs in text become autolinks", () => {
++    const CASES: Case[] = [
++        [
++            "a URL with underscores",
++            "<p>see https://matrix.org/_matrix/client/versions</p>",
++            "see <https://matrix.org/_matrix/client/versions>",
++            ['<a href="https://matrix.org/_matrix/client/versions">https://matrix.org/_matrix/client/versions</a>'],
++        ],
++        [
++            "trailing period stays outside",
++            "<p>go to https://example.com/a.</p>",
++            "go to <https://example.com/a>.",
++            ['<a href="https://example.com/a">https://example.com/a</a>.'],
++        ],
++        [
++            "a URL in parentheses",
++            "<p>(see https://example.com/a)</p>",
++            "(see <https://example.com/a>)",
++            ['(see <a href="https://example.com/a">https://example.com/a</a>)'],
++        ],
++        [
++            "a balanced parenthesis stays inside",
++            "<p>https://en.wikipedia.org/wiki/Foo_(bar)</p>",
++            "<https://en.wikipedia.org/wiki/Foo_(bar)>",
++            ['<a href="https://en.wikipedia.org/wiki/Foo_(bar)">'],
++        ],
++        [
++            "a balanced parenthesis followed by punctuation",
++            "<p>https://en.wikipedia.org/wiki/Foo_(bar).</p>",
++            "<https://en.wikipedia.org/wiki/Foo_(bar)>.",
++        ],
++        [
++            "tilde and asterisk inside, trailing asterisk outside",
++            "<p>https://a.example/~u/a*b and https://b.example/q*</p>",
++            "<https://a.example/~u/a*b> and <https://b.example/q>\\*",
++            ['<a href="https://a.example/~u/a*b">', '<a href="https://b.example/q">'],
++        ],
++        [
++            "trailing punctuation of every kind",
++            "<p>a https://x.example/p?!.,:*_~'\" b</p>",
++            "a <https://x.example/p>?!.,:\\*\\_\\~'\" b",
++        ],
++        ["http and mixed case scheme", "<p>HTTP://Example.com/Path</p>", "<HTTP://Example.com/Path>", []],
++        ["a run ends at a less-than sign", "<p>https://a.example/x&lt;y</p>", "<https://a.example/x>\\<y"],
++        ["a run ends at a greater-than sign", "<p>https://a.example/x&gt;y</p>", "<https://a.example/x>>y"],
++        ["a URL inside emphasis", "<strong>https://a.example/x</strong>", "**<https://a.example/x>**", ["<strong>"]],
++        ["a URL in a heading", "<h2>https://a.example/x_y</h2>", "## <https://a.example/x_y>"],
++        [
++            "a URL with an ampersand sequence",
++            "<p>https://a.example/?q=1&amp;amp=2</p>",
++            "<https://a.example/?q=1&amp=2>",
++        ],
++        ["a scheme glued to a word is not a URL", "<p>xhttps://a.example/b</p>", "xhttps://a.example/b", [], ["<a "]],
++        ["a bare scheme is not a URL", "<p>see https:// and http://.</p>", "see https:// and http://.", [], ["<a "]],
++        [
++            "link text is never autolinked, normal escaping applies",
++            '<a href="https://example.com/">https://other.example/_x_y</a>',
++            "[https://other.example/\\_x_y](https://example.com/)",
++            ['<a href="https://example.com/">https://other.example/_x_y</a>'],
++            ['<a href="https://other.example'],
++        ],
++        [
++            "text of a dropped link is not autolinked either",
++            '<a href="javascript:x">https://other.example/_x_y</a>',
++            "https://other.example/\\_x_y",
++            [],
++            ["<a "],
++        ],
++        [
++            "text next to a link is autolinked, the link is not",
++            'https://a.example/1 <a href="https://b.example/">b</a> https://c.example/2',
++            "<https://a.example/1> [b](https://b.example/) <https://c.example/2>",
++        ],
++    ];
++
++    it.each(CASES)("%s", (_name, input, expected, rendered, absent) => {
++        const md = eventToMarkdown(html(input));
++        expect(md).toBe(expected);
++        expectClean(md, rendered, absent);
++    });
++
++    const PLAIN: Array<[name: string, body: string, expected: string, rendered?: string[]]> = [
++        [
++            "a URL-only message",
++            "https://matrix.org/_matrix/client/versions",
++            "<https://matrix.org/_matrix/client/versions>",
++            ['<a href="https://matrix.org/_matrix/client/versions">https://matrix.org/_matrix/client/versions</a>'],
++        ],
++        [
++            "a URL inside prose, with escaping around it",
++            "*see* https://a.example/x_y. and *more*",
++            "\\*see\\* <https://a.example/x_y>. and \\*more\\*",
++            ['<a href="https://a.example/x_y">'],
++        ],
++        [
++            "a URL on each of two lines",
++            "https://a.example/1\nhttps://b.example/2",
++            lines("<https://a.example/1>\\", "<https://b.example/2>"),
++            ['<a href="https://a.example/1">', '<a href="https://b.example/2">'],
++        ],
++    ];
++
++    it.each(PLAIN)("plain body: %s", (_name, body, expected, rendered) => {
++        const md = eventToMarkdown(plain(body));
++        expect(md).toBe(expected);
++        expectClean(md, rendered);
++    });
++});
++
++describe("audit F4: a pipe never splits a table cell", () => {
++    it("the cell splitter is not vacuous", () => {
++        expect(gfmCells("| `a|b` | x |")).toEqual(["`a", "b`", "x"]);
++        expect(gfmCells("| `a\\|b` | x |")).toEqual(["`a|b`", "x"]);
++    });
++
++    const CASES: Array<[name: string, input: string, header: string, cells: string[], rendered: string[]]> = [
++        [
++            "code span",
++            "<table><tr><td><code>a|b</code></td><td>x</td></tr></table>",
++            "| `a\\|b` | x |",
++            ["`a|b`", "x"],
++            ["<code>a|b</code>"],
++        ],
++        [
++            "link URL",
++            '<table><tr><td><a href="https://example.com/?a=1|2">x</a></td></tr></table>',
++            "| [x](https://example.com/?a=1%7C2) |",
++            ["[x](https://example.com/?a=1%7C2)"],
++            ['<a href="https://example.com/?a=1%7C2">x</a>'],
++        ],
++        [
++            "autolink from a link",
++            '<table><tr><td><a href="https://example.com/?a=1|2">https://example.com/?a=1|2</a></td></tr></table>',
++            "| <https://example.com/?a=1%7C2> |",
++            ["<https://example.com/?a=1%7C2>"],
++            ['<a href="https://example.com/?a=1%7C2">'],
++        ],
++        [
++            "autolink from a bare URL",
++            "<table><tr><td>see https://example.com/?a=1|2.</td></tr></table>",
++            "| see <https://example.com/?a=1%7C2>. |",
++            ["see <https://example.com/?a=1%7C2>."],
++            ['<a href="https://example.com/?a=1%7C2">'],
++        ],
++        [
++            "inline maths",
++            '<table><tr><td><span data-mx-maths="|x|">m</span></td></tr></table>',
++            "| $\\|x\\|$ |",
++            ["$|x|$"],
++            [],
++        ],
++        [
++            "display maths",
++            '<table><tr><td><div data-mx-maths="|x|">m</div></td></tr></table>',
++            "| $$ \\|x\\| $$ |",
++            ["$$ |x| $$"],
++            [],
++        ],
++        [
++            "image URL",
++            '<table><tr><td><img src="mxc://example.org/a|b" alt="x"></td></tr></table>',
++            "| ![x](mxc://example.org/a%7Cb) |",
++            ["![x](mxc://example.org/a%7Cb)"],
++            ['<img src="mxc://example.org/a%7Cb" alt="x" />'],
++        ],
++        [
++            "code block flattened into a cell",
++            "<table><tr><td><pre><code>a|b\n</code></pre></td></tr></table>",
++            "| ``` a\\|b ``` |",
++            ["``` a|b ```"],
++            [],
++        ],
++        [
++            "code span next to a plain pipe in text",
++            "<table><tr><td>p|q <code>a|b</code></td><td>y</td></tr></table>",
++            "| p\\|q `a\\|b` | y |",
++            ["p|q `a|b`", "y"],
++            ["p|q <code>a|b</code>"],
++        ],
++    ];
++
++    it.each(CASES)("%s", (_name, input, header, cells, rendered) => {
++        const md = eventToMarkdown(html(input));
++        const [row, delimiter] = md.split("\n");
++        expect(row).toBe(header);
++        expect(delimiter).toMatch(/^(\| --- )+\|$/);
++        expect(gfmCells(row)).toEqual(cells);
++        expect(gfmCells(delimiter)).toHaveLength(cells.length);
++        expectClean(md);
++        const out = cells.map((c) => renderMd(c)).join("");
++        for (const part of rendered) expect(out).toContain(part);
++    });
++
++    const OUTSIDE: Case[] = [
++        ["code span", "<p><code>a|b</code></p>", "`a|b`"],
++        [
++            "link URL is percent-encoded",
++            '<a href="https://example.com/?a=1|2">x</a>',
++            "[x](https://example.com/?a=1%7C2)",
++            ['<a href="https://example.com/?a=1%7C2">x</a>'],
++        ],
++        [
++            "autolink is percent-encoded",
++            '<a href="https://example.com/?a=1|2">https://example.com/?a=1|2</a>',
++            "<https://example.com/?a=1%7C2>",
++        ],
++        ["bare URL is percent-encoded", "<p>https://example.com/?a=1|2</p>", "<https://example.com/?a=1%7C2>"],
++        ["inline maths", '<span data-mx-maths="|x|">m</span>', "$|x|$"],
++        ["display maths", '<div data-mx-maths="|x|">m</div>', lines("$$", "    |x|", "$$")],
++        ["image URL is percent-encoded", '<img src="mxc://example.org/a|b" alt="x">', "![x](mxc://example.org/a%7Cb)"],
++        ["text is escaped", "<p>a|b</p>", "a\\|b", ["<p>a|b</p>"]],
++    ];
++
++    it.each(OUTSIDE)("outside a table, a pipe in a %s", (_name, input, expected, rendered) => {
++        const md = eventToMarkdown(html(input));
++        expect(md).toBe(expected);
++        expectClean(md, rendered);
++    });
++});
++
++describe("audit F5: emphasis is always a valid CommonMark delimiter run", () => {
++    const CASES: Case[] = [
++        [
++            "trailing colon moves outside the strong run",
++            "<strong>Note:</strong>text",
++            "**Note**:text",
++            ["<strong>Note</strong>:text"],
++        ],
++        ["parentheses move outside the em run", "a<em>(b)</em>c", "a(*b*)c", ["a(<em>b</em>)c"]],
++        [
++            "CJK brackets move outside the strong run",
++            "中文<strong>「强调」</strong>中文",
++            "中文「**强调**」中文",
++            ["中文「<strong>强调</strong>」中文"],
++        ],
++        ["adjacent em runs merge", "<em>a</em><em>b</em>", "*ab*", ["<em>ab</em>"]],
++        ["adjacent strong runs merge", "<strong>a</strong><b>b</b>", "**ab**", ["<strong>ab</strong>"]],
++        [
++            "adjacent nested runs merge",
++            "<strong><em>a</em></strong><strong><em>b</em></strong>",
++            "***ab***",
++            ["<strong>ab</strong>"],
++        ],
++        ["a run does not merge across a space", "<em>a</em> <em>b</em>", "*a* *b*", ["<em>a</em> <em>b</em>"]],
++        ["strong before a period is valid as is", "<strong>x</strong>.", "**x**.", ["<strong>x</strong>."]],
++        ["nested strong and em", "<strong><em>x</em></strong>", "***x***", ["<strong>x</strong>", "<em>"]],
++        [
++            "nested with edge punctuation",
++            "<em><strong>(x)</strong></em>y",
++            "***(x***)y",
++            ["<em><strong>(x</strong></em>)y"],
++        ],
++        ["a nested run of the same kind is redundant", "<em>a<em>b</em></em>", "*ab*", ["<em>ab</em>"]],
++        ["em inside strong", "<strong>a <em>b</em></strong>", "**a *b***", ["<strong>a <em>b</em></strong>"]],
++        ["only punctuation, valid between spaces", "a <strong>!!</strong> b", "a **!!** b", ["<strong>!!</strong>"]],
++        ["only punctuation, glued to a letter: delimiters dropped", "a<strong>!!</strong>b", "a!!b", [], ["<strong>"]],
++        ["only punctuation on both sides: delimiters dropped", "a<em>.</em>b", "a.b", [], ["<em>"]],
++        ["an escaped asterisk is punctuation too", "a<em>*</em>b", "a\\*b", [], ["<em>"]],
++        ["an escaped bracket moves out whole", "a<strong>[x]</strong>b", "a\\[**x**\\]b", ["a[<strong>x</strong>]b"]],
++        ["a trailing exclamation mark", "<em>wow!</em>ok", "*wow*!ok", ["<em>wow</em>!ok"]],
++        ["edge whitespace still moves outside", "a<strong> b </strong>c", "a **b** c", ["a <strong>b</strong> c"]],
++        [
++            "punctuation behind edge whitespace stays inside",
++            "a<strong> (b) </strong>c",
++            "a **(b)** c",
++            ["a <strong>(b)</strong> c"],
++        ],
++        [
++            "a link at the edge cannot flank: delimiters dropped",
++            'a<em><a href="https://example.com/">x</a></em>b',
++            "a[x](https://example.com/)b",
++            ['a<a href="https://example.com/">x</a>b'],
++            ["<em>"],
++        ],
++        [
++            "a code span at the edge cannot flank",
++            "a<strong><code>x</code></strong>b",
++            "a`x`b",
++            ["a<code>x</code>b"],
++            ["<strong>"],
++        ],
++        [
++            "a link at the edge is fine after a space",
++            'a <em><a href="https://example.com/">x</a></em> b',
++            "a *[x](https://example.com/)* b",
++            ['a <em><a href="https://example.com/">x</a></em> b'],
++        ],
++        [
++            "emphasis inside link text is resolved on its own",
++            '<a href="https://example.com/"><strong>Note:</strong>x</a>',
++            "[**Note**:x](https://example.com/)",
++            ['<a href="https://example.com/"><strong>Note</strong>:x</a>'],
++        ],
++        [
++            "a hard break inside a run",
++            "<strong>a<br>b</strong>",
++            lines("**a\\", "b**"),
++            ["<strong>a<br />\nb</strong>"],
++        ],
++        [
++            "a hard break at the edge of a run moves outside",
++            "<p><strong>a<br></strong>b</p>",
++            lines("**a**\\", "b"),
++            ["<strong>a</strong><br />\nb"],
++        ],
++        ["an emoji before a punctuation edge", "😀<em>(b)</em>c", "😀(*b*)c", ["😀(<em>b</em>)c"]],
++        ["an emoji before a letter edge", "😀<em>b</em>c", "😀*b*c", ["😀<em>b</em>c"]],
++        ["an emoji at the end of a run before a letter", "a<em>b😀</em>c", "a*b*😀c", ["a<em>b</em>😀c"]],
++        ["different kinds side by side", "<strong>x</strong><em>y</em>", "**x***y*", ["<strong>x</strong><em>y</em>"]],
++        [
++            "a strong with a trailing colon inside a heading",
++            "<h2><strong>Note:</strong>x</h2>",
++            "## **Note**:x",
++            ["<strong>Note</strong>:x"],
++        ],
++        [
++            "summary text keeps its emphasis",
++            "<details><summary><em>a</em> b</summary><p>x</p></details>",
++            lines("***a* b**", "", "x"),
++            ["<strong><em>a</em> b</strong>"],
++        ],
++    ];
++
++    it.each(CASES)("%s", (_name, input, expected, rendered, absent) => {
++        const md = eventToMarkdown(html(input));
++        expect(md).toBe(expected);
++        expectClean(md, rendered, absent);
++    });
++
++    it("runs a parser would pair differently than the HTML nested them are dropped, never left as stray asterisks", () => {
++        // `***中*\**)***`: the second `*` flanks both ways, so CommonMark closes with it instead of opening.
++        const md = eventToMarkdown(html("<b><i>中</i>*<i>)</i></b>"));
++        expect(md).toBe("*中*\\*)");
++        expectClean(md, ["<em>中</em>*)"], ["**"]);
++    });
++
++    it("private-use characters in the message are not mistaken for internal markers", () => {
++        const marked = "a\uE001b\uE004c\uE007d\uE000e";
++        expect(eventToMarkdown(html(`<p>${marked}<code>${marked}</code></p>`))).toBe("abcde`abcde`");
++        expect(eventToMarkdown(plain(marked))).toBe("abcde");
++    });
++
++    it("many edge repairs stay fast and correct", () => {
++        const md = eventToMarkdown(html("<p>" + "x<em>(y)</em>z".repeat(2000) + "</p>"));
++        expect(md).toBe("x(*y*)z".repeat(2000));
++    });
++
++    // CommonMark itself has no strikethrough, so these are checked on the string; the same flanking rules apply.
++    const STRIKE: Array<[name: string, input: string, expected: string]> = [
++        ["trailing colon moves outside", "<del>Note:</del>text", "~~Note~~:text"],
++        ["parentheses move outside", "a<s>(b)</s>c", "a(~~b~~)c"],
++        ["adjacent runs merge", "<del>a</del><strike>b</strike>", "~~ab~~"],
++        ["only punctuation, glued to a letter", "a<del>!!</del>b", "a!!b"],
++        [
++            "strong around strikethrough at a word edge: the outer run is dropped",
++            "a<strong><del>x</del></strong>b",
++            "a~~x~~b",
++        ],
++        ["strong around strikethrough after spaces", "a <strong><del>x</del></strong> b", "a **~~x~~** b"],
++        ["a valid run is unchanged", "x <del>gone</del>.", "x ~~gone~~."],
++    ];
++
++    it.each(STRIKE)("strikethrough: %s", (_name, input, expected) => {
++        const md = eventToMarkdown(html(input));
++        expect(md).toBe(expected);
++        expectClean(md);
++    });
++});
++
++describe("audit F6: indentation in a plain body is not an indented code block", () => {
++    const NB = String.fromCharCode(0xa0);
++    // commonmark.js trims a paragraph with String.trim(), which also removes a leading no-break space on the
++    // first line, so the rendering checks only look at what follows the indentation.
++    const CASES: Array<[name: string, body: string, expected: string, rendered: string[], absent: string[]]> = [
++        [
++            "four spaces",
++            "    indented code-looking",
++            `${NB.repeat(4)}indented code-looking`,
++            ["indented code-looking</p>"],
++            ["<pre", "<code"],
++        ],
++        ["a tab", "\tx", `${NB.repeat(4)}x`, ["<p>", "x</p>"], ["<pre", "<code"]],
++        [
++            "a paragraph after a blank line",
++            "intro\n\n    indented",
++            lines("intro", "", `${NB.repeat(4)}indented`),
++            ["<p>intro</p>", "indented</p>"],
++            ["<pre", "<code"],
++        ],
++        [
++            "a continuation line keeps its indentation",
++            "a\n  b",
++            lines("a\\", `${NB.repeat(2)}b`),
++            [`a<br />\n${NB.repeat(2)}b`],
++            ["<pre"],
++        ],
++        ["a tab after spaces", "  \tx", `${NB.repeat(6)}x`, [], ["<pre"]],
++        ["spaces inside a line are untouched", "a    b\tc", "a    b\tc", ["<p>a    b\tc</p>"], ["<pre"]],
++        [
++            "indented text that looks like a heading is not escaped, the indentation already stops it",
++            "  # x",
++            `${NB.repeat(2)}# x`,
++            ["# x</p>"],
++            ["<h1"],
++        ],
++        [
++            "an indented URL",
++            "    https://a.example/x",
++            `${NB.repeat(4)}<https://a.example/x>`,
++            ['<a href="https://a.example/x">'],
++            ["<pre"],
++        ],
++    ];
++
++    it.each(CASES)("%s", (_name, body, expected, rendered, absent) => {
++        const md = eventToMarkdown(plain(body));
++        expect(md).toBe(expected);
++        expectClean(md, rendered, absent);
++    });
++
++    it("the HTML path is unaffected", () => {
++        expect(eventToMarkdown(html("<p>    x</p>"))).toBe("x");
++    });
++});
++
++describe("audit F7: an exclamation mark before a link stays a link", () => {
++    const CASES: Case[] = [
++        [
++            "text ending in an exclamation mark before a link",
++            'Wow!<a href="https://example.com/">link</a>',
++            "Wow\\![link](https://example.com/)",
++            ['Wow!<a href="https://example.com/">link</a>'],
++            ["<img"],
++        ],
++        [
++            "a link right after an exclamation mark at the start",
++            '!<a href="https://example.com/">x</a>',
++            "\\![x](https://example.com/)",
++            ['!<a href="https://example.com/">x</a>'],
++            ["<img"],
++        ],
++        [
++            "only the last of several exclamation marks is escaped",
++            '!!<a href="https://example.com/">x</a>',
++            "!\\![x](https://example.com/)",
++            ['!!<a href="https://example.com/">x</a>'],
++            ["<img"],
++        ],
++        [
++            "an exclamation mark before a link that lost its emphasis",
++            'Wow!<strong><a href="https://example.com/">x</a></strong>y',
++            "Wow\\![x](https://example.com/)y",
++            ['Wow!<a href="https://example.com/">x</a>y'],
++            ["<img", "<strong>"],
++        ],
++        [
++            "an exclamation mark before kept emphasis around a link needs no escape",
++            'Wow!<em><a href="https://example.com/">x</a></em>',
++            "Wow!*[x](https://example.com/)*",
++            ['Wow!<em><a href="https://example.com/">x</a></em>'],
++            ["<img"],
++        ],
++        [
++            "an exclamation mark before an autolink needs no escape",
++            'Wow!<a href="https://example.com/">https://example.com/</a>',
++            "Wow!<https://example.com/>",
++            ['Wow!<a href="https://example.com/">'],
++        ],
++        [
++            "an exclamation mark in a heading",
++            '<h2>Hi!<a href="https://example.com/">x</a></h2>',
++            "## Hi\\![x](https://example.com/)",
++            ['<h2>Hi!<a href="https://example.com/">x</a></h2>'],
++            ["<img"],
++        ],
++        [
++            "an image still works",
++            '<img src="mxc://example.org/abc" alt="cat">',
++            "![cat](mxc://example.org/abc)",
++            ['<img src="mxc://example.org/abc" alt="cat" />'],
++        ],
++        [
++            "an image after an exclamation mark still works",
++            'Wow!<img src="mxc://example.org/abc" alt="cat">',
++            "Wow!![cat](mxc://example.org/abc)",
++            ['Wow!<img src="mxc://example.org/abc" alt="cat" />'],
++        ],
++        [
++            "a literal backslash before the exclamation mark",
++            'Wow\\!<a href="https://example.com/">x</a>',
++            "Wow\\\\\\![x](https://example.com/)",
++            ['Wow\\!<a href="https://example.com/">x</a>'],
++            ["<img"],
++        ],
++    ];
++
++    it.each(CASES)("%s", (_name, input, expected, rendered, absent) => {
++        const md = eventToMarkdown(html(input));
++        expect(md).toBe(expected);
++        expectClean(md, rendered, absent);
++    });
++});
++
++describe("audit F8: a heading that ends in # keeps it", () => {
++    const CASES: Case[] = [
++        ["a trailing # after a space", "<h2>Issue #</h2>", "## Issue \\#", ["<h2>Issue #</h2>"]],
++        ["a heading that is only #", "<h2>#</h2>", "## \\#", ["<h2>#</h2>"]],
++        ["a trailing run of #", "<h2>Issue ##</h2>", "## Issue \\##", ["<h2>Issue ##</h2>"]],
++        ["only #", "<h1>###</h1>", "# \\###", ["<h1>###</h1>"]],
++        ["a # glued to a word is not a closing sequence", "<h2>C#</h2>", "## C#", ["<h2>C#</h2>"]],
++        ["a # in the middle", "<h3>a #b</h3>", "### a #b", ["<h3>a #b</h3>"]],
++        ["trailing whitespace after the #", "<h2>Issue # </h2>", "## Issue \\#", ["<h2>Issue #</h2>"]],
++        ["a # after emphasis", "<h2><em>a</em> #</h2>", "## *a* \\#", ["<h2><em>a</em> #</h2>"]],
++        ["a # on a line of its own after a break", "<h2>Issue<br>#</h2>", "## Issue \\#", ["<h2>Issue #</h2>"]],
++        ["a backslash before the # already protects it", "<h2>a \\#</h2>", "## a \\\\#", ["<h2>a \\#</h2>"]],
++        ["a paragraph ending in # is not a heading", "<p>Issue #</p>", "Issue #", ["<p>Issue #</p>"]],
++    ];
++
++    it.each(CASES)("%s", (_name, input, expected, rendered, absent) => {
++        const md = eventToMarkdown(html(input));
++        expect(md).toBe(expected);
++        expectClean(md, rendered, absent);
++    });
++});
++
++describe("re-audit R2: a code block's info string is plain or absent", () => {
++    const CASES: Case[] = [
++        [
++            "H01: a backtick in the language, then HTML-looking content",
++            '<pre><code class="language-a`b">&lt;img src=x onerror=alert(1)&gt;\n</code></pre>',
++            lines("```", "<img src=x onerror=alert(1)>", "```"),
++            ["&lt;img src=x onerror=alert(1)&gt;"],
++            ["<img src"],
++        ],
++        [
++            "H02: a trailing backtick in the language, div content",
++            '<pre><code class="language-x`">&lt;div onclick=x&gt;\nhi\n&lt;/div&gt;\n</code></pre>',
++            lines("```", "<div onclick=x>", "hi", "</div>", "```"),
++            ["&lt;div onclick=x&gt;"],
++            ["<div onclick"],
++        ],
++        [
++            "H03: a backtick in the language inside a list item",
++            '<ul><li>a<pre><code class="language-`">&lt;script&gt;alert(1)&lt;/script&gt;\n</code></pre></li></ul>',
++            lines("- a", "  ```", "  <script>alert(1)</script>", "  ```"),
++            ["&lt;script&gt;alert(1)&lt;/script&gt;"],
++            ["<script"],
++        ],
++        [
++            "a language with a space-separated second class keeps the first",
++            '<pre><code class="language-rust x">fn</code></pre>',
++            lines("```rust", "fn", "```"),
++        ],
++        [
++            "the info-string characters that stay",
++            '<pre><code class="language-c++">x</code></pre>',
++            lines("```c++", "x", "```"),
++        ],
++        ["a language with a hash", '<pre><code class="language-c#">x</code></pre>', lines("```c#", "x", "```")],
++        [
++            "a language with dots, underscores and hyphens",
++            '<pre><code class="language-text.x_y-z">x</code></pre>',
++            lines("```text.x_y-z", "x", "```"),
++        ],
++        [
++            "an empty language gives no info string",
++            '<pre><code class="language-">x</code></pre>',
++            lines("```", "x", "```"),
++        ],
++        [
++            "a tilde in the language gives no info string",
++            '<pre><code class="language-a~b">x</code></pre>',
++            lines("```", "x", "```"),
++        ],
++        [
++            "a non-ASCII language gives no info string",
++            '<pre><code class="language-\u4e2d">x</code></pre>',
++            lines("```", "x", "```"),
++        ],
++        [
++            "braces and quotes in the language give no info string",
++            '<pre><code class="language-{a}\'b">x</code></pre>',
++            lines("```", "x", "```"),
++        ],
++        [
++            "a backslash and an ampersand in the language give no info string",
++            '<pre><code class="language-a\\b&amp;c">x</code></pre>',
++            lines("```", "x", "```"),
++        ],
++    ];
++
++    it.each(CASES)("%s", (_name, input, expected, rendered, absent) => {
++        const md = eventToMarkdown(html(input));
++        expect(md).toBe(expected);
++        expectClean(md, rendered, absent);
++    });
++});
++
++describe("re-audit R3: autolinks are grammar-valid, control characters in a href are encoded", () => {
++    const CODE_HTML = "<code>&lt;img src=x onerror=alert(1)&gt;</code>";
++    const CASES: Case[] = [
++        [
++            "B30: a control character and a backtick in a link href, then a code span of HTML",
++            `<a href="https://a.example/&#1;\`b">x</a> and ${CODE_HTML}`,
++            "[x](https://a.example/%01`b) and `<img src=x onerror=alert(1)>`",
++            ['<a href="https://a.example/%01%60b">x</a>', "&lt;img src=x onerror=alert(1)&gt;"],
++            ["<img src"],
++        ],
++        [
++            "B31: a link whose text is its href, with a control character, is not an autolink",
++            `<a href="https://a.example/&#1;\`b">https://a.example/&#1;\`b</a> and ${CODE_HTML}`,
++            "[https://a.example/\u0001\\`b](https://a.example/%01`b) and `<img src=x onerror=alert(1)>`",
++            ['<a href="https://a.example/%01%60b">', "&lt;img src=x onerror=alert(1)&gt;"],
++            ["<img src"],
++        ],
++        [
++            "B32: a DEL character and a backtick in a link href",
++            `<a href="https://a.example/&#127;\`b">x</a> and ${CODE_HTML}`,
++            "[x](https://a.example/%7F`b) and `<img src=x onerror=alert(1)>`",
++            ['<a href="https://a.example/%7F%60b">x</a>', "&lt;img src=x onerror=alert(1)&gt;"],
++            ["<img src"],
++        ],
++        [
++            "a control character in an ordinary href is percent-encoded",
++            '<a href="https://a.example/p&#8;q&#31;r">t</a>',
++            "[t](https://a.example/p%08q%1Fr)",
++            ['<a href="https://a.example/p%08q%1Fr">t</a>'],
++        ],
++        [
++            "a valid mailto autolink stays an autolink",
++            '<a href="mailto:a@example.org">mailto:a@example.org</a>',
++            "<mailto:a@example.org>",
++            ['<a href="mailto:a@example.org">mailto:a@example.org</a>'],
++        ],
++        [
++            "a valid ftp autolink stays an autolink",
++            '<a href="ftp://f.example/a">ftp://f.example/a</a>',
++            "<ftp://f.example/a>",
++            ['<a href="ftp://f.example/a">ftp://f.example/a</a>'],
++        ],
++        [
++            "an https autolink with a backtick, no control character, stays an autolink",
++            '<a href="https://a.example/`b">https://a.example/`b</a>',
++            "<https://a.example/`b>",
++            ['<a href="https://a.example/%60b">https://a.example/`b</a>'],
++        ],
++    ];
++
++    it.each(CASES)("%s", (_name, input, expected, rendered, absent) => {
++        const md = eventToMarkdown(html(input));
++        expect(md).toBe(expected);
++        expectClean(md, rendered, absent);
++    });
++});
++
++describe("re-audit S2: a link destination survives a renderer's decoding", () => {
++    /** Every href in the CommonMark rendering of `md`. */
++    function hrefs(md: string): string[] {
++        return Array.from(renderMd(md).matchAll(/href="([^"]*)"/g), (m) => m[1]);
++    }
++
++    const CASES: Array<[name: string, input: string, expected: string, href: string]> = [
++        [
++            "B05: a literal &colon; entity in a relative href",
++            '<a href="javascript&amp;colon;alert(1)">click</a>',
++            "[click](javascript%26colon;alert%281%29)",
++            "javascript%26colon;alert%281%29",
++        ],
++        [
++            "B06: a literal &#58; entity",
++            '<a href="javascript&amp;#58;alert(1)">click</a>',
++            "[click](javascript%26#58;alert%281%29)",
++            "javascript%26#58;alert%281%29",
++        ],
++        [
++            "B07: a literal &#x3a; entity",
++            '<a href="javascript&amp;#x3a;alert(1)">click</a>',
++            "[click](javascript%26#x3a;alert%281%29)",
++            "javascript%26#x3a;alert%281%29",
++        ],
++        [
++            "B08: a backslash before the colon",
++            '<a href="javascript\\:alert(1)">click</a>',
++            "[click](javascript%5C:alert%281%29)",
++            "javascript%5C:alert%281%29",
++        ],
++        [
++            "N11: a backslash before an asterisk keeps its backslash",
++            '<a href="https://e.com/a\\*b">x</a>',
++            "[x](https://e.com/a%5C*b)",
++            "https://e.com/a%5C*b",
++        ],
++        [
++            "an ampersand that starts no entity is untouched",
++            '<a href="https://e.com/?a=1&amp;b=2&amp;c">x</a>',
++            "[x](https://e.com/?a=1&b=2&c)",
++            "https://e.com/?a=1&amp;b=2&amp;c",
++        ],
++        [
++            "a literal &amp; sequence in a href is protected, a trailing one too",
++            '<a href="https://e.com/?q=&amp;amp;&amp;lt;x;&amp;#35;">x</a>',
++            "[x](https://e.com/?q=%26amp;%26lt;x;%26#35;)",
++            "https://e.com/?q=%26amp;%26lt;x;%26#35;",
++        ],
++        [
++            "an entity-like run in a table cell",
++            '<table><tr><td><a href="javascript&amp;colon;x|y">c</a></td></tr></table>',
++            lines("| [c](javascript%26colon;x%7Cy) |", "| --- |"),
++            "javascript%26colon;x%7Cy",
++        ],
++    ];
++
++    it.each(CASES)("%s", (_name, input, expected, href) => {
++        const md = eventToMarkdown(html(input));
++        expect(md).toBe(expected);
++        expect(htmlNodes(md)).toEqual([]);
++        expect(hrefs(md)).toEqual([href]);
++        for (const h of hrefs(md)) expect(h).not.toMatch(/^\s*(javascript|vbscript|data):/i);
++    });
++});
++
++describe("re-audit 3 D2: a numeric reference without a semicolon in a destination is encoded", () => {
++    // Browsers decode `&#58` (no semicolon) in an attribute, and marked puts a destination in the attribute as it
++    // got it, so `javascript&#58alert(1)` is a `javascript:` URL there although CommonMark reads it as a relative one.
++    function hrefs(md: string): string[] {
++        return Array.from(renderMd(md).matchAll(/(?:href|src)="([^"]*)"/g), (m) => m[1]);
++    }
++
++    const CASES: Array<[name: string, input: string, expected: string, href: string]> = [
++        [
++            "X10 &#58 for the colon",
++            '<a href="javascript&amp;#58alert(1)">click</a>',
++            "[click](javascript%26#58alert%281%29)",
++            "javascript%26#58alert%281%29",
++        ],
++        [
++            "X11 &#106 for the j",
++            '<a href="&amp;#106avascript:alert(1)">click</a>',
++            "[click](%26#106avascript:alert%281%29)",
++            "%26#106avascript:alert%281%29",
++        ],
++        [
++            "X12 &#9 for a tab in the scheme",
++            '<a href="java&amp;#9script:alert(1)">click</a>',
++            "[click](java%26#9script:alert%281%29)",
++            "java%26#9script:alert%281%29",
++        ],
++        [
++            "X13 &#x3a for the colon",
++            '<a href="javascript&amp;#x3aalert(1)">click</a>',
++            "[click](javascript%26#x3aalert%281%29)",
++            "javascript%26#x3aalert%281%29",
++        ],
++        [
++            "X14 &#0000058 padded with zeros",
++            '<a href="javascript&amp;#0000058alert(1)">click</a>',
++            "[click](javascript%26#0000058alert%281%29)",
++            "javascript%26#0000058alert%281%29",
++        ],
++        [
++            "X15 &#10 for a line feed in the scheme",
++            '<a href="java&amp;#10script:alert(1)">click</a>',
++            "[click](java%26#10script:alert%281%29)",
++            "java%26#10script:alert%281%29",
++        ],
++        [
++            "X16 an image destination",
++            '<img src="mxc://a/b&amp;#34onerror" alt="x">',
++            "![x](mxc://a/b%26#34onerror)",
++            "mxc://a/b%26#34onerror",
++        ],
++        [
++            "a named reference with its semicolon is still encoded",
++            '<a href="javascript&amp;colon;alert(1)">click</a>',
++            "[click](javascript%26colon;alert%281%29)",
++            "javascript%26colon;alert%281%29",
++        ],
++        [
++            "an entity-like run in a table cell",
++            '<table><tr><td><a href="java&amp;#9script:x|y">c</a></td></tr></table>',
++            lines("| [c](java%26#9script:x%7Cy) |", "| --- |"),
++            "java%26#9script:x%7Cy",
++        ],
++        [
++            "an ampersand before a name with no semicolon, and one before an equals sign, stay",
++            '<a href="https://e.com/?a=1&amp;b=2&amp;colon&amp;c">x</a>',
++            "[x](https://e.com/?a=1&b=2&colon&c)",
++            "https://e.com/?a=1&amp;b=2&amp;colon&amp;c",
++        ],
++    ];
++
++    it.each(CASES)("%s", (_name, input, expected, href) => {
++        const md = eventToMarkdown(html(input));
++        expect(md).toBe(expected);
++        expect(htmlNodes(md)).toEqual([]);
++        expect(hrefs(md)).toEqual([href]);
++        for (const h of hrefs(md)) expect(h).not.toMatch(/^\s*(javascript|vbscript|data):|&#/i);
++    });
++});
++
++describe("re-audit S3: an image's alt text is one line", () => {
++    const CASES: Case[] = [
++        [
++            "B36: a newline then a heading marker in the alt",
++            '<p>x <img src="mxc://a/b" alt="a&#10;# h"> y</p>',
++            "x ![a # h](mxc://a/b) y",
++            ['<p>x <img src="mxc://a/b" alt="a # h" /> y</p>'],
++            ["<h1"],
++        ],
++        [
++            "B37: a blank line then a list marker in the alt",
++            '<p>x <img src="mxc://a/b" alt="a&#10;&#10;- li"> y</p>',
++            "x ![a - li](mxc://a/b) y",
++            ['<p>x <img src="mxc://a/b" alt="a - li" /> y</p>'],
++            ["<ul", "<li"],
++        ],
++        [
++            "tabs, carriage returns and no-break spaces collapse too",
++            '<img src="mxc://a/b" alt="a&#9;&#13;&#10; &#160;b">',
++            "![a b](mxc://a/b)",
++            ['<img src="mxc://a/b" alt="a b" />'],
++        ],
++        [
++            "an alt that starts a line with a setext underline",
++            '<p>t<br><img src="mxc://a/b" alt="x&#10;==="></p>',
++            lines("t\\", "![x ===](mxc://a/b)"),
++            [],
++            ["<h1"],
++        ],
++        [
++            "an alt in a table cell stays one line",
++            '<table><tr><td><img src="mxc://a/b" alt="a&#10;b"></td></tr></table>',
++            lines("| ![a b](mxc://a/b) |", "| --- |"),
++        ],
++    ];
++
++    it.each(CASES)("%s", (_name, input, expected, rendered, absent) => {
++        const md = eventToMarkdown(html(input));
++        expect(md).toBe(expected);
++        expectClean(md, rendered, absent);
++    });
++});
++
++describe("re-audit S1: maths is normalised the way TeX reads it, so Markdown cannot restructure it", () => {
++    const CODE_HTML = "<code>&lt;img src=x onerror=alert(1)&gt;</code>";
++    const CASES: Case[] = [
++        [
++            "A14: a line break in inline tex becomes a space, so no heading starts",
++            '<p>x <span data-mx-maths="a&#10;# h">m</span> y</p>',
++            "x $a # h$ y",
++            ["<p>x $a # h$ y</p>"],
++            ["<h1"],
++        ],
++        ["a CRLF in inline tex is one space", '<span data-mx-maths="a&#13;&#10;b">m</span>', "$a b$"],
++        ["a lone CR in inline tex is a space", '<span data-mx-maths="a&#13;b">m</span>', "$a b$"],
++        ["a blank line in inline tex is two spaces", '<span data-mx-maths="a&#10;&#10;b">m</span>', "$a  b$"],
++        [
++            "a TeX comment ends at its line when the lines are joined",
++            '<span data-mx-maths="a % note&#10;b">m</span>',
++            "$a  b$",
++        ],
++        ["an escaped percent is not a comment", '<span data-mx-maths="50\\% x&#10;y">m</span>', "$50\\% x y$"],
++        [
++            "a percent after an escaped backslash is a comment",
++            '<span data-mx-maths="a \\\\ % note&#10;b">m</span>',
++            "$a \\\\  b$",
++        ],
++        ["a comment on a single line is left alone", '<span data-mx-maths="a % c">m</span>', "$a % c$"],
++        [
++            "inline tex with a line break in a table cell",
++            '<table><tr><td><span data-mx-maths="a&#10;b">m</span></td></tr></table>',
++            lines("| $a b$ |", "| --- |"),
++        ],
++        [
++            "A09: blank lines in display tex are dropped, the script tag stays spaced",
++            '<div data-mx-maths="a&#10;&#10;&lt;script&gt;alert(1)&lt;/script&gt;">m</div>',
++            lines("$$", "    a", "    < script>alert(1)< /script>", "$$"),
++            [],
++            ["<script"],
++        ],
++        [
++            "A10: no blank line, so no link reference definition",
++            '<div data-mx-maths="a&#10;&#10;[x]: javascript:alert(1)&#10;&#10;[x]">m</div>',
++            lines("$$", "    a", "    [x]: javascript:alert(1)", "    [x]", "$$"),
++            ["<p>$$\na\n[x]: javascript:alert(1)\n[x]\n$$</p>"],
++            ["<a "],
++        ],
++        [
++            "runs of blank and whitespace-only lines collapse to one line break",
++            '<div data-mx-maths="a&#13;&#10;&#13;&#10; &#9;&#13;&#10;&#10;b">m</div>',
++            lines("$$", "    a", "    b", "$$"),
++        ],
++        [
++            "blank lines at the edges of display tex are dropped",
++            '<div data-mx-maths="&#10;&#10;a&#10;&#10;">m</div>',
++            lines("$$", "    a", "$$"),
++        ],
++        [
++            "A16: a fence line in display tex stays text, TeX ignores leading space",
++            `<div data-mx-maths="a&#10;\`\`\`">m</div><p>${CODE_HTML}</p>`,
++            lines("$$", "    a", "    ```", "$$", "", "`<img src=x onerror=alert(1)>`"),
++            ["<p><code>&lt;img src=x onerror=alert(1)&gt;</code></p>"],
++            ["<pre", "<img src"],
++        ],
++        [
++            "a tilde fence line in display tex stays text",
++            '<div data-mx-maths="a&#10;~~~&#10;b">m</div><p>after</p>',
++            lines("$$", "    a", "    ~~~", "    b", "$$", "", "after"),
++            ["<p>after</p>"],
++            ["<pre"],
++        ],
++        [
++            "a fence line with three spaces of indentation is indented by four more",
++            '<div data-mx-maths="a&#10;   ```js">m</div><p>after</p>',
++            lines("$$", "    a", "       ```js", "$$", "", "after"),
++            ["<p>after</p>"],
++            ["<pre"],
++        ],
++        [
++            "multi-line display tex without block syntax is only indented",
++            '<div data-mx-maths="\\begin{aligned}&#10;a &amp;= b \\\\&#10;c &amp;= d&#10;\\end{aligned}">m</div>',
++            lines("$$", "    \\begin{aligned}", "    a &= b \\\\", "    c &= d", "    \\end{aligned}", "$$"),
++        ],
++    ];
++
++    it.each(CASES)("%s", (_name, input, expected, rendered, absent) => {
++        const md = eventToMarkdown(html(input));
++        expect(md).toBe(expected);
++        expectClean(md, rendered, absent);
++    });
++});
++
++/** The re-audit's attack inputs: [name, formatted_body, whether the safety net has to fall back to escaped text]. */
++const ATTACKS: Array<[name: string, input: string, fallsBack: boolean]> = [
++    [
++        "A07 backtick in inline tex, then code with HTML",
++        '<span data-mx-maths="`">m</span> and <code>&lt;img src=x onerror=alert(1)&gt;</code>',
++        true,
++    ],
++    [
++        "A08 two backticks in inline tex, then code with HTML",
++        '<span data-mx-maths="x``">m</span> and <code>a``&lt;img src=x onerror=alert(1)&gt;</code>',
++        true,
++    ],
++    [
++        "A09 display tex, blank line, script",
++        '<div data-mx-maths="a&#10;&#10;&lt;script&gt;alert(1)&lt;/script&gt;">m</div>',
++        false,
++    ],
++    [
++        "A10 display tex, blank line, link reference definition",
++        '<div data-mx-maths="a&#10;&#10;[x]: javascript:alert(1)&#10;&#10;[x]">m</div>',
++        false,
++    ],
++    ["A11 inline tex with a javascript: link", '<span data-mx-maths="[x](javascript:alert(1))">m</span>', true],
++    ["A12 inline tex with a remote image", '<span data-mx-maths="![t](https://evil.example/t.png)">m</span>', true],
++    ["A13 inline tex ending in <a, then @domain>", '<span data-mx-maths="&lt;a">m</span>@example.com&gt;', false],
++    [
++        "A14 inline tex with a line break and a heading marker",
++        '<p>x <span data-mx-maths="a&#10;# h">m</span> y</p>',
++        false,
++    ],
++    ["A15 inline tex ending in <b", '<span data-mx-maths="a&lt;b">m</span>&gt;x', false],
++    [
++        "A16 display tex with a fence line, then code with HTML",
++        '<div data-mx-maths="a&#10;```">m</div><p><code>&lt;img src=x onerror=alert(1)&gt;</code></p>',
++        false,
++    ],
++    [
++        "A17 display tex with a backtick, then code with HTML",
++        '<div data-mx-maths="`">m</div><p>t <code>&lt;img src=x onerror=alert(1)&gt;</code></p>',
++        false,
++    ],
++    [
++        // The cell on its own is unsafe (re-audit 3 D1), so that cell, not the message, falls back to its text.
++        "A18 inline tex with a backtick in a table cell, then code with HTML",
++        '<table><tr><th>h</th></tr><tr><td><span data-mx-maths="|x|`">m</span> <code>&lt;img src=x onerror=alert(1)&gt;</code></td></tr></table>',
++        false,
++    ],
++    [
++        "A19 display tex with a quoted link reference definition",
++        '<div data-mx-maths="a&#10;&gt; [y]: javascript:alert(1)">m</div><p>see <a href="https://ok.example/">z</a></p>',
++        false,
++    ],
++    ["A20 display tex with an HTML block line", '<div data-mx-maths="a&#10;&lt;div&gt;x">m</div>', false],
++    ["A21 inline tex with a backslash before <b>", '<span data-mx-maths="\\\\&lt;b&gt;">m</span>', false],
++    ["A22 inline tex with CDATA", '<span data-mx-maths="&lt;![CDATA[x]]&gt;">m</span>', false],
++    [
++        "A23 backtick in inline tex, then code with a div",
++        '<span data-mx-maths="`">m</span> <code>&lt;div onclick=x&gt;</code>',
++        true,
++    ],
++    ["B05 href with a literal &colon;", '<a href="javascript&amp;colon;alert(1)">click</a>', false],
++    ["B06 href with a literal &#58;", '<a href="javascript&amp;#58;alert(1)">click</a>', false],
++    ["B07 href with a literal &#x3a;", '<a href="javascript&amp;#x3a;alert(1)">click</a>', false],
++    ["B08 href with a backslash before the colon", '<a href="javascript\\\\:alert(1)">click</a>', false],
++    [
++        "B30 control character and backtick in a href, then code with HTML",
++        '<a href="https://a.example/&#1;`b">x</a> and <code>&lt;img src=x onerror=alert(1)&gt;</code>',
++        false,
++    ],
++    [
++        "B31 control character and backtick in an autolink, then code with HTML",
++        '<a href="https://a.example/&#1;`b">https://a.example/&#1;`b</a> and <code>&lt;img src=x onerror=alert(1)&gt;</code>',
++        false,
++    ],
++    [
++        "B32 DEL character and backtick in a href, then code with HTML",
++        '<a href="https://a.example/&#127;`b">x</a> and <code>&lt;img src=x onerror=alert(1)&gt;</code>',
++        false,
++    ],
++    ["B36 image alt with a line break and a heading marker", '<p>x <img src="mxc://a/b" alt="a&#10;# h"> y</p>', false],
++    [
++        "B37 image alt with a blank line and a list marker",
++        '<p>x <img src="mxc://a/b" alt="a&#10;&#10;- li"> y</p>',
++        false,
++    ],
++    [
++        "H01 backtick in the code language, then HTML content",
++        '<pre><code class="language-a`b">&lt;img src=x onerror=alert(1)&gt;\n</code></pre>',
++        false,
++    ],
++    [
++        "H02 trailing backtick in the code language, div content",
++        '<pre><code class="language-x`">&lt;div onclick=x&gt;\nhi\n&lt;/div&gt;\n</code></pre>',
++        false,
++    ],
++    [
++        "H03 backtick in the code language, inside a list item",
++        '<ul><li>a<pre><code class="language-`">&lt;script&gt;alert(1)&lt;/script&gt;\n</code></pre></li></ul>',
++        false,
++    ],
++    ["H04 empty code span", "<p>a <code></code> b</p>", false],
++    [
++        "H05 backtick in an image alt, then code with HTML",
++        '<img src="mxc://a/b" alt="`"> <code>&lt;img src=x onerror=alert(1)&gt;</code>',
++        false,
++    ],
++];
++
++describe("AC3 safety net: isSafeMarkdown", () => {
++    const UNSAFE: Array<[name: string, md: string]> = [
++        ["inline HTML", "a <b>x</b> c"],
++        ["an HTML block", lines("<div>", "x", "</div>")],
++        ["an HTML comment", "a <!-- c --> b"],
++        ["a javascript: link", "[x](javascript:a)"],
++        ["a mixed-case javascript: link", "[x](JaVaScRiPt:a)"],
++        ["a javascript: link spelled with an entity", "[x](javascript&colon;a)"],
++        ["a javascript: link with a numeric entity in the scheme", "[x](java&#115;cript:a)"],
++        ["a vbscript: link", "[x](vbscript:a)"],
++        ["a data: link", "[x](data:text/html,a)"],
++        ["a protocol-relative link", "[x](//evil.example/a)"],
++        ["a javascript: link through a reference definition", lines("[x][y]", "", "[y]: javascript:a")],
++        ["a javascript: link inside emphasis, a list and a quote", "> - **[x](javascript:a)**"],
++        ["a remote image", "![x](https://evil.example/t.png)"],
++        ["a data: image", "![x](data:image/png;base64,AAAA)"],
++        ["a relative image", "![x](/rel.png)"],
++        ["an mxc image in upper case", "![x](MXC://a/b)"],
++    ];
++    const SAFE: Array<[name: string, md: string]> = [
++        ["nothing", ""],
++        ["plain text", "plain *text* and `code`"],
++        ["an mxc image", "![x](mxc://a/b)"],
++        ["a relative link", "[x](/rel)"],
++        ["a fragment link", "[x](#frag)"],
++        ["a relative path link", "[x](rel/path?q=1)"],
++        ["an autolink", "<https://a>"],
++        ["an https link", "[x](https://a)"],
++        ["a mailto: link", "[x](mailto:a@b.c)"],
++        ["a matrix: link", "[x](matrix:r/a:b)"],
++        ["a matrix.to link", "[x](https://matrix.to/#/@a:b.c)"],
++        ["a reference link to an https URL", lines("[x][y]", "", "[y]: https://a")],
++        ["HTML inside a code span", "`<img src=x>`"],
++        ["HTML inside a fenced block", lines("```", "<div>", "```")],
++        ["an escaped tag", "\\<b>x\\</b>"],
++        ["a destination that only looks like a scheme after decoding is encoded", "[x](javascript%26colon;a)"],
++        ["tex with a plain less-than", "$a<b$"],
++    ];
++
++    it.each(UNSAFE)("false for %s", (_name, md) => {
++        expect(isSafeMarkdown(md)).toBe(false);
++    });
++
++    it.each(SAFE)("true for %s", (_name, md) => {
++        expect(isSafeMarkdown(md)).toBe(true);
++    });
++});
++
++describe("AC3 safety net: the fallback to escaped text", () => {
++    /** [name, formatted_body, expected Markdown], all of which fall back. */
++    const CASES: Array<[name: string, input: string, expected: string]> = [
++        [
++            "R1: a backtick in the tex pairs with a later code span",
++            '<span data-mx-maths="`">m</span> and <code>&lt;img src=x onerror=alert(1)&gt;</code>',
++            "m and \\<img src=x onerror=alert(1)>",
++        ],
++        [
++            "A11: inline tex with a javascript: link, tex shown as the fallback text",
++            '<span data-mx-maths="[x](javascript:alert(1))"><code>[x](javascript:alert(1))</code></span>',
++            "\\[x\\](javascript:alert(1))",
++        ],
++        ["A11: the same, with a bare fallback text", '<span data-mx-maths="[x](javascript:alert(1))">m</span>', "m"],
++        [
++            "A12: inline tex with a remote image",
++            '<span data-mx-maths="![t](https://evil.example/t.png)"><code>![t](https://evil.example/t.png)</code></span>',
++            "!\\[t\\](<https://evil.example/t.png>)",
++        ],
++        [
++            "A12: the same, with a bare fallback text",
++            '<span data-mx-maths="![t](https://evil.example/t.png)">m</span>',
++            "m",
++        ],
++        [
++            "blocks and hard breaks stay lines and paragraphs",
++            '<h2>Title</h2><p>one<br>two</p><ul><li>a</li><li>b</li></ul><blockquote><p>q</p></blockquote><p><span data-mx-maths="`">m</span> <code>&lt;b&gt;</code>`</p>',
++            lines("Title", "", "one\\", "two", "", "a\\", "b", "", "q", "", "m \\<b>\\`"),
++        ],
++        [
++            "the reply fallback, scripts and images are not part of the text",
++            '<mx-reply><blockquote>old</blockquote></mx-reply>x<script>s()</script><img src="mxc://a/b" alt="alt">y<span data-mx-maths="`">m</span><code>&lt;i&gt;</code>`',
++            "xym\\<i>\\`",
++        ],
++        [
++            "markup that survived in the text is escaped, a URL stays a link",
++            '<p>see https://a.example/x_y <strong>*b*</strong> <span data-mx-maths="`">m</span><code>&lt;i&gt;</code>`</p>',
++            "see <https://a.example/x_y> \\*b\\* m\\<i>\\`",
++        ],
++        [
++            "a code block keeps its lines, its indentation becomes no-break spaces",
++            '<pre><code>a\n  b\n</code></pre><span data-mx-maths="`">m</span><code>&lt;i&gt;</code>`',
++            lines("a\\", "\u00a0\u00a0b", "", "m\\<i>\\`"),
++        ],
++    ];
++
++    it.each(CASES)("%s", (_name, input, expected) => {
++        const { md, fellBack } = convertEvent(html(input));
++        expect(fellBack).toBe(true);
++        expect(md).toBe(expected);
++        expect(isSafeMarkdown(md)).toBe(true);
++        expect(htmlNodes(md)).toEqual([]);
++        expect(publicEventToMarkdown(html(input))).toBe(md);
++    });
++
++    it("the guard is not vacuous: the unsafe Markdown is what the converter would have emitted", () => {
++        const md = "$`$ and `<img src=x onerror=alert(1)>`";
++        expect(isSafeMarkdown(md)).toBe(false);
++        expect(htmlNodes(md)).not.toEqual([]);
++    });
++
++    it.each(ATTACKS)("attack %s", (_name, input, fallsBack) => {
++        const { md, fellBack } = convertEvent(html(input));
++        expect(fellBack).toBe(fallsBack);
++        expect(isSafeMarkdown(md)).toBe(true);
++        expect(htmlNodes(md)).toEqual([]);
++        // Whatever the converter wrote, the escaped text of what Element displayed is safe too.
++        const text = displayedText(input);
++        const escaped = lastResortMarkdown(text);
++        expect(isSafeMarkdown(escaped)).toBe(true);
++        expect(htmlNodes(escaped)).toEqual([]);
++        expect(isSafeMarkdown(withSafetyNet("<b>x</b>", () => text).md)).toBe(true);
++    });
++
++    it("the net applies to a plain body's Markdown as well", () => {
++        const result = withSafetyNet("a <b>x</b> b", () => "a <b>x</b> b");
++        expect(result).toEqual({ md: "a \\<b>x\\</b> b", fellBack: true });
++        expect(withSafetyNet("a *x* b", () => "unused")).toEqual({ md: "a *x* b", fellBack: false });
++    });
++
++    it("a plain body that the plain path converts safely does not fall back", () => {
++        const ev = plain("a <b>x</b> [x](javascript:a) ![t](https://e.example/t.png) `c`");
++        const { md, fellBack } = convertEvent(ev);
++        expect(fellBack).toBe(false);
++        expect(md).toBe("a \\<b>x\\</b> \\[x\\](javascript:a) !\\[t\\](<https://e.example/t.png>) \\`c\\`");
++        expect(isSafeMarkdown(md)).toBe(true);
++    });
++});
++
++describe("AC3 safety net: displayedText", () => {
++    const CASES: Array<[name: string, input: string, expected: string]> = [
++        ["inline text collapses whitespace", "<p>a \n  b <em>c</em></p>", "a b c"],
++        ["a trailing br adds nothing", "a<br>", "a"],
++        ["br is a line break", "a<br>b", "a\nb"],
++        ["blocks are separated by a blank line", "<p>a</p><p>b</p>", "a\n\nb"],
++        ["nested blocks are separated by one blank line", "<blockquote><p>q</p></blockquote><p>r</p>", "q\n\nr"],
++        ["list items are lines", "<ul><li>a</li><li>b</li></ul>", "a\nb"],
++        [
++            "dropped elements and images add nothing",
++            'a<mx-reply>r</mx-reply><script>s</script><img src="mxc://a/b" alt="x">b',
++            "ab",
++        ],
++        ["pre keeps its whitespace", "<pre><code>a\n  b</code></pre>", "a\n  b"],
++        ["maths shows its fallback content", '<span data-mx-maths="x^2"><code>x^2</code></span>', "x^2"],
++        [
++            "table cells are separated by a space, rows are lines",
++            "<table><tr><td>a</td><td>b</td></tr><tr><td>c</td></tr></table>",
++            "a b\nc",
++        ],
++    ];
++
++    it.each(CASES)("%s", (_name, input, expected) => {
++        expect(displayedText(input)).toBe(expected);
++    });
++});
++
++describe("AC3 safety net: the last resort escapes every ASCII punctuation character", () => {
++    it("escapes markup, links, images, entities and block syntax", () => {
++        const text = lines(
++            "# h <b>x</b> [x](javascript:a) ![t](https://e.example/t.png) &colon; `c`",
++            "    indented",
++            "- l",
++            "1. o",
++            "===",
++        );
++        const md = lastResortMarkdown(text);
++        expect(md).toBe(
++            lines(
++                "\\# h \\<b\\>x\\<\\/b\\> \\[x\\]\\(javascript\\:a\\) \\!\\[t\\]\\(https\\:\\/\\/e\\.example\\/t\\.png\\) \\&colon\\; \\`c\\`\\",
++                "\u00a0\u00a0\u00a0\u00a0indented\\",
++                "\\- l\\",
++                "1\\. o\\",
++                "\\=\\=\\=",
++            ),
++        );
++        expect(isSafeMarkdown(md)).toBe(true);
++        expect(htmlNodes(md)).toEqual([]);
++    });
++
++    it("renders every pair of printable ASCII characters as itself", () => {
++        const chars = Array.from({ length: 95 }, (_, i) => String.fromCharCode(0x20 + i));
++        const esc = (s: string): string =>
++            s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
++        let checked = 0;
++        for (const a of chars) {
++            for (const b of chars) {
++                for (const text of [`${a}${b}`, `x${a}${b}x`]) {
++                    if (/^\s|\s$/.test(text)) continue;
++                    const md = lastResortMarkdown(text);
++                    expect(isSafeMarkdown(md)).toBe(true);
++                    expect(renderMd(md)).toBe(`<p>${esc(text)}</p>\n`);
++                    checked++;
++                }
++            }
++        }
++        expect(checked).toBeGreaterThan(9000);
++    });
++
++    it("is safe on a message of nothing but attack text", () => {
++        const text =
++            "<script>alert(1)</script>\n![t](https://evil.example/t.png)\n[x]: javascript:a\n[x]\n```\n<div>\n~~~";
++        const md = lastResortMarkdown(text);
++        expect(isSafeMarkdown(md)).toBe(true);
++        expect(htmlNodes(md)).toEqual([]);
++        expect(renderMd(md)).toContain("&lt;script&gt;alert(1)&lt;/script&gt;<br />\n!");
++    });
++});
++
++describe("AC3: code spans never touch each other, an empty one is dropped", () => {
++    const CASES: Case[] = [
++        ["adjacent code spans merge into one", "<code>a</code><code>b</code>", "`ab`", ["<code>ab</code>"]],
++        [
++            "adjacent code spans with a backtick merge into one span",
++            "<code>a`b</code><code>c</code>",
++            "``a`bc``",
++            ["<code>a`bc</code>"],
++        ],
++        [
++            "three adjacent code spans merge into one",
++            "<code>a</code><code>b</code><code>c</code>",
++            "`abc`",
++            ["<code>abc</code>"],
++        ],
++        [
++            "a code span between spaces is not merged",
++            "<code>a</code> <code>b</code>",
++            "`a` `b`",
++            ["<code>a</code> <code>b</code>"],
++        ],
++        [
++            "code spans made adjacent when the emphasis between them cannot flank",
++            "a<strong><code>x</code></strong><code>y</code>b",
++            "a`xy`b",
++            ["a<code>xy</code>b"],
++            ["<strong>"],
++        ],
++        [
++            "adjacent code spans whose backticks used to expose an HTML comment",
++            "<code>)$`}, &lt;!-- c --&gt;</code><code>01&gt;</code>`",
++            "``)$`}, <!-- c -->01>``\\`",
++            ["<code>)$`}, &lt;!-- c --&gt;01&gt;</code>"],
++            ["<!-- c -->"],
++        ],
++        [
++            "adjacent code spans in a table cell",
++            "<table><tr><td><em><code>x</code><code>y|z` [a](javascript:b)</code></em></td></tr></table>",
++            lines("| *``xy\\|z` [a](javascript:b)``* |", "| --- |"),
++            [],
++            ["<a "],
++        ],
++        ["an empty code span is dropped", "<p>a<code></code>b</p>", "ab", [], ["<code>"]],
++        [
++            "a code span of only private-use markers is dropped",
++            "<p>a<code>\uE000\uE007</code>b</p>",
++            "ab",
++            [],
++            ["<code>"],
++        ],
++        [
++            "an empty code span cannot pair with the fence of a later one",
++            "<p><code></code> and <code>a`&lt;img src=x onerror=alert(1)&gt;</code></p>",
++            "and ``a`<img src=x onerror=alert(1)>``",
++            ["<code>a`&lt;img src=x onerror=alert(1)&gt;</code>"],
++            ["<img src"],
++        ],
++        ["a code span of one space is kept", "<code> </code>", "` `", ["<code> </code>"]],
++    ];
++
++    it.each(CASES)("%s", (_name, input, expected, rendered, absent) => {
++        const md = eventToMarkdown(html(input));
++        expect(md).toBe(expected);
++        expectClean(md, rendered, absent);
++    });
++});
++
++describe("re-audit 3 D4: a scheme that only case-folds to http(s) is not a URL, and nothing throws", () => {
++    // U+017F (long s) case-folds to "s": a case-insensitive Unicode match took it for the "s" of "https", and the
++    // scheme length lookup that followed returned null.
++    const FORMATTED: Case[] = [
++        [
++            "X72 a long-s scheme with a link-label trick",
++            "<p>see http\u017f://a.example/[x``](javascript:alert(1))``</p>",
++            "see http\u017f://a.example/\\[x\\`\\`\\](javascript:alert(1))\\`\\`",
++        ],
++        [
++            "X73 an upper-case long-s scheme, a backtick, then code",
++            "<p>HTTP\u017f://a.example/` <code>&lt;img src=x onerror=alert(1)&gt;</code></p>",
++            "HTTP\u017f://a.example/\\` `<img src=x onerror=alert(1)>`",
++            ["<code>&lt;img src=x onerror=alert(1)&gt;</code>"],
++            ["<img src"],
++        ],
++        [
++            "a long-s scheme beside a real URL: only the real one is an autolink",
++            "<p>http\u017f://a.example/x https://b.example/y</p>",
++            "http\u017f://a.example/x <https://b.example/y>",
++            ['<a href="https://b.example/y">'],
++            ['<a href="http\u017f'],
++        ],
++        [
++            "a long-s scheme in a table cell",
++            "<table><tr><td>http\u017f://a.example/x_y</td></tr></table>",
++            lines("| http\u017f://a.example/x_y |", "| --- |"),
++        ],
++        ["an upper-case HTTPS URL is still an autolink", "<p>HTTPS://A.example/x</p>", "<HTTPS://A.example/x>"],
++    ];
++
++    it.each(FORMATTED)("formatted: %s", (_name, input, expected, rendered, absent) => {
++        const md = eventToMarkdown(html(input));
++        expect(md).toBe(expected);
++        expectClean(md, rendered, absent);
++    });
++
++    const PLAIN: Array<[name: string, body: string, expected: string, links: number]> = [
++        [
++            "X70 a long-s scheme with a link-label trick",
++            "http\u017f://a.example/[x``](javascript:alert(1))``",
++            "http\u017f://a.example/\\[x\\`\\`\\](javascript:alert(1))\\`\\`",
++            0,
++        ],
++        [
++            "X71 a long-s scheme with emphasis",
++            "http\u017f://a.example/*b*_c_",
++            "http\u017f://a.example/\\*b\\*\\_c\\_",
++            0,
++        ],
++        ["X74 a long-s scheme with a code span", "http\u017f://a.example/`x` y", "http\u017f://a.example/\\`x\\` y", 0],
++        [
++            "a real URL after a long-s one",
++            "http\u017f://a.example/x https://b.example/y",
++            "http\u017f://a.example/x <https://b.example/y>",
++            1,
++        ],
++    ];
++
++    it.each(PLAIN)("plain: %s", (_name, body, expected, links) => {
++        const md = eventToMarkdown(plain(body));
++        expect(md).toBe(expected);
++        expectClean(md);
++        expect(renderMd(md).split("<a href").length - 1).toBe(links);
++    });
++
++    it("canCopyMarkdown is true for these messages and does not throw", () => {
++        expect(canCopyMarkdown(plain("http\u017f://a.example/`x` y"))).toBe(true);
++        expect(canCopyMarkdown(html("<p>HTTP\u017f://a.example/x</p>"))).toBe(true);
++    });
++});
++
++describe("re-audit 3 D4: canCopyMarkdown and eventToMarkdown never throw", () => {
++    it("canCopyMarkdown is false when something inside throws", () => {
++        const ev = html("<b>x</b>");
++        vi.spyOn(ev, "getContent").mockImplementation(() => {
++            throw new Error("boom");
++        });
++        expect(canCopyMarkdown(ev)).toBe(false);
++    });
++
++    it("eventToMarkdown copies the escaped displayed text when the conversion throws (formatted)", () => {
++        const spy = vi.spyOn(DOMParser.prototype, "parseFromString").mockImplementationOnce(() => {
++            throw new Error("boom");
++        });
++        try {
++            const md = publicEventToMarkdown(html("<p>a *b* <b>c</b></p>"));
++            expect(md).toBe("a \\*b\\* c");
++            expect(isSafeMarkdown(md)).toBe(true);
++            expect(htmlNodes(md)).toEqual([]);
++        } finally {
++            spy.mockRestore();
++        }
++    });
++
++    it("eventToMarkdown copies the escaped body when the conversion throws (plain)", () => {
++        const ev = plain("a *b* <i>c</i>");
++        vi.spyOn(ev, "getContent").mockImplementationOnce(() => {
++            throw new Error("boom");
++        });
++        const md = publicEventToMarkdown(ev);
++        expect(md).toBe("a \\*b\\* \\<i\\>c\\<\\/i\\>");
++        expect(htmlNodes(md)).toEqual([]);
++    });
++
++    it("eventToMarkdown returns an empty string when even the fallback throws", () => {
++        const ev = plain("x");
++        vi.spyOn(ev, "getContent").mockImplementation(() => {
++            throw new Error("boom");
++        });
++        expect(publicEventToMarkdown(ev)).toBe("");
++    });
++});
++
++describe("re-audit 3 D1: a GFM table cannot split what CommonMark reads as one piece", () => {
++    const CODE_HTML = "<code>&lt;img src=x onerror=alert(1)&gt;</code>";
++    const BAD = ["<img", "<a "];
++
++    describe("every pipe in text is escaped, so no line holds a table delimiter row", () => {
++        const CASES: Case[] = [
++            ["a pipe in a paragraph", "<p>a|b</p>", "a\\|b", ["<p>a|b</p>"]],
++            ["pipes in a heading", "<h2>a|b|c</h2>", "## a\\|b\\|c"],
++            [
++                "pipes in emphasis and link text",
++                '<strong>a|b</strong> <a href="https://e.example/">c|d</a>',
++                "**a\\|b** [c\\|d](https://e.example/)",
++            ],
++            ["a pipe in an image alt", '<img src="mxc://example.org/a" alt="a|b">', "![a\\|b](mxc://example.org/a)"],
++            ["a pipe next to a backslash", "<p>a\\|b</p>", "a\\\\\\|b"],
++            [
++                "a pipe in a list item and a quote",
++                "<ul><li>a|b</li></ul><blockquote>c|d</blockquote>",
++                lines("- a\\|b", "", "> c\\|d"),
++            ],
++            [
++                "X40 a text line with pipes, a code span with pipes, a delimiter row",
++                `<p>a | <code>|&lt;img src=x onerror=alert(1)&gt;|</code><br>-|-|-|-</p>`,
++                lines("a \\| `|<img src=x onerror=alert(1)>|`\\", "-\\|-\\|-\\|-"),
++                ["<code>|&lt;img src=x onerror=alert(1)&gt;|</code>"],
++                BAD,
++            ],
++            [
++                "X45 the same in a list item",
++                `<ul><li>a | <code>|&lt;img src=x onerror=alert(1)&gt;|</code><br>-|-|-|-</li></ul>`,
++                lines("- a \\| `|<img src=x onerror=alert(1)>|`\\", "  -\\|-\\|-\\|-"),
++                [],
++                BAD,
++            ],
++            [
++                "X46 the same in a quote",
++                `<blockquote>a | <code>|&lt;img src=x onerror=alert(1)&gt;|</code><br>-|-|-|-</blockquote>`,
++                lines("> a \\| `|<img src=x onerror=alert(1)>|`\\", "> -\\|-\\|-\\|-"),
++                [],
++                BAD,
++            ],
++            [
++                "X47 a delimiter row with colons",
++                `<p>a | <code>|&lt;img src=x onerror=alert(1)&gt;|</code><br>:-|:-:|-:|-</p>`,
++                lines("a \\| `|<img src=x onerror=alert(1)>|`\\", ":-\\|:-:\\|-:\\|-"),
++                [],
++                BAD,
++            ],
++            [
++                "X42 a text line with an autolink that holds pipes",
++                "<p>h|https://a.example/|[x](javascript:alert(1))<br>-|-|-</p>",
++                lines("h\\|<https://a.example/%7C[x](javascript:alert(1))>\\", "-\\|-\\|-"),
++                [
++                    '<a href="https://a.example/%7C%5Bx%5D(javascript:alert(1))">https://a.example/%7C[x](javascript:alert(1))</a>',
++                ],
++                ['<a href="javascript'],
++            ],
++        ];
++
++        it.each(CASES)("%s", (_name, input, expected, rendered, absent) => {
++            const md = eventToMarkdown(html(input));
++            expect(md).toBe(expected);
++            expectClean(md, rendered, absent);
++        });
++
++        const PLAIN: Array<[name: string, body: string, expected: string]> = [
++            ["a pipe", "a|b", "a\\|b"],
++            [
++                "X49 an autolink with pipes, a delimiter row",
++                "h|https://a.example/|[x](javascript:alert(1))\n-|-|-",
++                lines("h\\|<https://a.example/%7C[x](javascript:alert(1))>\\", "-\\|-\\|-"),
++            ],
++            [
++                "X50 an autolink with a pair of backticks and pipes",
++                "h|https://a.example/`|[x](javascript:alert(1))|`\n-|-|-|-",
++                lines("h\\|<https://a.example/`%7C[x](javascript:alert(1))%7C`>\\", "-\\|-\\|-\\|-"),
++            ],
++            ["a pipe between a URL and text", "https://a.example/x | y", "<https://a.example/x> \\| y"],
++        ];
++
++        it.each(PLAIN)("plain body: %s", (_name, body, expected) => {
++            const md = eventToMarkdown(plain(body));
++            expect(md).toBe(expected);
++            expectClean(md, [], ['<a href="javascript']);
++        });
++
++        it("the fallback and the last resort escape pipes too", () => {
++            const { md, fellBack } = convertEvent(
++                html('<p>h|<span data-mx-maths="|[x](javascript:alert(1))|">m</span><br>-|-|-|-</p>'),
++            );
++            expect(fellBack).toBe(true);
++            expect(md).toBe(lines("h\\|m\\", "-\\|-\\|-\\|-"));
++            expect(isSafeMarkdown(md)).toBe(true);
++            expect(lastResortMarkdown("a|b\n-|-")).toBe(lines("a\\|b\\", "\\-\\|\\-"));
++        });
++    });
++
++    describe("a line that could be the delimiter row of a one-column table is escaped", () => {
++        // `x` + `:-:` is a table with one column in marked and, when the line before holds a pipe, in markdown-it.
++        // A table starts at the header line, which cuts the paragraph above it: a backtick before the cut would
++        // no longer pair with one after it, so the tex it hid becomes live.
++        const inlineMaths = (tex: string): string => `<span data-mx-maths="${tex.replace(/"/g, "&quot;")}">m</span>`;
++        const CASES: Case[] = [
++            ["a colon-dash-colon line", "<p>x<br>:-:</p>", lines("x\\", "\\:-:")],
++            ["a dash-colon line", "<p>x<br>-:</p>", lines("x\\", "\\-:")],
++            ["a colon-dash line", "<p>x<br>:--</p>", lines("x\\", "\\:--")],
++            [
++                "a delimiter-like line in the middle is escaped too",
++                "<p>x<br>:-:<br>y</p>",
++                lines("x\\", "\\:-:\\", "y"),
++            ],
++            ["a line that is only dashes is still escaped", "<p>x<br>---</p>", lines("x\\", "\\---")],
++            ["a colon and text is not a delimiter row", "<p>x<br>:-: y</p>", lines("x\\", ":-: y")],
++            [
++                "Y01 backticks of tex around remote-image tex, a header with a pipe, a delimiter row",
++                `<p>${inlineMaths("`")}<br>${inlineMaths("![t](https://evil.example/t.png)")}<br>${inlineMaths("`")} a | b<br>:-:</p>`,
++                lines("$`$\\", "$![t](https://evil.example/t.png)$\\", "$`$ a \\| b\\", "\\:-:"),
++            ],
++            [
++                "Y02 the same with a header without a pipe, in a list item",
++                `<ul><li>${inlineMaths("`")}<br>${inlineMaths("![t](https://evil.example/t.png)")}<br>${inlineMaths("`")} a<br>-:</li></ul>`,
++                lines("- $`$\\", "  $![t](https://evil.example/t.png)$\\", "  $`$ a\\", "  \\-:"),
++            ],
++        ];
++
++        it.each(CASES)("%s", (_name, input, expected, rendered, absent) => {
++            const md = eventToMarkdown(html(input));
++            expect(md).toBe(expected);
++            expectClean(md, rendered, absent);
++        });
++
++        it("plain body", () => {
++            expect(eventToMarkdown(plain("a | b\n:-:"))).toBe(lines("a \\| b\\", "\\:-:"));
++        });
++    });
++
++    describe("every pipe in a link destination is encoded", () => {
++        const CASES: Case[] = [
++            [
++                "X41 a link destination holding pipes and a link",
++                '<p>a | <a href="https://ok.example/|[x](javascript:alert(1))|">l</a><br>-|-|-|-</p>',
++                lines("a \\| [l](https://ok.example/%7C[x]%28javascript:alert%281%29%29%7C)\\", "-\\|-\\|-\\|-"),
++            ],
++            [
++                "an autolink made from a link",
++                '<a href="https://a.example/|b">https://a.example/|b</a>',
++                "<https://a.example/%7Cb>",
++            ],
++            [
++                "an image destination",
++                '<img src="mxc://example.org/a|b|c" alt="x">',
++                "![x](mxc://example.org/a%7Cb%7Cc)",
++            ],
++            ["a mailto link", '<a href="mailto:a|b@example.org">m</a>', "[m](mailto:a%7Cb@example.org)"],
++        ];
++
++        it.each(CASES)("%s", (_name, input, expected, rendered, absent) => {
++            const md = eventToMarkdown(html(input));
++            expect(md).toBe(expected);
++            expectClean(md, rendered, absent);
++        });
++    });
++
++    describe("display maths: every tex line is indented by four spaces, so no block starts inside it", () => {
++        const CASES: Case[] = [
++            [
++                "X60 a code span with pipes and a delimiter row inside display tex",
++                '<div data-mx-maths="`a|[x](javascript:alert(1))|`&#10;-|-|-">m</div>',
++                lines("$$", "    `a|[x](javascript:alert(1))|`", "    -|-|-", "$$"),
++                ["<p>$$\n<code>a|[x](javascript:alert(1))|</code>\n-|-|-\n$$</p>"],
++            ],
++            [
++                "X48 display tex that is a delimiter row after a text line",
++                `<p>a | <code>|&lt;img src=x onerror=alert(1)&gt;|</code></p><div data-mx-maths="-|-|-|-">m</div>`,
++                lines("a \\| `|<img src=x onerror=alert(1)>|`", "", "$$", "    -|-|-|-", "$$"),
++                [],
++                BAD,
++            ],
++            [
++                "tex lines that look like a heading, a quote, a list, a thematic break and a table",
++                '<div data-mx-maths="# h&#10;&gt; q&#10;- l&#10;1. o&#10;***&#10;| a |&#10;| - |">m</div>',
++                lines("$$", "    # h", "    > q", "    - l", "    1. o", "    ***", "    | a |", "    | - |", "$$"),
++                ["<p>$$\n# h\n&gt; q\n- l\n1. o\n***\n| a |\n| - |\n$$</p>"],
++                ["<h1", "<blockquote", "<ul", "<ol", "<hr", "<pre"],
++            ],
++            [
++                "tex that was already indented",
++                '<div data-mx-maths="a&#10;    b&#10;&#9;c">m</div>',
++                lines("$$", "    a", "        b", "    \tc", "$$"),
++            ],
++            [
++                "display tex in a list item and a quote",
++                '<ul><li><div data-mx-maths="a&#10;-|-">m</div></li></ul><blockquote><div data-mx-maths="a&#10;-|-">m</div></blockquote>',
++                lines("- $$", "      a", "      -|-", "  $$", "", "> $$", ">     a", ">     -|-", "> $$"),
++            ],
++            [
++                "display tex in a table cell is one line and needs no indent",
++                '<table><tr><td><div data-mx-maths="a&#10;-|-">m</div></td></tr></table>',
++                lines("| $$ a -\\|- $$ |", "| --- |"),
++            ],
++        ];
++
++        it.each(CASES)("%s", (_name, input, expected, rendered, absent) => {
++            const md = eventToMarkdown(html(input));
++            expect(md).toBe(expected);
++            expectClean(md, rendered, absent);
++        });
++    });
++
++    describe("a table cell the net finds unsafe on its own is replaced by its escaped text", () => {
++        const TEX_BACKTICK = '<span data-mx-maths="`">m</span>';
++        const CASES: Case[] = [
++            [
++                "X30 the tex backticks pair across two cells, the second cell is unsafe alone",
++                `<table><tr><th>h</th><th>i</th></tr><tr><td>${TEX_BACKTICK}</td><td>${TEX_BACKTICK} ${CODE_HTML}</td></tr></table>`,
++                lines("| h | i |", "| --- | --- |", "| $`$ | m \\<img src=x onerror=alert(1)> |"),
++                [],
++                BAD,
++            ],
++            [
++                "X31 the same in the header row",
++                `<table><tr><th>${TEX_BACKTICK}</th><th>${TEX_BACKTICK} ${CODE_HTML}</th></tr><tr><td>a</td><td>b</td></tr></table>`,
++                lines("| $`$ | m \\<img src=x onerror=alert(1)> |", "| --- | --- |", "| a | b |"),
++                [],
++                BAD,
++            ],
++            [
++                "X32 a tex link hidden by the backticks of the cells around it",
++                `<table><tr><th>h</th><th>i</th><th>j</th></tr><tr><td>${TEX_BACKTICK}</td><td><span data-mx-maths="[x](javascript:alert(1))">m</span></td><td>${TEX_BACKTICK}</td></tr></table>`,
++                lines("| h | i | j |", "| --- | --- | --- |", "| $`$ | m | $`$ |"),
++                [],
++                ["<a "],
++            ],
++            [
++                "A18 a cell with a backtick in its tex and a code span",
++                `<table><tr><th>h</th></tr><tr><td><span data-mx-maths="|x|\`">m</span> ${CODE_HTML}</td></tr></table>`,
++                lines("| h |", "| --- |", "| m \\<img src=x onerror=alert(1)> |"),
++                [],
++                BAD,
++            ],
++            [
++                "the escaped text of a cell has no formatting and its pipes are escaped",
++                `<table><tr><td><strong>a|b</strong> ${TEX_BACKTICK} <code>c|d</code> <a href="https://e.example/">l</a> ${CODE_HTML}</td></tr></table>`,
++                lines("| a\\|b m c\\|d l \\<img src=x onerror=alert(1)> |", "| --- |"),
++            ],
++            [
++                "a safe cell next to an unsafe one is untouched",
++                `<table><tr><td><strong>x</strong> <code>c|d</code></td><td>${TEX_BACKTICK} ${CODE_HTML}</td></tr></table>`,
++                lines("| **x** `c\\|d` | m \\<img src=x onerror=alert(1)> |", "| --- | --- |"),
++            ],
++        ];
++
++        it.each(CASES)("%s", (_name, input, expected, rendered, absent) => {
++            const md = eventToMarkdown(html(input));
++            expect(md).toBe(expected);
++            expectClean(md, rendered, absent);
++        });
++    });
++});
++
++describe("AC3 property test: seeded random messages never yield unsafe Markdown", () => {
++    const SEED = 20261003;
++    const HTML_MESSAGES = 1000;
++    const PLAIN_BODIES = 200;
++
++    /** mulberry32, a small deterministic PRNG: the same messages are generated on every run. */
++    function prng(seed: number): () => number {
++        let a = seed >>> 0;
++        return () => {
++            a = (a + 0x6d2b79f5) >>> 0;
++            let t = a;
++            t = Math.imul(t ^ (t >>> 15), t | 1);
++            t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
++            return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
++        };
++    }
++
++    const PUNCTUATION = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
++    const LETTERS = "abcdefXYZ0189";
++    const CJK = ["中", "文", "字", "「", "」", "。", "、"];
++    const EMOJI = ["😀", "🎉", "👍🏽"];
++    /** Markup that a converter must neutralise, spliced into text, code, tex, alt text and hrefs now and then. */
++    const HOSTILE = [
++        "<img src=x onerror=alert(1)>",
++        "<b>",
++        "</b>",
++        "<!-- c -->",
++        "<script>",
++        "<https://a.example/x>",
++        "<a$@b.example>",
++        "[x](javascript:a)",
++        "![t](https://e.example/t.png)",
++        "[x]: javascript:a",
++        "```",
++        "~~~",
++        "``",
++        "&colon;",
++        "&#58;",
++        "\\",
++        "$$",
++        "\n# h\n",
++        // GFM tables (re-audit 3 D1): pipes, delimiter rows, code and links that hold pipes
++        "|",
++        "a|b|c",
++        "-|-|-",
++        ":-:",
++        "`|<img src=x onerror=alert(1)>|`",
++        "https://a.example/|[x](javascript:alert(1))|",
++        // a scheme that only case-folds to http(s) (re-audit 3 D4)
++        "http\u017f://a.example/`x`",
++        "HTTP\u017f://a.example/[x](javascript:a)",
++    ];
++    /** Tex as people write it, pipes and delimiter rows included: it never makes the net fall back. */
++    const BENIGN_TEX = [
++        "x^2",
++        "\\frac{a}{b}",
++        "a_1 + b_1",
++        "|x|",
++        "a|b|c",
++        "-|-|-",
++        ":-:",
++        "a<b",
++        "\\alpha \\beta",
++        "\\begin{aligned}\na &= b \\\\\nc &= d\n\\end{aligned}",
++        "f(x) = |x| - 1\n| a |\n|---|",
++    ];
++    const escapeText = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
++    const escapeAttr = (s: string): string => escapeText(s).replace(/"/g, "&quot;");
++
++    /** Builds random messages from the allowed tags, with text of letters, CJK, emoji, all ASCII punctuation and backticks. */
++    function generator(seed: number): { html: () => string; plain: () => string } {
++        const rnd = prng(seed);
++        const int = (n: number): number => Math.floor(rnd() * n);
++        const chance = (p: number): boolean => rnd() < p;
++        const pick = <T>(items: readonly T[]): T => items[int(items.length)];
++
++        const char = (): string => {
++            const r = rnd();
++            if (r < 0.3) return LETTERS[int(LETTERS.length)];
++            if (r < 0.4) return " ";
++            if (r < 0.5) return "`";
++            if (r < 0.8) return PUNCTUATION[int(PUNCTUATION.length)];
++            if (r < 0.9) return pick(CJK);
++            return pick(EMOJI);
++        };
++        const text = (max = 8): string => {
++            const chars = Array.from({ length: int(max + 1) }, char);
++            if (chance(0.15)) chars.splice(int(chars.length + 1), 0, pick(HOSTILE));
++            return chars.join("");
++        };
++        /** Text for code and maths, which may span lines. */
++        const multiline = (): string => (chance(0.25) ? `${text(5)}\n${chance(0.3) ? "\n" : ""}${text(5)}` : text());
++
++        const href = (): string => {
++            const r = rnd();
++            if (r < 0.1)
++                return pick([
++                    "https://a.example/x",
++                    "mailto:a@b.example",
++                    "matrix:r/a:b.example",
++                    "/rel",
++                    "#frag",
++                    "rel/p",
++                ]);
++            if (r < 0.3) return `https://a.example/${text(6)}`;
++            if (r < 0.4) return `https://a.example/${String.fromCharCode(int(0x21))}${text(3)}`;
++            if (r < 0.5) return `${pick(["http", "ftp", "https"])}://${text(8)}`;
++            return pick([
++                "javascript:alert(1)",
++                "JaVaScRiPt:x",
++                "//evil.example/x",
++                "data:text/html,x",
++                "javascript&colon;x",
++                "javascript&#58;x",
++                "javascript&#58x",
++                "java&#9script:x",
++                "&#106avascript:x",
++                "java&#10script:x",
++                "https://a.example/?a=1|2",
++                "https://a.example/|[x](javascript:alert(1))|",
++                "java\tscript:x",
++                "vbscript:x",
++                "javascript\\:x",
++                `${text(4)}:${text(4)}`,
++            ]);
++        };
++        const imageSrc = (): string =>
++            pick([
++                "mxc://a/b",
++                `mxc://example.org/${text(5)}`,
++                "https://evil.example/t.png",
++                "data:image/png;base64,AA",
++                "https://hs.example/_matrix/media/r0/download/example.org/abc",
++                `https://hs.example/_matrix/media/r0/thumbnail/${text(4)}/x`,
++            ]);
++
++        const maths = (display: boolean): string => {
++            const tex = chance(0.5) ? pick(BENIGN_TEX) : multiline();
++            return display
++                ? `<div data-mx-maths="${escapeAttr(tex)}"><code>${escapeText(tex)}</code></div>`
++                : `<span data-mx-maths="${escapeAttr(tex)}"><code>${escapeText(tex)}</code></span>`;
++        };
++
++        /** One of the re-audit's attack messages, dropped into a random place. One with maths may fall back. */
++        const attack = (): string => {
++            const [, input] = pick(ATTACKS);
++            return input;
++        };
++
++        /** A line break and a line that GFM may read as a table delimiter row, after a line that holds a pipe. */
++        const delimiterLine = (): string =>
++            `${escapeText(text(4))} | ${escapeText(text(4))}<br>${pick(["-|-|-", ":-:", "-:", ":-|-:", "|-|", "---|---", "|:-:|", ":--", "-"])}`;
++
++        const inline = (depth: number): string => {
++            const r = rnd();
++            if (chance(0.03)) return attack();
++            if (chance(0.04)) return delimiterLine();
++            if (depth <= 0 || r < 0.3) return escapeText(text());
++            if (r < 0.38) return "<br>";
++            if (r < 0.62) {
++                const tag = pick(["strong", "em", "del", "b", "i", "s"]);
++                return `<${tag}>${inlines(depth - 1)}</${tag}>`;
++            }
++            if (r < 0.7) return `<code>${escapeText(multiline())}</code>`;
++            if (r < 0.8) {
++                const target = href();
++                return `<a href="${escapeAttr(target)}">${chance(0.3) ? escapeText(target) : inlines(depth - 1)}</a>`;
++            }
++            if (r < 0.88) return `<img src="${escapeAttr(imageSrc())}" alt="${escapeAttr(multiline())}">`;
++            return maths(false);
++        };
++        /** Several code spans in a row: their backticks meet. */
++        const codeRun = (): string =>
++            Array.from({ length: 2 + int(2) }, () => `<code>${escapeText(multiline())}</code>`).join("");
++        const inlines = (depth: number): string =>
++            chance(0.08) ? codeRun() : Array.from({ length: 1 + int(3) }, () => inline(depth)).join("");
++
++        const blocks = (depth: number): string =>
++            Array.from({ length: 1 + int(3) }, () => block(depth)).join(chance(0.5) ? "\n" : "");
++        const block = (depth: number): string => {
++            const r = rnd();
++            if (chance(0.04)) return attack();
++            if (depth <= 0 || r < 0.3) return `<p>${inlines(2)}</p>`;
++            if (r < 0.37) {
++                const level = 1 + int(6);
++                return `<h${level}>${inlines(2)}</h${level}>`;
++            }
++            if (r < 0.45) return `<blockquote>${blocks(depth - 1)}</blockquote>`;
++            if (r < 0.57) {
++                const tag = pick(["ul", "ol"]);
++                const items = Array.from(
++                    { length: 1 + int(3) },
++                    () => `<li>${chance(0.5) ? inlines(2) : blocks(depth - 1)}</li>`,
++                );
++                return `<${tag}>${items.join("")}</${tag}>`;
++            }
++            if (r < 0.67) {
++                const language = pick([
++                    "",
++                    ' class="language-rust"',
++                    ' class="language-c++"',
++                    ' class="language-a`b"',
++                    ` class="language-${escapeAttr(text(3))}"`,
++                ]);
++                return `<pre><code${language}>${escapeText(multiline())}</code></pre>`;
++            }
++            if (r < 0.77) {
++                const rows = Array.from(
++                    { length: 1 + int(3) },
++                    () =>
++                        "<tr>" +
++                        Array.from({ length: 1 + int(3) }, () => {
++                            const cell = pick(["td", "th"]);
++                            return `<${cell}>${inlines(2)}</${cell}>`;
++                        }).join("") +
++                        "</tr>",
++                );
++                return `<table>${rows.join("")}</table>`;
++            }
++            if (r < 0.84) return maths(true);
++            if (r < 0.88) return "<hr>";
++            return `<div>${blocks(depth - 1)}</div>`;
++        };
++
++        const plainBody = (): string =>
++            Array.from({ length: 1 + int(4) }, () => {
++                if (chance(0.12)) return pick(["-|-|-", ":-:", "a | b", "|-|", "-:", " :--- ", "x|`|<b>|`"]);
++                const indent = chance(0.2) ? pick([" ", "    ", "\t", "  \t"]) : "";
++                const url = chance(0.3) ? `https://a.example/${text(5)}` : "";
++                return `${indent}${text(10)}${url}${text(3)}`;
++            }).join("\n");
++
++        return {
++            html: () => (chance(0.2) ? inlines(3) : blocks(3)),
++            plain: plainBody,
++        };
++    }
++
++    it("the generator is deterministic and covers the allowed tags", () => {
++        const first = generator(SEED);
++        const second = generator(SEED);
++        const messages = Array.from({ length: HTML_MESSAGES }, () => first.html());
++        expect(Array.from({ length: HTML_MESSAGES }, () => second.html())).toEqual(messages);
++        const all = messages.join("\n");
++        for (const tag of [
++            "p",
++            "br",
++            "strong",
++            "em",
++            "del",
++            "code",
++            "pre",
++            "a",
++            "img",
++            "ul",
++            "ol",
++            "li",
++            "blockquote",
++            "h1",
++            "h6",
++            "td",
++            "th",
++            "span data-mx-maths",
++            "div data-mx-maths",
++        ]) {
++            expect(all).toContain(`<${tag}`);
++        }
++        expect(all).toContain("javascript:alert(1)");
++        expect(all).toContain("mxc://a/b");
++        expect(all).toContain("https://evil.example/t.png");
++        expect(all).toContain("`");
++        expect(all).toContain("😀");
++        expect(all).toMatch(/[中文]/);
++    });
++
++    it("the generator reaches the table, pipe, entity and scheme cases of the re-audit", () => {
++        const gen = generator(SEED);
++        const messages = Array.from({ length: HTML_MESSAGES }, () => gen.html());
++        const count = (re: RegExp): number => messages.filter((m) => re.test(m)).length;
++        // D1: a line with a pipe, then a line that may be a delimiter row; pipes in code, links, maths and tables
++        expect(count(/\|[^<]*<br>[-:|]+(<|$)/)).toBeGreaterThan(20);
++        expect(count(/<code>[^<]*\|/)).toBeGreaterThan(20);
++        expect(count(/href="[^"]*\|/)).toBeGreaterThan(5);
++        expect(count(/data-mx-maths="[^"]*\|/)).toBeGreaterThan(20);
++        expect(count(/<table/)).toBeGreaterThan(100);
++        // D2: a numeric reference without a semicolon in a href
++        expect(count(/href="[^"]*&amp;#\d+[^;\d]/)).toBeGreaterThan(20);
++        // D4: a scheme that only case-folds to http(s)
++        expect(count(/[hH][tT][tT][pP]\u017f:\/\//)).toBeGreaterThan(20);
++        const bodies = Array.from({ length: PLAIN_BODIES }, generator(SEED + 1).plain);
++        expect(bodies.filter((b) => /^(:-:|-\|-\|-|\|-\||-:)$/m.test(b)).length).toBeGreaterThan(10);
++        expect(bodies.filter((b) => /[hH][tT][tT][pP]\u017f:\/\//.test(b)).length).toBeGreaterThan(5);
++    });
++
++    /** A message's formatted body with the tex of every maths node replaced by a harmless one. */
++    const withBenignTex = (input: string): string => input.replace(/data-mx-maths="[^"]*"/g, 'data-mx-maths="x"');
++
++    /** The Markdown's lines that are not inside a fenced or indented code block: a table cannot start in one. */
++    function linesOutsideCode(md: string): string[] {
++        const inCode = new Set<number>();
++        const walker = new commonmark.Parser().parse(md).walker();
++        for (let step = walker.next(); step; step = walker.next()) {
++            const { node, entering } = step;
++            if (!entering || node.type !== "code_block" || !node.sourcepos) continue;
++            for (let n = node.sourcepos[0][0]; n <= node.sourcepos[1][0]; n++) inCode.add(n);
++        }
++        return md.split("\n").filter((_, i) => !inCode.has(i + 1));
++    }
++
++    /**
++     * What a GFM renderer does with the Markdown that CommonMark cannot see: it splits a table row into cells before
++     * it parses any inline syntax. Every row the converter wrote (a line that, after quote markers, a list marker and
++     * up to three spaces, starts and ends with a pipe; display tex is indented four spaces and so never matches)
++     * is split the way GFM splits it, and each cell must be safe on its own.
++     */
++    const BLOCK_PREFIX = /^(?:> ?)*(?:(?:[-+*]|\d+\.) {1,3})? {0,3}/;
++    function unsafeCells(md: string): string[] {
++        const bad: string[] = [];
++        for (const line of linesOutsideCode(md)) {
++            const row = line.replace(BLOCK_PREFIX, "");
++            if (!row.startsWith("|") || !row.endsWith("|") || row.endsWith("\\|")) continue;
++            for (const cell of gfmCells(row)) if (!isSafeMarkdown(cell)) bad.push(cell);
++        }
++        return bad;
++    }
++
++    /**
++     * Lines that GFM would read as a table delimiter row although the converter did not write them as one: a line
++     * of dashes, colons and pipes (with a pipe or a colon in it) that is not `| --- | --- |`. Text pipes are escaped
++     * and text lines that look like a one-column delimiter row are escaped, so there must be none.
++     */
++    function strayDelimiterRows(md: string): string[] {
++        return linesOutsideCode(md)
++            .map((line) => line.replace(BLOCK_PREFIX, ""))
++            .filter(
++                (row) =>
++                    /[|:]/.test(row) &&
++                    /^(?:\|[ ]*)?:?-+:?[ ]*(?:\|[ ]*:?-+:?[ ]*)*\|?[ ]*$/.test(row) &&
++                    !/^\|( --- \|)+$/.test(row),
++            );
++    }
++
++    it("the table oracles are not vacuous", () => {
++        expect(unsafeCells("| a | `<b>x` |\n| --- | --- |\n| $`$ | `<img src=x>` |")).toEqual(
++            ["`<b>x`", "$`$"].slice(0, 0),
++        );
++        expect(unsafeCells("| a | <b>x</b> |")).toEqual(["<b>x</b>"]);
++        expect(unsafeCells("> - | [x](javascript:a) |")).toEqual(["[x](javascript:a)"]);
++        expect(unsafeCells("    | <b>x</b> |")).toEqual([]);
++        expect(strayDelimiterRows("a | b\n:-:")).toEqual([":-:"]);
++        expect(strayDelimiterRows("a\n-|-|-")).toEqual(["-|-|-"]);
++        expect(strayDelimiterRows("> -:")).toEqual(["-:"]);
++        expect(strayDelimiterRows("| a |\n| --- |\n---\n    -|-|-\n\\:-:")).toEqual([]);
++        expect(strayDelimiterRows("```\n:-:\n```\n\n    :-:")).toEqual([]);
++        expect(unsafeCells("```\n| <b>x</b> |\n```")).toEqual([]);
++    });
++
++    it(`${HTML_MESSAGES} random formatted messages: no HTML, safe Markdown, no table surprise, a fallback only because of tex`, () => {
++        // A message may fall back to escaped text only because of its maths. The tex of a maths node is
++        // sender-controlled and stays `$tex$`, so Markdown can read a backtick of it as the fence of a code span after
++        // it, or a bracket of it as a link or an image (re-audit R1, S1), and the safety net catches that. The rule
++        // is checked, not assumed: a message that fell back is converted again with every tex replaced by a harmless
++        // one, and that must not fall back, so a fallback with any other cause fails the test.
++        const gen = generator(SEED);
++        const failures: string[] = [];
++        let fellBack = 0;
++        for (let i = 0; i < HTML_MESSAGES; i++) {
++            const input = gen.html();
++            const event = html(input);
++            const { md, fellBack: usedFallback } = convertEvent(event);
++            const problems: string[] = [];
++            if (htmlNodes(md).length) problems.push("html nodes");
++            if (!isSafeMarkdown(md)) problems.push("unsafe");
++            if (unsafeCells(md).length) problems.push("a table cell that is unsafe alone");
++            if (strayDelimiterRows(md).length) problems.push("a stray table delimiter row");
++            if (canCopyMarkdown(event) && md === "") problems.push("copyable but empty");
++            if (usedFallback) {
++                fellBack++;
++                if (convertEvent(html(withBenignTex(input))).fellBack) problems.push("fallback not caused by tex");
++            }
++            if (problems.length)
++                failures.push(`#${i} ${problems.join(", ")}: ${JSON.stringify(input)} -> ${JSON.stringify(md)}`);
++        }
++        expect(failures.slice(0, 5)).toEqual([]);
++        // The fallback is the exception: it fires on a few messages, all of them because of maths.
++        expect(fellBack).toBeGreaterThan(0);
++        expect(fellBack).toBeLessThan(HTML_MESSAGES / 10);
++    }, 30_000);
++
++    it(`${PLAIN_BODIES} random plain bodies: safe Markdown, no table surprise, never a fallback`, () => {
++        const gen = generator(SEED + 1);
++        const failures: string[] = [];
++        for (let i = 0; i < PLAIN_BODIES; i++) {
++            const body = gen.plain();
++            const { md, fellBack } = convertEvent(plain(body));
++            if (
++                fellBack ||
++                !isSafeMarkdown(md) ||
++                htmlNodes(md).length ||
++                unsafeCells(md).length ||
++                strayDelimiterRows(md).length
++            )
++                failures.push(`#${i} ${JSON.stringify(body)} -> ${JSON.stringify(md)}`);
++        }
++        expect(failures.slice(0, 5)).toEqual([]);
++    });
++});
++
++describe("e2e expectations (Playwright CM2 and CM4 assert exactly these)", () => {
++    it("CM4: a plain body is escaped, not parsed", () => {
++        const md = eventToMarkdown(plain("2*3*4 and <b>not bold</b>"));
++        expect(md).toBe("2\\*3\\*4 and \\<b>not bold\\</b>");
++        expect(htmlNodes(md)).toEqual([]);
++    });
++
++    it("CM2: the edited formatted_body of the plan becomes the expected Markdown", () => {
++        const input = [
++            "<h2>Plan</h2>",
++            '<p>Ask <a href="https://matrix.to/#/@bob:localhost">Bob</a> about <del>old</del> <u>new</u> <a href="https://example.com/docs">docs</a>.</p>',
++            "<ul>",
++            "<li>one",
++            "<ul>",
++            "<li>nested</li>",
++            "</ul>",
++            "</li>",
++            "<li>two</li>",
++            "</ul>",
++            '<pre><code class="language-js">const x = 1;',
++            "</code></pre>",
++            "<table><thead><tr><th>k</th><th>v</th></tr></thead><tbody><tr><td>a</td><td>1</td></tr></tbody></table>",
++        ].join("\n");
++        const expected = lines(
++            "## Plan",
++            "",
++            "Ask [Bob](https://matrix.to/#/@bob:localhost) about ~~old~~ new [docs](https://example.com/docs).",
++            "",
++            "- one",
++            "  - nested",
++            "- two",
++            "",
++            "```js",
++            "const x = 1;",
++            "```",
++            "",
++            "| k | v |",
++            "| --- | --- |",
++            "| a | 1 |",
++        );
++        const md = eventToMarkdown(html(input));
++        expect(md).toBe(expected);
++        expect(htmlNodes(md)).toEqual([]);
++    });
++});
+diff --git a/apps/web/src/utils/eventToMarkdown.ts b/apps/web/src/utils/eventToMarkdown.ts
+new file mode 100644
+index 0000000..1fc2872
+--- /dev/null
++++ b/apps/web/src/utils/eventToMarkdown.ts
+@@ -0,0 +1,1061 @@
++/**
++Copyright 2026 inblock.io
++
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only
++Please see LICENSE files in the repository root for full details.
++*/
++
++import { EventType, type MatrixEvent, MsgType } from "matrix-js-sdk/src/matrix";
++import { logger } from "matrix-js-sdk/src/logger";
++import { PERMITTED_URL_SCHEMES } from "@element-hq/web-shared-components";
++import * as commonmark from "commonmark";
++
++import { longestBacktickSequence } from "../editor/deserialize";
++import { stripPlainReply } from "./Reply";
++
++/**
++ * Converts a message to clean CommonMark + GFM for "Copy Markdown".
++ *
++ * The HTML in `formatted_body` is converted, not stripped: everything Markdown can express is kept,
++ * everything it cannot is reduced to its text, and no HTML is ever emitted. A plain `body` is escaped
++ * so it renders as the literal text Element displayed.
++ *
++ * "No HTML" holds by construction: the converted Markdown is parsed back with commonmark (`isSafeMarkdown`), and
++ * a message whose Markdown holds raw HTML, a link Element would not show or a non-mxc image is copied as escaped
++ * plain text of what Element displayed instead (`withSafetyNet`). Ordinary messages never reach that fallback.
++ */
++
++const COPYABLE_MSGTYPES: string[] = [MsgType.Text, MsgType.Notice, MsgType.Emote];
++const DROPPED = new Set(["MX-REPLY", "SCRIPT", "STYLE", "NOSCRIPT", "TEXTAREA", "OPTION"]);
++const BLOCKS = new Set([
++    "P",
++    "DIV",
++    "H1",
++    "H2",
++    "H3",
++    "H4",
++    "H5",
++    "H6",
++    "BLOCKQUOTE",
++    "UL",
++    "OL",
++    "PRE",
++    "HR",
++    "TABLE",
++    "DETAILS",
++    "SUMMARY",
++]);
++/*
++ * Inline output is assembled as a string that carries private-use marker characters. `resolveInline` turns the
++ * markers into Markdown once the whole run is known, because whether `**` may stay depends on the characters next
++ * to it, which only exist after the neighbours have been rendered. Markers in the source text are removed.
++ */
++/** A hard break; resolved per block. */
++const BR = "\uE000";
++/** Emphasis kinds, indexes into the marker strings below. */
++const EM = 0;
++const STRONG = 1;
++const DEL = 2;
++const MARKS = ["*", "**", "~~"];
++const OPEN = "\uE001\uE002\uE003";
++const CLOSE = "\uE004\uE005\uE006";
++/** Brackets an unbreakable piece of output (code span, link, image, maths, autolink). */
++const ATOM_START = "\uE007";
++const ATOM_END = "\uE008";
++const MARKERS = /[\uE000-\uE008]/g;
++
++const clean = (s: string): string => s.replace(MARKERS, "");
++const atom = (s: string): string => ATOM_START + s + ATOM_END;
++
++interface Ctx {
++    inTable: boolean;
++    /** Inside an `<a>`: links cannot nest, so bare URLs in the text stay plain text. */
++    inLink: boolean;
++}
++
++/**
++ * Whether the "Copy Markdown" action applies to this event: a message that is not redacted, decrypted, of a text
++ * type, and that displays something (`displaysSomething`). It does not convert the message: it runs on every
++ * context menu render, and the conversion runs only when the action is clicked. Never throws.
++ */
++export function canCopyMarkdown(event: MatrixEvent): boolean {
++    try {
++        if (event.getType() !== EventType.RoomMessage || event.isState()) return false;
++        if (event.isRedacted() || event.isDecryptionFailure()) return false;
++        if (!COPYABLE_MSGTYPES.includes(event.getContent().msgtype ?? "")) return false;
++        return displaysSomething(event);
++    } catch (e) {
++        logger.error("Copy Markdown: cannot tell whether a message is copyable", e);
++        return false;
++    }
++}
++
++/** A character a reader can see: not whitespace, and not one of the private-use markers (they never reach the output). */
++const VISIBLE = /[^\s\uE000-\uE008]/;
++
++/**
++ * Whether a message displays anything that "Copy Markdown" would copy, decided without converting it: any visible text
++ * outside the elements Element drops (the reply fallback, scripts and styles among them), an image Element shows, or
++ * maths with some tex. A body that is only whitespace, a reply fallback or such elements has nothing to copy.
++ */
++function displaysSomething(event: MatrixEvent): boolean {
++    const { formatted, body } = messageSource(event);
++    if (formatted === undefined) return VISIBLE.test(body);
++    const stack: Node[] = [new DOMParser().parseFromString(formatted, "text/html").body];
++    for (let node = stack.pop(); node; node = stack.pop()) {
++        for (const child of Array.from(node.childNodes)) {
++            if (child.nodeType === Node.TEXT_NODE) {
++                if (VISIBLE.test(child.nodeValue ?? "")) return true;
++            } else if (child.nodeType === Node.ELEMENT_NODE && !DROPPED.has(child.nodeName)) {
++                const el = child as Element;
++                if (el.nodeName === "IMG" && displayedImageSrc(clean(el.getAttribute("src") ?? "")) !== null)
++                    return true;
++                if (VISIBLE.test(el.getAttribute("data-mx-maths") ?? "")) return true;
++                stack.push(el);
++            }
++        }
++    }
++    return false;
++}
++
++/**
++ * The Markdown for a message. Never throws: if the conversion fails, the escaped text of what Element displayed is
++ * returned instead (and an empty string if even that cannot be had).
++ */
++export function eventToMarkdown(event: MatrixEvent): string {
++    try {
++        return convertEvent(event).md;
++    } catch (e) {
++        logger.error("Copy Markdown: conversion failed, copying the escaped text instead", e);
++        return lastResortOfEvent(event);
++    }
++}
++
++/** The escaped displayed text of a message, for when the conversion threw. */
++function lastResortOfEvent(event: MatrixEvent): string {
++    try {
++        const { formatted, body } = messageSource(event);
++        return lastResortMarkdown(formatted === undefined ? body : displayedText(formatted));
++    } catch {
++        return "";
++    }
++}
++
++/** What a message displays: its `formatted_body` when it has a usable one, else its plain `body` (reply fallback removed). */
++function messageSource(event: MatrixEvent): { formatted?: string; body: string } {
++    const content = event.getContent();
++    if (
++        content.format === "org.matrix.custom.html" &&
++        typeof content.formatted_body === "string" &&
++        content.formatted_body.trim() !== ""
++    ) {
++        return { formatted: content.formatted_body, body: "" };
++    }
++    let body = typeof content.body === "string" ? content.body : "";
++    if (event.replyEventId) body = stripPlainReply(body);
++    return { body };
++}
++
++/** The Markdown for a message, and whether the safety net replaced it with escaped text. Exported for tests. */
++export function convertEvent(event: MatrixEvent): { md: string; fellBack: boolean } {
++    const { formatted, body } = messageSource(event);
++    if (formatted !== undefined) {
++        // DOMParser yields an inert document: nothing in it executes.
++        const doc = new DOMParser().parseFromString(formatted, "text/html");
++        return withSafetyNet(renderBlocks(doc.body, { inTable: false, inLink: false }).join("\n\n"), () =>
++            textOf(doc.body),
++        );
++    }
++    return withSafetyNet(plainToMarkdown(body), () => body);
++}
++
++/**
++ * Whether `md` is Markdown a renderer shows as text, emphasis, code and the links and images Element shows: it
++ * holds no raw HTML (inline or block), no link whose destination Element's sanitiser would strip (judged after
++ * the parser decoded entities and escapes), and no image that is not an `mxc://` one. Parsed with commonmark, as
++ * Element's own `Markdown` class does.
++ */
++export function isSafeMarkdown(md: string): boolean {
++    const walker = new commonmark.Parser().parse(md).walker();
++    for (let step = walker.next(); step; step = walker.next()) {
++        if (!step.entering) continue;
++        const { node } = step;
++        switch (node.type) {
++            case "html_inline":
++            case "html_block":
++                return false;
++            case "link":
++                if (!isPermittedHref(node.destination ?? "")) return false;
++                break;
++            case "image":
++                if (!(node.destination ?? "").startsWith("mxc://")) return false;
++                break;
++        }
++    }
++    return true;
++}
++
++/**
++ * The safety net: `md` when it is safe, else the plain text of what Element displayed (`displayed`, called only
++ * then) with its Markdown escaped, else, if even that is not safe, with every ASCII punctuation character escaped.
++ * Exported for tests.
++ */
++export function withSafetyNet(md: string, displayed: () => string): { md: string; fellBack: boolean } {
++    if (isSafeMarkdown(md)) return { md, fellBack: false };
++    const text = displayed();
++    const escaped = plainToMarkdown(text);
++    return { md: isSafeMarkdown(escaped) ? escaped : lastResortMarkdown(text), fellBack: true };
++}
++
++/** Plain text as Markdown with every ASCII punctuation character backslash-escaped. Exported for tests. */
++export function lastResortMarkdown(text: string): string {
++    return plainToMarkdown(text, true);
++}
++
++/** Elements that sit on a line of their own in `textOf`, as `BLOCKS` sit in a paragraph of their own. */
++const LINE_BREAKING = new Set(["LI", "TR", "CAPTION"]);
++
++/**
++ * The text of a formatted body that a reader sees: block elements and `br` as line breaks, table cells apart, the
++ * elements Element drops (and images) left out. Exported for tests, which pass the HTML.
++ */
++export function displayedText(formattedBody: string): string {
++    return textOf(new DOMParser().parseFromString(formattedBody, "text/html").body);
++}
++
++function textOf(root: Node): string {
++    let out = "";
++    // Ends `out` with `count` line breaks, counting those it already ends with; nothing before the first text.
++    const breakTo = (count: number, pre: boolean): void => {
++        if (out === "") return;
++        if (!pre) out = out.replace(/ +$/, "");
++        out += "\n".repeat(Math.max(0, count - /\n*$/.exec(out)![0].length));
++    };
++    const walk = (node: Node, pre: boolean): void => {
++        for (const child of Array.from(node.childNodes)) {
++            if (child.nodeType === Node.TEXT_NODE) {
++                let text = child.nodeValue ?? "";
++                if (!pre) {
++                    text = text.replace(/[\t\n\r ]+/g, " ");
++                    if (out === "" || out.endsWith("\n")) text = text.replace(/^ /, "");
++                }
++                out += text;
++            } else if (child.nodeType === Node.ELEMENT_NODE && !DROPPED.has(child.nodeName)) {
++                const name = child.nodeName;
++                if (name === "BR") {
++                    out += "\n";
++                } else if (name !== "IMG") {
++                    const lines = BLOCKS.has(name) ? 2 : LINE_BREAKING.has(name) ? 1 : 0;
++                    if (lines) breakTo(lines, pre);
++                    walk(child, pre || name === "PRE");
++                    if (lines) breakTo(lines, pre);
++                    else if (name === "TD" || name === "TH") out += " ";
++                }
++            }
++        }
++    };
++    walk(root, false);
++    return out.replace(/^\n+|\n+$/g, "");
++}
++
++/**
++ * A plain message as Markdown that renders as the literal text. With `strict`, every ASCII punctuation character
++ * is escaped and nothing is recognised (no bare URL becomes a link): no parser can read markup into it.
++ */
++function plainToMarkdown(body: string, strict = false): string {
++    const paragraphs: string[][] = [[]];
++    for (const raw of body.split(/\r\n|\r|\n/)) {
++        // Leading spaces and tabs become no-break spaces: Element shows them (pre-wrap), and four spaces in
++        // Markdown would turn the line into an indented code block.
++        const line = raw
++            .replace(/\s+$/, "")
++            .replace(/^[ \t]+/, (ws) => ws.replace(/[ \t]/g, (c) => (c === "\t" ? "\u00a0".repeat(4) : "\u00a0")));
++        if (line === "") {
++            if (paragraphs[paragraphs.length - 1].length) paragraphs.push([]);
++            continue;
++        }
++        paragraphs[paragraphs.length - 1].push(
++            strict
++                ? clean(line).replace(/[!-/:-@[-`{-~]/g, "\\$&")
++                : escapeLineStart(resolveInline(escapeText(clean(line), true))),
++        );
++    }
++    return paragraphs
++        .filter((p) => p.length)
++        .map((p) => p.join("\\\n"))
++        .join("\n\n");
++}
++
++function renderBlocks(parent: Node, ctx: Ctx): string[] {
++    const blocks: string[] = [];
++    let run: Node[] = [];
++    const flush = (): void => {
++        const text = renderInlineRun(run, ctx);
++        run = [];
++        if (text) blocks.push(text);
++    };
++    for (const child of Array.from(parent.childNodes)) {
++        if (child.nodeType === Node.ELEMENT_NODE && DROPPED.has(child.nodeName)) continue;
++        if (child.nodeType === Node.ELEMENT_NODE && isBlock(child as Element)) {
++            flush();
++            const block = renderBlock(child as Element, ctx);
++            if (block) blocks.push(block);
++        } else {
++            run.push(child);
++        }
++    }
++    flush();
++    return blocks;
++}
++
++function isBlock(el: Element): boolean {
++    return BLOCKS.has(el.nodeName);
++}
++
++function renderBlock(el: Element, ctx: Ctx): string {
++    switch (el.nodeName) {
++        case "P":
++            return renderInlineRun(Array.from(el.childNodes), ctx);
++        case "H1":
++        case "H2":
++        case "H3":
++        case "H4":
++        case "H5":
++        case "H6": {
++            // A run of # after a space ends the heading (the closing sequence), so its first # is escaped.
++            const text = renderInlineRun(Array.from(el.childNodes), ctx)
++                .replace(/\\\n/g, " ")
++                .replace(/(^|[ \t])(#+)$/, "$1\\$2");
++            return `${"#".repeat(Number(el.nodeName[1]))} ${text}`;
++        }
++        case "SUMMARY":
++            return renderInlineRun(Array.from(el.childNodes), ctx, STRONG);
++        case "BLOCKQUOTE":
++            return renderBlocks(el, ctx)
++                .join("\n\n")
++                .split("\n")
++                .map((l) => (l === "" ? ">" : `> ${l}`))
++                .join("\n");
++        case "UL":
++        case "OL":
++            return renderList(el, ctx);
++        case "PRE":
++            return renderPre(el, ctx);
++        case "HR":
++            return "---";
++        case "TABLE":
++            return renderTable(el, ctx);
++        case "DIV":
++            if (el.hasAttribute("data-mx-maths"))
++                return `$$\n${mathsSafe(clean(el.getAttribute("data-mx-maths")!), true, ctx.inTable)}\n$$`;
++            return renderBlocks(el, ctx).join("\n\n");
++        default: // DETAILS and anything else block-level: render its children
++            return renderBlocks(el, ctx).join("\n\n");
++    }
++}
++
++function renderList(el: Element, ctx: Ctx): string {
++    const ordered = el.nodeName === "OL";
++    const start = Number.parseInt(el.getAttribute("start") ?? "1", 10);
++    let n = Number.isFinite(start) ? start : 1;
++    const items: string[] = [];
++    for (const li of Array.from(el.children)) {
++        if (li.nodeName !== "LI") continue;
++        const marker = ordered ? `${n++}. ` : "- ";
++        const indent = " ".repeat(marker.length);
++        const loose = Array.from(li.children).some((c) => c.nodeName === "P");
++        const body = renderBlocks(li, ctx).join(loose ? "\n\n" : "\n");
++        items.push(
++            marker +
++                body
++                    .split("\n")
++                    .map((l, i) => (i === 0 || l === "" ? l : indent + l))
++                    .join("\n"),
++        );
++    }
++    return items.join("\n");
++}
++
++/** The info strings a fence keeps: language names such as `rust`, `c++`, `c#`, `objective-c`. */
++const INFO_STRING = /^[\w.+#-]+$/;
++
++function renderPre(el: Element, ctx: Ctx): string {
++    const code = el.firstElementChild?.nodeName === "CODE" ? el.firstElementChild : null;
++    let language = "";
++    for (const cls of Array.from(code?.classList ?? [])) {
++        if (cls.startsWith("language-") && !cls.startsWith("language-_")) {
++            language = cls.slice("language-".length);
++            break;
++        }
++    }
++    // The class is sender-controlled and the info string is not escapable: a backtick in it is no fence at all and
++    // turns the code that follows into live Markdown. Only a plain token stays.
++    if (!INFO_STRING.test(language)) language = "";
++    let text = (el.textContent ?? "").replace(/\n$/, "");
++    if (ctx.inTable) text = text.replace(/\|/g, "\\|");
++    const fence = "`".repeat(Math.max(3, longestBacktickSequence(text) + 1));
++    return `${fence}${language}\n${text}\n${fence}`;
++}
++
++function renderTable(el: Element, ctx: Ctx): string {
++    const rows = Array.from(el.querySelectorAll("tr")).map((tr) =>
++        Array.from(tr.children)
++            .filter((c) => c.nodeName === "TD" || c.nodeName === "TH")
++            .map((c) => renderCell(c, ctx)),
++    );
++    if (!rows.length) return "";
++    const width = Math.max(...rows.map((r) => r.length));
++    const row = (r: string[]): string => `| ${Array.from({ length: width }, (_, i) => r[i] ?? "").join(" | ")} |`;
++    const table = [row(rows[0]), `| ${Array(width).fill("---").join(" | ")} |`, ...rows.slice(1).map(row)].join("\n");
++    const caption = Array.from(el.children).find((c) => c.nodeName === "CAPTION");
++    const captionText = caption ? renderInlineRun(Array.from(caption.childNodes), ctx) : "";
++    return captionText ? `${captionText}\n\n${table}` : table;
++}
++
++/**
++ * One table cell. GFM splits a row into cells before it parses any inline syntax, so a backtick in one cell cannot
++ * pair with a backtick in another, which is how the whole table reads to commonmark. The net therefore judges the
++ * cell on its own too, the way GFM parses it (`\|` read as `|`): a cell that is not safe in isolation becomes the
++ * escaped plain text of what it displays.
++ */
++function renderCell(cell: Element, ctx: Ctx): string {
++    const md = renderBlocks(cell, { ...ctx, inTable: true })
++        .join(" ")
++        .replace(/\\\n/g, " ")
++        .replace(/\n/g, " ")
++        .trim();
++    if (isSafeMarkdown(md.replace(/\\\|/g, "|"))) return md;
++    const text = textOf(cell).replace(/\s+/g, " ").trim();
++    const escaped = plainToMarkdown(text);
++    return isSafeMarkdown(escaped.replace(/\\\|/g, "|")) ? escaped : lastResortMarkdown(text);
++}
++
++/** Renders a run of inline nodes as one block: lines split at hard breaks, trimmed, line starts escaped. */
++function renderInlineRun(nodes: Node[], ctx: Ctx, emphasis?: number): string {
++    let joined = nodes.map((n) => renderInline(n, ctx)).join("");
++    if (emphasis !== undefined) joined = wrap(emphasis, joined);
++    const lines = resolveInline(joined)
++        .split(BR)
++        .map((l) => l.trim());
++    while (lines.length && lines[lines.length - 1] === "") lines.pop();
++    while (lines.length && lines[0] === "") lines.shift();
++    return lines.map(escapeLineStart).join("\\\n");
++}
++
++function renderInline(node: Node, ctx: Ctx): string {
++    if (node.nodeType === Node.TEXT_NODE) {
++        const text = clean((node.nodeValue ?? "").replace(/[\t\n\r ]+/g, " "));
++        return escapeText(text, !ctx.inLink);
++    }
++    if (node.nodeType !== Node.ELEMENT_NODE) return "";
++    const el = node as Element;
++    if (DROPPED.has(el.nodeName)) return "";
++    const children = (): string =>
++        Array.from(el.childNodes)
++            .map((c) => renderInline(c, ctx))
++            .join("");
++    switch (el.nodeName) {
++        case "BR":
++            return BR;
++        case "STRONG":
++        case "B":
++            return wrap(STRONG, children());
++        case "EM":
++        case "I":
++            return wrap(EM, children());
++        case "DEL":
++        case "S":
++        case "STRIKE":
++            return wrap(DEL, children());
++        case "CODE": {
++            const text = clean((el.textContent ?? "").replace(/\n/g, " "));
++            // An empty span would be written as a bare pair of backticks, which can pair with a later fence.
++            return text === "" ? "" : atom(codeSpan(text, ctx.inTable));
++        }
++        case "A":
++            return link(
++                el,
++                Array.from(el.childNodes)
++                    .map((c) => renderInline(c, { ...ctx, inLink: true }))
++                    .join(""),
++            );
++        case "IMG": {
++            const src = displayedImageSrc(clean(el.getAttribute("src") ?? ""));
++            if (src === null) return "";
++            // One line, as text nodes are: a line break in the alt would start a block (heading, list) mid-image.
++            const alt = escapeText(clean(el.getAttribute("alt") ?? "").replace(/\s+/g, " "));
++            return atom(`![${alt}](${encodeUrl(src)})`);
++        }
++        case "SPAN":
++            if (el.hasAttribute("data-mx-maths")) {
++                return atom(`$${mathsSafe(clean(el.getAttribute("data-mx-maths")!), false, ctx.inTable)}$`);
++            }
++            return children();
++        default: // u, sub, sup, font, colour and spoiler spans, unknown tags: keep the text
++            return children();
++    }
++}
++
++/** Marks `text` as emphasis, moving edge whitespace and hard breaks outside; `resolveInline` places the delimiters. */
++function wrap(kind: number, text: string): string {
++    const m = /^([\s\uE000]*)([\s\S]*?)([\s\uE000]*)$/.exec(text)!;
++    return m[2] ? `${m[1]}${OPEN[kind]}${m[2]}${CLOSE[kind]}${m[3]}` : text;
++}
++
++/**
++ * The tex of a maths node is sender-controlled and invisible in Element, and it is emitted between `$`. Two
++ * normalisations that leave the maths as TeX reads it keep Markdown from restructuring it:
++ * - Inline tex becomes one line (TeX reads a line break in math mode as a space), so a line cannot start a heading.
++ *   A `%` comment ends at its line, so it is cut before the lines are joined.
++ * - Display tex loses its blank lines (a blank line is an error in math mode), so no paragraph or link reference
++ *   definition can start inside it, and every line is indented by four spaces (TeX ignores leading space). The `$$`
++ *   line before it opens a paragraph, and an indented line cannot start any block inside a paragraph (no table
++ *   delimiter row, heading, quote, list, fence or HTML block), so it stays text. In a table cell the lines are
++ *   joined into one line anyway, and no indent is needed.
++ * A `<` that could open a tag, comment, declaration, processing instruction or autolink gets a space after it
++ * (TeX ignores it, CommonMark no longer sees HTML). In inline maths a `<name` that runs to the end of the tex is
++ * left alone: the closing `$` follows it, which no tag or autolink can continue through, so `$a<b$` stays as is.
++ * Whatever Markdown can still read into the tex (a backtick pairing with a later code span) is caught by
++ * `isSafeMarkdown`, and, in a table, by the judgement of each cell on its own.
++ */
++function mathsSafe(tex: string, display: boolean, inTable: boolean): string {
++    const lines = tex.split(/\r\n|\r|\n/);
++    const oneLine = display
++        ? lines
++              .filter((l) => /[^ \t]/.test(l))
++              .map((l) => (inTable ? l : `    ${l}`))
++              .join("\n")
++        : lines.length > 1
++          ? lines.map(texWithoutComment).join(" ")
++          : tex;
++    const opensHtml = display ? /<(?=[A-Za-z/!?])/g : /<(?=[A-Za-z/!?])(?![A-Za-z][A-Za-z0-9+.-]*$)/g;
++    const safe = oneLine.replace(opensHtml, "< ");
++    return inTable ? safe.replace(/\|/g, "\\|") : safe;
++}
++
++/** A line of tex without its comment: a `%` that no backslash escapes starts one, and it runs to the end of the line. */
++function texWithoutComment(line: string): string {
++    for (let i = 0; i < line.length; i++) {
++        if (line[i] === "\\") i++;
++        else if (line[i] === "%") return line.slice(0, i);
++    }
++    return line;
++}
++
++/**
++ * The text a code span shows, read back from what `codeSpan` wrote: the fence is the leading run of backticks (the
++ * padding keeps a backtick of the text out of it), and a parser strips one padding space from each end.
++ */
++function codeSpanText(span: string): string {
++    const fence = /^`+/.exec(span)![0].length;
++    const inner = span.slice(fence, span.length - fence);
++    return /^ [\s\S]* $/.test(inner) && /[^ ]/.test(inner) ? inner.slice(1, -1) : inner;
++}
++
++const isCodeSpan = (t: Tok): boolean => t.kind === "atom" && t.s.startsWith("`");
++
++/**
++ * Two code spans side by side would have their backticks run together into one longer run that closes nothing (or
++ * the wrong span), and what it leaves unpaired can expose the code that follows. They are written as one span.
++ */
++function mergeCodeSpans(toks: Tok[]): Tok[] {
++    const out: Tok[] = [];
++    for (const t of toks) {
++        const last = out[out.length - 1];
++        if (last && isCodeSpan(last) && isCodeSpan(t)) {
++            out[out.length - 1] = { ...last, s: codeSpan(codeSpanText(last.s) + codeSpanText(t.s), false) };
++        } else {
++            out.push(t);
++        }
++    }
++    return out;
++}
++
++/** In a table cell a `|` must be written `\|` (GFM unescapes it before it parses the cell), even in a code span. */
++function codeSpan(text: string, inTable: boolean): string {
++    if (inTable) text = text.replace(/\|/g, "\\|");
++    const fence = "`".repeat(longestBacktickSequence(text) + 1);
++    const pad = text.startsWith("`") || text.endsWith("`") ? " " : "";
++    return `${fence}${pad}${text}${pad}${fence}`;
++}
++
++/**
++ * Whether Element's sanitiser keeps this href: sanitize-html with `allowedSchemes: PERMITTED_URL_SCHEMES` and
++ * `allowProtocolRelative: false` (its `launder` dependency does the check). A relative href has no scheme and
++ * is kept. Anything else is stripped, which leaves the link text with no link.
++ */
++function isPermittedHref(href: string): boolean {
++    // Browsers ignore characters up to U+0020 inside a URL, so the sanitiser removes them before it looks.
++    let h = Array.from(href)
++        .filter((c) => c.charCodeAt(0) > 0x20)
++        .join("");
++    for (;;) {
++        const start = h.indexOf("<!--");
++        const end = start === -1 ? -1 : h.indexOf("-->", start + 4);
++        if (end === -1) break;
++        h = h.slice(0, start) + h.slice(end + 3);
++    }
++    const scheme = /^([a-zA-Z][a-zA-Z0-9.+-]*):/.exec(h);
++    if (!scheme) return !/^[/\\]{2}/.test(h);
++    return PERMITTED_URL_SCHEMES.includes(scheme[1].toLowerCase());
++}
++
++const MEDIA_API_MXC = /\/_matrix\/media\/r0\/(?:download|thumbnail)\/(.+?)\/(.+?)(?:[?/]|$)/;
++
++/**
++ * The mxc URI of the image Element renders for this `src`, or null when it renders none. Element's `img`
++ * transform keeps `mxc://` sources, maps legacy media API URLs to their mxc URI, and for every other source
++ * returns an `<img>` with no attributes at all (no src, no alt), which shows nothing.
++ */
++function displayedImageSrc(src: string): string | null {
++    if (src.startsWith("mxc://")) return src;
++    const match = MEDIA_API_MXC.exec(src);
++    return match ? `mxc://${match[1]}/${match[2]}` : null;
++}
++
++function link(el: Element, text: string): string {
++    const href = clean(el.getAttribute("href") ?? "");
++    if (!href || !isPermittedHref(href)) return text;
++    if (
++        el.textContent === href &&
++        /^(https?|mailto|ftp):/i.test(href) &&
++        !/[\s<>]/.test(href) &&
++        CM_AUTOLINK_URI.test(href)
++    )
++        return atom(`<${autolinkUrl(href)}>`);
++    return atom(`[${resolveInline(text)}](${encodeUrl(href)})`);
++}
++
++/**
++ * CommonMark's absolute URI: a 2 to 32 character scheme, a colon, then no ASCII control character, space, `<` or `>`.
++ * Anything else is not an autolink and its backticks would go live, so it is written as a link instead.
++ */
++// oxlint-disable-next-line no-control-regex
++const CM_AUTOLINK_URI = /^[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\x00-\x20\x7f<>]*$/;
++
++/**
++ * Percent-encodes what would end a link destination (ASCII control characters, whitespace, parentheses, angle
++ * brackets) and `|`, which in a GFM table row ends a cell before any link syntax is read. Renderers decode a
++ * destination's backslash escapes and entities, which can turn a harmless relative href into `javascript:`, so a
++ * backslash and an `&` that starts an entity are encoded too: one followed by `#` (a browser decodes a numeric
++ * reference in an attribute without its semicolon, and marked writes the destination into the attribute as it
++ * got it) or by a name and a semicolon.
++ */
++function encodeUrl(url: string): string {
++    return url.replace(
++        // oxlint-disable-next-line no-control-regex
++        /[\x00-\x20\x7f\s()<>\\|]|&(?=#|[A-Za-z0-9]+;)/g,
++        (c) => (c === "(" ? "%28" : c === ")" ? "%29" : encodeURIComponent(c)),
++    );
++}
++
++/** An autolink has no destination syntax to protect, so only the `|` that would end a table cell is encoded. */
++function autolinkUrl(url: string): string {
++    return url.replaceAll("|", "%7C");
++}
++
++interface Tok {
++    kind: "text" | "atom" | "br" | "open" | "close";
++    /** The output text; empty for delimiters, whose text is `MARKS[mark]`. */
++    s: string;
++    mark: number;
++}
++
++/** Splits marked-up inline output into tokens. A text token is one code point or one backslash escape. */
++function tokenize(s: string): Tok[] {
++    const toks: Tok[] = [];
++    for (let i = 0; i < s.length;) {
++        const c = s[i];
++        const open = OPEN.indexOf(c);
++        const close = CLOSE.indexOf(c);
++        if (c === BR) {
++            toks.push({ kind: "br", s: BR, mark: -1 });
++            i++;
++        } else if (open >= 0 || close >= 0) {
++            toks.push({ kind: open >= 0 ? "open" : "close", s: "", mark: open >= 0 ? open : close });
++            i++;
++        } else if (c === ATOM_START) {
++            const end = s.indexOf(ATOM_END, i);
++            const stop = end < 0 ? s.length : end;
++            toks.push({ kind: "atom", s: s.slice(i + 1, stop), mark: -1 });
++            i = stop + 1;
++        } else {
++            const len =
++                c === "\\" && /[!-/:-@[-`{-~]/.test(s[i + 1] ?? "")
++                    ? 2
++                    : String.fromCodePoint(s.codePointAt(i)!).length;
++            toks.push({ kind: "text", s: s.slice(i, i + len), mark: -1 });
++            i += len;
++        }
++    }
++    return toks;
++}
++
++const isDelim = (t: Tok): boolean => t.kind === "open" || t.kind === "close";
++const isWhitespace = (c: string): boolean => /^\s/.test(c);
++const isPunctuation = (c: string): boolean => /^[\p{P}\p{S}]/u.test(c);
++
++/** The first character of what a token writes, as a renderer sees it next to a delimiter run. */
++function firstChar(t: Tok): string {
++    if (t.kind === "br") return "\n";
++    return String.fromCodePoint((isDelim(t) ? MARKS[t.mark] : t.s).codePointAt(0)!);
++}
++
++function lastChar(t: Tok): string {
++    if (t.kind === "br") return "\n";
++    return Array.from(isDelim(t) ? MARKS[t.mark] : t.s).pop()!;
++}
++
++type CharClass = "ws" | "punct" | "word";
++
++/**
++ * CommonMark's character classes. commonmark.js (and markdown-it) read an astral character as lone UTF-16
++ * units, which are neither whitespace nor punctuation, while the spec calls an astral symbol punctuation. Emphasis
++ * must work under both readings, so callers check `lenient` true and false.
++ */
++function classOf(c: string, lenient: boolean): CharClass {
++    if (isWhitespace(c)) return "ws";
++    if (lenient && c.length > 1) return "word";
++    return isPunctuation(c) ? "punct" : "word";
++}
++
++/** CommonMark 0.31 left- and right-flanking for the characters before and after a delimiter run. */
++function flanking(before: string, after: string, lenient: boolean): { left: boolean; right: boolean } {
++    const b = classOf(before, lenient);
++    const a = classOf(after, lenient);
++    return {
++        left: a !== "ws" && (a !== "punct" || b !== "word"),
++        right: b !== "ws" && (b !== "punct" || a !== "word"),
++    };
++}
++
++/** Removes the tokens at the given indexes. */
++function removeAt(toks: Tok[], indexes: number[]): void {
++    for (const i of indexes.sort((a, b) => b - a)) toks.splice(i, 1);
++}
++
++/** A maximal run of delimiter tokens of one character, which is what a CommonMark parser sees as one run. */
++interface Run {
++    ch: string;
++    /** Token range [lo, hi). */
++    lo: number;
++    hi: number;
++    chars: number;
++    before: string;
++    after: string;
++}
++
++function findRuns(toks: Tok[]): Run[] {
++    const runs: Run[] = [];
++    for (let i = 0; i < toks.length;) {
++        if (!isDelim(toks[i])) {
++            i++;
++            continue;
++        }
++        const ch = MARKS[toks[i].mark][0];
++        let j = i;
++        let chars = 0;
++        while (j < toks.length && isDelim(toks[j]) && MARKS[toks[j].mark][0] === ch)
++            chars += MARKS[toks[j++].mark].length;
++        runs.push({
++            ch,
++            lo: i,
++            hi: j,
++            chars,
++            before: i === 0 ? " " : lastChar(toks[i - 1]),
++            after: j === toks.length ? " " : firstChar(toks[j]),
++        });
++        i = j;
++    }
++    return runs;
++}
++
++interface Delimiter {
++    run: number;
++    ch: string;
++    orig: number;
++    left: number;
++    canOpen: boolean;
++    canClose: boolean;
++}
++
++/**
++ * Runs the CommonMark emphasis algorithm (spec 0.31, "process emphasis", as commonmark.js has it, including the
++ * rule of three) on the runs and returns how many characters each opening run gave each closing run, keyed
++ * "opener:closer".
++ */
++function matchRuns(runs: Run[], lenient: boolean): Map<string, number> {
++    const matches = new Map<string, number>();
++    const stack: Delimiter[] = runs.map((r, run) => {
++        const { left, right } = flanking(r.before, r.after, lenient);
++        return { run, ch: r.ch, orig: r.chars, left: r.chars, canOpen: left, canClose: right };
++    });
++    const bottoms = new Map<string, Delimiter | undefined>();
++    let c = 0;
++    while (c < stack.length) {
++        const closer = stack[c];
++        if (!closer.canClose) {
++            c++;
++            continue;
++        }
++        const bottomKey = `${closer.ch}${closer.canOpen}${closer.orig % 3}`;
++        let o = c - 1;
++        let found = false;
++        for (; o >= 0 && stack[o] !== bottoms.get(bottomKey); o--) {
++            const opener = stack[o];
++            const odd =
++                (closer.canOpen || opener.canClose) && closer.orig % 3 !== 0 && (opener.orig + closer.orig) % 3 === 0;
++            if (opener.ch === closer.ch && opener.canOpen && !odd) {
++                found = true;
++                break;
++            }
++        }
++        if (found) {
++            const opener = stack[o];
++            const use = closer.left >= 2 && opener.left >= 2 ? 2 : 1;
++            opener.left -= use;
++            closer.left -= use;
++            const key = `${opener.run}:${closer.run}`;
++            matches.set(key, (matches.get(key) ?? 0) + use);
++            stack.splice(o + 1, c - o - 1); // delimiters between them can no longer match
++            c = o + 1;
++            if (opener.left === 0) {
++                stack.splice(o, 1);
++                c--;
++            }
++            if (closer.left === 0) stack.splice(c, 1);
++        } else {
++            bottoms.set(bottomKey, stack[c - 1]);
++            if (closer.canOpen) c++;
++            else stack.splice(c, 1);
++        }
++    }
++    return matches;
++}
++
++/** A change to the tokens that touches only the indexes from `start` to `end`. */
++type Edit = { start: number; end: number } & ({ drop: number[] } | { from: number; to: number });
++
++function edit(change: { drop: number[] } | { from: number; to: number }): Edit {
++    const indexes = "drop" in change ? change.drop : [change.from, change.to];
++    return { ...change, start: Math.min(...indexes), end: Math.max(...indexes) };
++}
++
++/** Applies the edits, which must not overlap and must be sorted by position, from the last to the first. */
++function applyEdits(toks: Tok[], edits: Edit[]): void {
++    for (const e of edits.reverse()) {
++        if ("drop" in e) removeAt(toks, e.drop);
++        else toks.splice(e.to, 0, ...toks.splice(e.from, 1));
++    }
++}
++
++/**
++ * Makes the changes that move the tokens closer to valid Markdown and returns true, or returns false when they
++ * are valid. Every change shrinks the tokens or moves a text token out of an emphasis run, so repeating ends.
++ */
++function normaliseStep(toks: Tok[]): boolean {
++    // Pair every delimiter with its partner. They come from nested `wrap` calls, so they always nest.
++    const partner: number[] = new Array<number>(toks.length).fill(-1);
++    const stack: number[] = [];
++    for (let i = 0; i < toks.length; i++) {
++        if (toks[i].kind === "open") stack.push(i);
++        else if (toks[i].kind === "close") {
++            const j = stack.pop();
++            if (j === undefined || toks[j].mark !== toks[i].mark) {
++                removeAt(toks, [i]);
++                return true;
++            }
++            partner[i] = j;
++            partner[j] = i;
++        }
++    }
++    if (stack.length) {
++        removeAt(toks, stack);
++        return true;
++    }
++
++    const doomed = new Set<number>();
++    const doom = (...indexes: number[]): void => {
++        if (indexes.some((i) => doomed.has(i))) return; // overlaps a change made in this pass; the next one gets it
++        indexes.forEach((i) => doomed.add(i));
++    };
++    const active = [0, 0, 0];
++    for (let i = 0; i < toks.length; i++) {
++        const t = toks[i];
++        const next = toks[i + 1];
++        if (t.kind === "open" && next?.kind === "close")
++            doom(i, i + 1); // nothing inside
++        else if (t.kind === "close" && next?.kind === "open" && t.mark === next.mark)
++            doom(i, i + 1); // one run
++        else if (t.kind === "open" && active[t.mark] > 0) doom(i, partner[i]); // already inside this kind
++        if (t.kind === "open") active[t.mark]++;
++        else if (t.kind === "close") active[t.mark]--;
++    }
++    if (doomed.size) {
++        removeAt(toks, [...doomed]);
++        return true;
++    }
++
++    // Every run must flank the way its delimiters need, under either reading of astral characters.
++    const runs = findRuns(toks);
++    const edits: Edit[] = [];
++    let end = -1;
++    for (const run of runs) {
++        const modes = [flanking(run.before, run.after, false), flanking(run.before, run.after, true)];
++        const tokens = toks.slice(run.lo, run.hi);
++        const firstOpen = run.lo + tokens.findIndex((t) => t.kind === "open");
++        const lastClose = run.lo + tokens.map((t) => t.kind).lastIndexOf("close");
++        let change: Edit | undefined;
++        if (firstOpen >= run.lo && !modes.every((m) => m.left)) {
++            // Move the offending character from inside the opening run to just before it, else drop the pairs.
++            const inside = toks[run.hi];
++            change =
++                inside?.kind === "text" || inside?.kind === "br"
++                    ? edit({ from: run.hi, to: firstOpen })
++                    : edit({ drop: pairsOf(tokens, run.lo, "open", partner) });
++        } else if (lastClose >= run.lo && !modes.every((m) => m.right)) {
++            const inside = toks[run.lo - 1];
++            change =
++                inside?.kind === "text" || inside?.kind === "br"
++                    ? edit({ from: run.lo - 1, to: lastClose })
++                    : edit({ drop: pairsOf(tokens, run.lo, "close", partner) });
++        }
++        if (change && change.start > end) {
++            edits.push(change);
++            end = change.end;
++        }
++    }
++    if (edits.length) {
++        applyEdits(toks, edits);
++        return true;
++    }
++
++    // A parser must pair the runs the way the HTML nested them: ambiguous runs (flanking both ways, the rule of
++    // three) can pair differently, and then the delimiters of the pairs it got wrong are dropped.
++    const runOf = new Map<number, number>();
++    runs.forEach((r, k) => {
++        for (let t = r.lo; t < r.hi; t++) runOf.set(t, k);
++    });
++    const wanted = new Map<string, number>();
++    const owner = new Map<string, number[]>();
++    toks.forEach((t, i) => {
++        if (t.kind !== "open") return;
++        const key = `${runOf.get(i)}:${runOf.get(partner[i])}`;
++        wanted.set(key, (wanted.get(key) ?? 0) + MARKS[t.mark].length);
++        if (!owner.has(key)) owner.set(key, []);
++        owner.get(key)!.push(i, partner[i]);
++    });
++    const wrong = new Set<number>();
++    for (const lenient of [false, true]) {
++        const got = matchRuns(runs, lenient);
++        for (const [key, chars] of wanted) if (got.get(key) !== chars) owner.get(key)!.forEach((i) => wrong.add(i));
++    }
++    if (wrong.size) {
++        removeAt(toks, [...wrong]);
++        return true;
++    }
++    return false;
++}
++
++/** The indexes of every delimiter of `kind` in a run and of its partner. */
++function pairsOf(run: Tok[], start: number, kind: "open" | "close", partner: number[]): number[] {
++    const out: number[] = [];
++    run.forEach((t, k) => {
++        if (t.kind === kind) out.push(start + k, partner[start + k]);
++    });
++    return out;
++}
++
++/**
++ * Turns the markers of one inline run into Markdown. Emphasis stays only where its delimiters are valid
++ * CommonMark flanking runs: a punctuation character at the edge of the content that stops them being valid moves
++ * outside (`**Note:**x` becomes `**Note**:x`), adjacent runs of one kind merge, and what cannot be made valid
++ * is dropped, keeping its text. The start and end of the run count as whitespace.
++ */
++function resolveInline(s: string): string {
++    const toks = tokenize(s);
++    while (normaliseStep(toks)) {
++        /* each step makes its repairs */
++    }
++    const merged = mergeCodeSpans(toks);
++    return merged
++        .map((t, i) => {
++            if (isDelim(t)) return MARKS[t.mark];
++            // A `!` right before a link would make it an image. Only here is it known what the `!` touches,
++            // because dropping emphasis can put a link next to it.
++            const next = merged[i + 1];
++            return t.kind === "text" && t.s === "!" && next?.kind === "atom" && next.s.startsWith("[") ? "\\!" : t.s;
++        })
++        .join("");
++}
++
++const WORD = /[\p{L}\p{N}]/u;
++
++/**
++ * A run of text that starts with http:// or https:// (not glued to a word) and ends at whitespace, `<` or `>`. The
++ * scheme is matched as ASCII only: with the `i` and `u` flags together, U+017F (long s) would match the `s` of
++ * `https`, and what that "scheme" is not is then no scheme for any later check.
++ */
++const BARE_URL = /(?<![\p{L}\p{N}])[hH][tT][tT][pP][sS]?:\/\/[^\s<>\p{Cc}]+/gu;
++
++/** Trailing punctuation a GFM extended autolink leaves outside, plus an unbalanced closing parenthesis. */
++function trimUrl(url: string): string {
++    for (;;) {
++        const last = url[url.length - 1];
++        const unbalanced = last === ")" && url.split(")").length > url.split("(").length;
++        if (!unbalanced && !"?!.,:*_~'\"".includes(last)) return url;
++        url = url.slice(0, -1);
++    }
++}
++
++/**
++ * Escapes text so it renders as itself. With `autolink`, a bare http(s) URL is written as a `<url>` autolink with
++ * nothing escaped inside: Element shows it as a link (linkify), and backslashes in it would end up in the href.
++ */
++function escapeText(text: string, autolink = false): string {
++    let out = "";
++    let at = 0;
++    if (autolink) {
++        for (const match of text.matchAll(BARE_URL)) {
++            const url = trimUrl(match[0]);
++            if (url.length <= url.indexOf("://") + 3) continue; // nothing after the scheme
++            out += escapeRange(text, at, match.index) + atom(`<${autolinkUrl(url)}>`);
++            at = match.index + url.length;
++        }
++    }
++    return out + escapeRange(text, at, text.length);
++}
++
++/** Escapes `text.slice(from, to)`; `_` looks at the neighbouring characters of the whole text. */
++function escapeRange(text: string, from: number, to: number): string {
++    let out = text.slice(from, to).replace(/[\\`*[\]<~|]/g, "\\$&");
++    out = out.replace(/&(?=#?[a-zA-Z0-9]+;)/g, "\\&");
++    out = out.replace(/_/g, (m: string, i: number, s: string) => {
++        const prev = i === 0 ? text[from - 1] : s[i - 1];
++        const next = i === s.length - 1 ? text[to] : s[i + 1];
++        return WORD.test(prev ?? "") && WORD.test(next ?? "") ? m : "\\_";
++    });
++    return out;
++}
++
++/**
++ * Escapes text at the start of a line that CommonMark would otherwise read as block syntax, and a line that a GFM
++ * renderer would read as the delimiter row of a one-column table (`:-:`, `-:`, `:-`; with a `|` it would need a raw
++ * pipe, and every pipe in text is escaped). Such a row makes the line before it a table header and cuts the
++ * paragraph there, so a backtick before the cut no longer pairs with one after it.
++ */
++function escapeLineStart(line: string): string {
++    const [, indent, rest] = /^( {0,3})([\s\S]*)$/.exec(line)!;
++    if (
++        rest.startsWith(">") ||
++        /^#{1,6}(\s|$)/.test(rest) ||
++        /^[-+*](\s|$)/.test(rest) ||
++        /^(=+|-+)\s*$/.test(rest) ||
++        /^:?-+:?\s*$/.test(rest)
++    ) {
++        return `${indent}\\${rest}`;
++    }
++    const ordered = /^(\d{1,9})([.)])(\s|$)/.exec(rest);
++    if (ordered) return `${indent}${ordered[1]}\\${rest.slice(ordered[1].length)}`;
++    return line;
++}
