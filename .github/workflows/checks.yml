@@ -38,3 +38,6 @@ jobs:
 
       - name: Hunk headers match their bodies
         run: python3 scripts/check-patch-hunks.py
+
+      - name: Copy Markdown conformance vectors match the patch
+        run: python3 scripts/check-copy-markdown-vectors.py
