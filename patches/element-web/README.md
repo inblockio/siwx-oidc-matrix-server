@@ -727,6 +727,78 @@ A tag bump must try every patch in this file's order.
     `node --test scripts/browser-eventindex-invariants.mjs` 12/12. One timing test
     (`per-flush cost ... < 10 ms`) read 12.4 ms under a 28-file parallel run and passed
     3/3 in isolation.
+- **FOURTH CARRY, 2026-10-05: E-core's review cleanup on top of the same A+B+C+D-core+E
+  content.** Same sanctioned-exception rule as the earlier carries (rule 3 above); this
+  entry is the record it requires. No new increment, no schema change, no i18n string.
+
+  - **Provenance commit: `cae2496d7c`** on
+    [`inblockio/element-web`](https://github.com/inblockio/element-web/tree/integration/web-event-index-prod-20261005),
+    branch **`integration/web-event-index-prod-20261005`** — the third carry's
+    provenance `7280a73f90` plus a clean cherry-pick of `1fde9ffe2b` ("Fix E4-F1 M21
+    fixture no-op, stale SearchWarning docstring, count over-report", the one commit on
+    `feat/web-event-index-cold-tier-core` after `c61dba1135`). `git diff 7280a73f90
+    cae2496d7c` is byte-identical to `git show 1fde9ffe2b`. Supersedes `7280a73f90`.
+    Still **not** merged into `feat/web-event-index`.
+  - **What the cleanup changes** (3 files, `+38/-12`):
+    1. **Behaviour, one line of it:** a cold-scan page's `count`, before the cold tier is
+       touched, was `hotHits.length`, the size of a snapshot that is never pruned on
+       redaction, so it over-reported once a snapshotted hit was redacted or removed. The
+       hot delivery loop's existing liveness predicate is factored into
+       `isSnapshotHitLive()` and reused for that tally, so `count` now counts only hits a
+       page could still serve. Delivery itself is unchanged (same predicate, now named).
+    2. **Test (E4-F1):** the "M21/I8 ... never exceeds the requested limit" case used
+       `chunkTargetBytes = 150`, so the chunk-boundary check always fired first and
+       mutant M21 was a no-op. One wide chunk, 10 matches, `limit` 6, asserted `=== 6`.
+    3. **Docs only (E3-F3):** `SearchWarning.tsx`'s `searchPartial` docstring and the
+       warning-branch comment no longer mention a "page cap" the manager no longer has.
+  - **How it was regenerated (the 2026-09-25 method):** pristine `v1.12.29` + entries 1-5
+    committed as the base, the old entry 6 applied (regenerating from that state with
+    `git diff --abbrev=7 -O <the patch's own file order>` reproduces the old patch
+    **byte for byte**, which proves the method), then `git diff 7280a73f90 cae2496d7c`
+    applied on top **without** `--3way` (clean, all 3 files), then re-exported the same
+    way against the 1-5 base.
+  - **Verification:**
+    - **Patch size: nineteen files, `+14910/-40`, 15339 lines** (was `+14884/-40`, 15313
+      lines; the third carry's `+14883/-39` figure was taken at v1.12.26, before the
+      tag-bump ports). Per file, the added/removed lines equal `git diff 3028880631
+      cae2496d7c` for **18 of 19** files; the 19th is the recorded tag-bump port
+      (`SearchWarning-test.tsx` -> `SearchWarning.test.tsx`, jest -> vitest), whose
+      section is **byte-identical** to the previous patch.
+    - **Old -> new patch delta is exactly the cleanup:** only the sections of the 3
+      cleanup files change; 0 context lines differ; the +/- interdiff is 12 lines gone
+      and 38 lines new, and those sets are exactly the cleanup's `-` and `+` lines. The
+      applied-tree delta is byte-identical to `git show 1fde9ffe2b`.
+    - **Apply check (rule 4 loop, fresh `--depth 1` clone of `v1.12.29`,
+      `2d90d6b7b6`):** eleven `OK` lines, one per entry, in Dockerfile order.
+    - **Gates on v1.12.29 with all eleven patches applied:** vitest **294/294**
+      (`BrowserEventIndexManager` 194, `ElectronPlatform` 47, `WebPlatform` 29,
+      `eventIndexBounds` 15, `EventIndex` 5, `PWAPlatform` 4; same total as the tag
+      bump, the cleanup changes a test rather than adding one, and the M21/I8 case
+      passes), and **48/48** (`SearchWarning` 34, `EventIndexPanel` 10,
+      `RoomSearchAuxPanel` 4, all vitest; 6/6 snapshots); `tsc --noEmit` **0 errors in
+      project sources** (7, all inside `node_modules/matrix-js-sdk`: 3 in
+      `MSC4108SignInWithQR.ts`, 4 in `embedded.ts`, as at the tag bump); `oxlint` and
+      `oxfmt --check` clean on the 3 touched files; `node --test
+      scripts/browser-eventindex-invariants.mjs` **12/12**.
+    - **Playwright `web-event-index.spec.ts` was NOT verified for this carry.** Against
+      a local `CI_PACKAGE=1` build of v1.12.29 + all eleven patches it failed 3/3 because
+      the feature never came on (the search panel offered "Use the Desktop app to search
+      encrypted messages", i.e. `supportsEventIndexing()` was false), which points at the
+      local harness (labs flag not reaching that build), not at this cleanup, which
+      touches neither the gate nor the platform wiring. Not chased within the time box;
+      the last green Playwright run (3/3) is the third carry's, on the integration
+      branch itself.
+  - **Positive bundle marker:** **`isSnapshotHitLive`**, a method name (the minifier
+    keeps method names): **3** in `bundles/<hash>/init.js` of a production
+    (minified, `pnpm --filter element-web build`) build of v1.12.29 + all eleven
+    patches, one definition plus its two call sites, and **0** possible in the current
+    (`7280a73f90`) build because the identifier does not exist anywhere in that
+    source. The cleanup adds **no string literal**, so there is no i18n or log-string
+    marker. In the same build the third-carry markers read exactly as in its table
+    (`chunkId` 27, `"chunks"` 17, `ColdScanSession` 3, `searchPartial` 8,
+    `coldTouched` 3, `isSearchPartial` 1, `maxTouchPoints` 2, `shouldCrawl` 2,
+    `manifestCeilingBytes` 2, `waitForHydration` 1, `hydrationFailure` 4,
+    `feature_web_event_index` 3, `element-eventindex` 3, `runManifestMigration` 0).
 - **Upstream status: FILED AND ACTIVELY TRACKED — we are trying to get this
   merged.** [element-hq/element-web#34718](https://github.com/element-hq/element-web/pull/34718)
   "Add a browser EventIndex so encrypted-room search works on the web"
