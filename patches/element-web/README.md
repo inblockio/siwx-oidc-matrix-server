@@ -1413,6 +1413,16 @@ A tag bump must try every patch in this file's order.
   branch `feature/ew-copy-markdown`, CM5 added on `e2e/ew-copy-markdown-cm5`, CM6 and CM7 on
   `e2e/ew-copy-markdown-cm6-cm7`), plus the two vitest suites in the patch and its conformance
   vectors.
+- **Potential follow-ups (not scheduled, 2026-10-05):** converter fidelity for crafted HTML,
+  an independent audit of the strict grammar, and a Rust SDK port of the rule. Each is
+  described in [docs/copy-markdown/README.md](../../docs/copy-markdown/README.md#potential-follow-ups)
+  and needs its own go.
+- **Related upstream defect:** [element-hq/element-web#35314](https://github.com/element-hq/element-web/issues/35314)
+  (filed 2026-10-05, not caused by this patch). The first message context menu after a page
+  load is clamped into the window before Pin and Remove are added, so it can open partly
+  below the window, and a click on an entry while it is there is lost. The e2e spec works
+  around it by settling the menu before it clicks (`settleMenu`); drop that once upstream
+  fixes the clamp.
 
 ## Runtime-stage deltas (not `.patch` files, still upstream deviations)
 
