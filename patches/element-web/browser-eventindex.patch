@@ -209,7 +209,7 @@ index 30875bd..86aa768 100644
              setWidgetPersistence(widgetId: string, roomId: string | null, val: boolean): void;
          };
 diff --git a/apps/web/src/components/views/elements/SearchWarning.tsx b/apps/web/src/components/views/elements/SearchWarning.tsx
-index 091a32e..ccff106 100644
+index 091a32e..71965de 100644
 --- a/apps/web/src/components/views/elements/SearchWarning.tsx
 +++ b/apps/web/src/components/views/elements/SearchWarning.tsx
 @@ -6,13 +6,14 @@ SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Com
@@ -238,7 +238,7 @@ index 091a32e..ccff106 100644
  /**
   * Track whether the index is still missing history that is relevant to the given search.
   *
-@@ -56,15 +60,70 @@ interface IProps {
+@@ -56,15 +60,71 @@ interface IProps {
   *
   * An all-rooms search cannot ask the per-room question, so it uses the checkpoint set alone.
   *
@@ -285,7 +285,8 @@ index 091a32e..ccff106 100644
 + *     always meant to promise: the date before which a message is genuinely not covered at all
 + *     (excluded by the crawl window or the disk budget), which is also exactly what still makes
 + *     `windowed` true. `searchPartial`: true while the most recent search's own cold-tier scan
-+ *     was cut short at the page cap rather than exhausting everything on disk for that query
++ *     was cut short -- by a wall-time budget, or simply by there being more on-disk content than
++ *     fit on this one page -- rather than exhausting everything on disk for that query
 + *     ({@link IIndexStats.isSearchPartial}), surfaced through the same "results may be
 + *     incomplete" line as `incomplete` (both mean the same thing to a user: what is on screen may
 + *     not be everything) via a one-line disjunct in {@link SearchWarning} below, not a new
@@ -311,7 +312,7 @@ index 091a32e..ccff106 100644
      const readCheckpoints = useCallback((): { relevant: boolean; anyOutstanding: boolean } => {
          if (!index) return { relevant: false, anyOutstanding: false };
          const { crawlingRooms } = index.crawlingRooms();
-@@ -80,42 +139,101 @@ function useIsIndexIncomplete(index: EventIndex | null, scope?: SearchScope, roo
+@@ -80,42 +140,101 @@ function useIsIndexIncomplete(index: EventIndex | null, scope?: SearchScope, roo
      // The checkpoint half of the answer is known synchronously, so seed from it rather than
      // rendering an unwarned search for a room we already know is being crawled.
      const [incomplete, setIncomplete] = useState<boolean>(() => readCheckpoints().relevant);
@@ -436,7 +437,7 @@ index 091a32e..ccff106 100644
          const onChangedCheckpoint = (): void => {
              void update();
          };
-@@ -125,24 +243,49 @@ function useIsIndexIncomplete(index: EventIndex | null, scope?: SearchScope, roo
+@@ -125,24 +244,50 @@ function useIsIndexIncomplete(index: EventIndex | null, scope?: SearchScope, roo
          index.on("changedCheckpoint", onChangedCheckpoint);
  
          return () => {
@@ -486,14 +487,15 @@ index 091a32e..ccff106 100644
 -        // results (#32253). Warn the user.
 -        if (indexIncomplete && kind === WarningKind.Search) {
 +        // results (#32253) -- or (increment E) the most recent search's own cold-tier scan was cut
-+        // short at the page cap, so more on-disk matches may exist than were shown. Both read the
-+        // same to a user (what's on screen may not be everything), so one line covers both rather
-+        // than a second warning.
++        // short -- by a wall-time budget, or simply by there being more on-disk content than fit on
++        // this one page -- so more on-disk matches may exist than were shown. Both read the same to
++        // a user (what's on screen may not be everything), so one line covers both rather than a
++        // second warning.
 +        if ((indexIncomplete || searchPartial) && kind === WarningKind.Search) {
              // This warning appears dynamically while a search panel is already open (the crawler
              // finishes draining mid-session), so mark it as a polite live region for screen readers.
              return (
-@@ -151,6 +294,35 @@ export default function SearchWarning({ isRoomEncrypted, kind, showLogo = true,
+@@ -151,6 +296,35 @@ export default function SearchWarning({ isRoomEncrypted, kind, showLogo = true,
                  </div>
              );
          }
@@ -997,10 +999,10 @@ index fe75a94..f9aedf6 100644
          labsGroup: LabGroup.Messaging,
 diff --git a/apps/web/src/vector/platform/BrowserEventIndexManager.test.ts b/apps/web/src/vector/platform/BrowserEventIndexManager.test.ts
 new file mode 100644
-index 0000000..5225cf8
+index 0000000..a70a991
 --- /dev/null
 +++ b/apps/web/src/vector/platform/BrowserEventIndexManager.test.ts
-@@ -0,0 +1,6643 @@
+@@ -0,0 +1,6650 @@
 +/*
 +Copyright 2026 inblock.io
 +
@@ -7628,7 +7630,12 @@ index 0000000..5225cf8
 +    });
 +
 +    it("M21/I8 (mutation campaign): a page mixing hot and cold hits never exceeds the requested limit", async () => {
-+        setChunkTargetBytesOverrideForTesting(150); // several small chunks, so one cold step finds several
++        // One generous chunk, so it alone holds more matches than `limit` (and more than the residual
++        // `need` after the hot hits) -- with review-pr-e.md's original `150`, chunks are so small that
++        // only the outer, chunk-boundary "enough hits, stop walking chunks" check ever fires, and the
++        // inner, per-record "enough hits, stop this chunk" break that M21 loosens (`need` -> `need * 2`)
++        // never gets exercised, making the mutant a no-op.
++        setChunkTargetBytesOverrideForTesting(100000);
 +        const N = 10;
 +        const limit = 6;
 +        const reloaded = await seedAndReopen(RESIDENT_BYTES_PER_EVENT_ESTIMATE * 2, N);
@@ -7638,7 +7645,9 @@ index 0000000..5225cf8
 +
 +        const page = await reloaded.searchEventIndex(search(BODY_TOKEN, { limit }));
 +        const ids = resultIds(page);
-+        expect(ids.length).toBeLessThanOrEqual(limit);
++        // N (10) exceeds `limit` (6), so a correctly-bounded page is exactly `limit` long -- not merely
++        // under it, which is what makes this assertion sensitive to the inner per-record break.
++        expect(ids.length).toBe(limit);
 +        // Genuinely mixed hot+cold on this one page, so a bound violation on either side would show.
 +        expect(ids.some((id) => resident.has(id))).toBe(true);
 +        expect(ids.some((id) => !resident.has(id))).toBe(true);
@@ -7646,10 +7655,10 @@ index 0000000..5225cf8
 +});
 diff --git a/apps/web/src/vector/platform/BrowserEventIndexManager.ts b/apps/web/src/vector/platform/BrowserEventIndexManager.ts
 new file mode 100644
-index 0000000..51aee34
+index 0000000..db41737
 --- /dev/null
 +++ b/apps/web/src/vector/platform/BrowserEventIndexManager.ts
-@@ -0,0 +1,5495 @@
+@@ -0,0 +1,5512 @@
 +/*
 +Copyright 2026 inblock.io
 +
@@ -10169,6 +10178,21 @@ index 0000000..51aee34
 +    }
 +
 +    /**
++     * True if `eventId`, a member of some {@link ColdScanSession.hotHits} snapshot, is still something a page
++     * could actually serve: not queued for a disk-delete rewrite, and still known either resident or on disk.
++     * `false` means redacted/removed since the snapshot was taken. `hotHits` holds the `StoredEvent` object
++     * itself, snapshotted at session creation, so nothing removes an entry from it when the event is later
++     * redacted -- liveness has to be re-checked here, live, against the same two structures the cold loop
++     * already checks (a genuine deletion clears both `this.events` and `this.manifest`, or queues the id in
++     * `pendingDiskDeletes` ahead of the disk rewrite that will); an id that is merely no longer resident but
++     * still on disk is still servable (E3-F2). Shared by the hot delivery loop below and by `count`'s
++     * pre-cold-tier tally, so a page can never claim (or count) more than it could actually serve.
++     */
++    private isSnapshotHitLive(eventId: string): boolean {
++        return !this.pendingDiskDeletes.has(eventId) && (this.events.has(eventId) || this.manifest.has(eventId));
++    }
++
++    /**
 +     * Deliver one page of `session`: every remaining hot hit up to `limit`, then -- if there is still room on this
 +     * page -- as many cold hits as {@link coldScanSessionStep} can find within {@link COLD_SCAN_BUDGET_MS}. Ends and
 +     * removes the session from {@link coldScanSessions} the moment both {@link ColdScanSession.hotHits} and {@link
@@ -10195,10 +10219,7 @@ index 0000000..51aee34
 +        while (session.hotPos < session.hotHits.length && pageItems.length < session.limit) {
 +            const stored = session.hotHits[session.hotPos++];
 +            if (session.returned.has(stored.eventId)) continue;
-+            if (
-+                this.pendingDiskDeletes.has(stored.eventId) ||
-+                (!this.events.has(stored.eventId) && !this.manifest.has(stored.eventId))
-+            ) {
++            if (!this.isSnapshotHitLive(stored.eventId)) {
 +                continue; // Redacted since the snapshot; a merely RAM-evicted hit stays deliverable.
 +            }
 +            session.returned.add(stored.eventId);
@@ -10241,8 +10262,13 @@ index 0000000..51aee34
 +            // meaning: the size of the whole (fixed, session-lifetime) resident result set, not a
 +            // running per-page tally -- see ColdScanSession.coldTouched's own docstring for why
 +            // switching to "known so far" only once the cold tier is actually touched never
-+            // under-reports.
-+            count: session.coldTouched ? session.returned.size : session.hotHits.length,
++            // under-reports. `hotHits` is a fixed snapshot never pruned on redaction, so a raw
++            // `.length` here would over-report once anything in it is redacted/removed; count only
++            // the members `isSnapshotHitLive` -- the same predicate the delivery loop above uses to
++            // decide what to serve -- still considers servable.
++            count: session.coldTouched
++                ? session.returned.size
++                : session.hotHits.reduce((n, h) => n + (this.isSnapshotHitLive(h.eventId) ? 1 : 0), 0),
 +            results,
 +            highlights: session.tokens,
 +            next_batch: session.exhausted ? undefined : session.token,
