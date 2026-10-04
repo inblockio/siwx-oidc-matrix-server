@@ -229,8 +229,9 @@ with `git apply`; the order is load-bearing. Registry:
     retries once. Depends on 9. UPSTREAM DEFECT.
 11. [`copy-markdown.patch`](patches/element-web/copy-markdown.patch): right-click
     "Copy Markdown", directly above Pin, copies a text message as clean CommonMark
-    + GFM converted from its HTML, or as the sender's own Markdown when Element's send
-    path proves the message was typed in Element (siwx-oidc-matrix-server#24). FEATURE,
+    + GFM converted from its HTML, or as the sender's own Markdown when the raw event
+    proves it is the source, for any sender (siwx-oidc-matrix-server#24; algorithm and
+    conformance vectors in [docs/copy-markdown](docs/copy-markdown/README.md)). FEATURE,
     upstreamable, not filed.
 
 Element Web also carries runtime deltas that are not `.patch` files: nginx caching

@@ -1,0 +1,3228 @@
+{
+    "version": 2,
+    "generated_with": {
+        "element_web": "v1.12.29",
+        "ruma_events": "0.33.0",
+        "pulldown_cmark": "0.13.4"
+    },
+    "vectors": [
+        {
+            "id": "element-cm5",
+            "note": "The CM5 status text composed in Element: heading, bold, bullets, task items, a pipe table, soft breaks, a fenced block. Element's renderer has no tables or task lists and turns each newline into a br.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "### 1. +14.3% overall, driver Alice\n\n**core-client (main, dev): replace the `../core` path dependency with a git pin on the `vX.Y.Z` tag, then redeploy**\n\n- Moves: core +57.1%. Overall after this step: 53.9%.\n- Repository: `core-client`. Kind: release.\n- Tasks:\n  - [ ] Alice: cut the first annotated `vX.Y.Z` tag of core.\n  - [ ] `core-client`: switch to a git dependency on that tag, commit Cargo.lock, open a PR.\n\n| train | driver | score | cells |\n|---|---|---|---|\n| core | Alice | 🟥🟥🚂⬜⬜🏁 42.6% | 13 |\n| client | Bob | 🚂⬜⬜⬜⬜🏁 0.0% | 7 |\n\n- `short-rev`: a `rev = \"...\"` shorter than 40 characters.\n- `url-spelling`: the git URL is spelled differently from `https://example.org/<repo>`.\n\nEvery **cell** is one (consumer, train) pair: each tracked branch that uses the\ntrain, and each deployed service that runs it.\n\n```\ncell  = max(0, value(status) - min(0.05 * flags, 0.15))\n```",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<h3>1. +14.3% overall, driver Alice</h3>\n<p><strong>core-client (main, dev): replace the <code>../core</code> path dependency with a git pin on the <code>vX.Y.Z</code> tag, then redeploy</strong></p>\n<ul>\n<li>Moves: core +57.1%. Overall after this step: 53.9%.</li>\n<li>Repository: <code>core-client</code>. Kind: release.</li>\n<li>Tasks:\n<ul>\n<li>[ ] Alice: cut the first annotated <code>vX.Y.Z</code> tag of core.</li>\n<li>[ ] <code>core-client</code>: switch to a git dependency on that tag, commit Cargo.lock, open a PR.</li>\n</ul>\n</li>\n</ul>\n<p>| train | driver | score | cells |<br>|---|---|---|---|<br>| core | Alice | 🟥🟥🚂⬜⬜🏁 42.6% | 13 |<br>| client | Bob | 🚂⬜⬜⬜⬜🏁 0.0% | 7 |</p>\n<ul>\n<li><code>short-rev</code>: a <code>rev = \"...\"</code> shorter than 40 characters.</li>\n<li><code>url-spelling</code>: the git URL is spelled differently from <code>https://example.org/&lt;repo&gt;</code>.</li>\n</ul>\n<p>Every <strong>cell</strong> is one (consumer, train) pair: each tracked branch that uses the<br>train, and each deployed service that runs it.</p>\n<pre><code>cell  = max(0, value(status) - min(0.05 * flags, 0.15))\n</code></pre>\n"
+            },
+            "strip_reply_fallback": false,
+            "expected": "### 1. +14.3% overall, driver Alice\n\n**core-client (main, dev): replace the `../core` path dependency with a git pin on the `vX.Y.Z` tag, then redeploy**\n\n- Moves: core +57.1%. Overall after this step: 53.9%.\n- Repository: `core-client`. Kind: release.\n- Tasks:\n  - [ ] Alice: cut the first annotated `vX.Y.Z` tag of core.\n  - [ ] `core-client`: switch to a git dependency on that tag, commit Cargo.lock, open a PR.\n\n| train | driver | score | cells |\n|---|---|---|---|\n| core | Alice | 🟥🟥🚂⬜⬜🏁 42.6% | 13 |\n| client | Bob | 🚂⬜⬜⬜⬜🏁 0.0% | 7 |\n\n- `short-rev`: a `rev = \"...\"` shorter than 40 characters.\n- `url-spelling`: the git URL is spelled differently from `https://example.org/<repo>`.\n\nEvery **cell** is one (consumer, train) pair: each tracked branch that uses the\ntrain, and each deployed service that runs it.\n\n```\ncell  = max(0, value(status) - min(0.05 * flags, 0.15))\n```",
+            "path": "source"
+        },
+        {
+            "id": "element-table-only",
+            "note": "A message that is only a pipe table: Element sends it as plain text (no formatted_body).",
+            "content": {
+                "msgtype": "m.text",
+                "body": "| train | driver |\n|---|---|\n| core | Alice |"
+            },
+            "strip_reply_fallback": false,
+            "expected": "| train | driver |\n|---|---|\n| core | Alice |",
+            "path": "source"
+        },
+        {
+            "id": "element-mention-table",
+            "note": "A mention pill plus a table. body has the plain name, formatted_body the matrix.to link; the copy splices the link into the body.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "Hi Alice, status below:\n\n| a | b |\n|---|---|\n| 1 | 2 |",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>Hi <a href=\"https://matrix.to/#/@alice:example.org\">Alice</a>, status below:</p>\n<p>| a | b |<br>|---|---|<br>| 1 | 2 |</p>\n"
+            },
+            "strip_reply_fallback": false,
+            "expected": "Hi [Alice](https://matrix.to/#/@alice:example.org), status below:\n\n| a | b |\n|---|---|\n| 1 | 2 |",
+            "path": "source+mentions"
+        },
+        {
+            "id": "element-mention-only",
+            "note": "A message that is only a user pill.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "Alice",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<a href=\"https://matrix.to/#/@alice:example.org\">Alice</a>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "[Alice](https://matrix.to/#/@alice:example.org)",
+            "path": "source+mentions"
+        },
+        {
+            "id": "element-mention-room",
+            "note": "A room pill: body and link text are the alias.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "see #ops:example.org for **details**",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "see <a href=\"https://matrix.to/#/#ops:example.org\">#ops:example.org</a> for <strong>details</strong>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "see [#ops:example.org](https://matrix.to/#/#ops:example.org) for **details**",
+            "path": "source+mentions"
+        },
+        {
+            "id": "element-mention-two",
+            "note": "Two pills, the second name is also a substring of an earlier word (the cursor moves past the first replacement).",
+            "content": {
+                "msgtype": "m.text",
+                "body": "Alice and Bob: Bob is *not* Alice",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<a href=\"https://matrix.to/#/@alice:example.org\">Alice</a> and <a href=\"https://matrix.to/#/@bob:example.org\">Bob</a>: Bob is <em>not</em> Alice"
+            },
+            "strip_reply_fallback": false,
+            "expected": "[Alice](https://matrix.to/#/@alice:example.org) and [Bob](https://matrix.to/#/@bob:example.org): Bob is *not* Alice",
+            "path": "source+mentions"
+        },
+        {
+            "id": "element-mention-bracket-name",
+            "note": "A display name with square brackets: the splice escapes them in the link text.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "ping [ops] Alice",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "ping <a href=\"https://matrix.to/#/@alice:example.org\">[ops] Alice</a>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "ping [\\[ops\\] Alice](https://matrix.to/#/@alice:example.org)",
+            "path": "source+mentions"
+        },
+        {
+            "id": "element-reply-plain",
+            "note": "An Element reply (legacy fallback) with a plain text answer: Element forces HTML on a reply.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "> <@bob:example.org> the original text\n\nsounds good",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<mx-reply><blockquote><a href=\"https://matrix.to/#/!room:example.org/$orig:example.org\">In reply to</a> <a href=\"https://matrix.to/#/@bob:example.org\">@bob:example.org</a><br>the original text</blockquote></mx-reply>sounds good",
+                "m.relates_to": {
+                    "m.in_reply_to": {
+                        "event_id": "$orig:example.org"
+                    }
+                }
+            },
+            "strip_reply_fallback": true,
+            "expected": "sounds good",
+            "path": "source"
+        },
+        {
+            "id": "element-reply-markdown",
+            "note": "An Element reply with Markdown, a list and a pipe table. The fallback is removed from body and formatted_body.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "> <@bob:example.org> the original text\n\n**Plan**\n\n- one\n- two\n\n| a | b |\n|---|---|\n| 1 | 2 |",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<mx-reply><blockquote><a href=\"https://matrix.to/#/!room:example.org/$orig:example.org\">In reply to</a> <a href=\"https://matrix.to/#/@bob:example.org\">@bob:example.org</a><br>the original text</blockquote></mx-reply><p><strong>Plan</strong></p>\n<ul>\n<li>one</li>\n<li>two</li>\n</ul>\n<p>| a | b |<br>|---|---|<br>| 1 | 2 |</p>\n",
+                "m.relates_to": {
+                    "m.in_reply_to": {
+                        "event_id": "$orig:example.org"
+                    }
+                }
+            },
+            "strip_reply_fallback": true,
+            "expected": "**Plan**\n\n- one\n- two\n\n| a | b |\n|---|---|\n| 1 | 2 |",
+            "path": "source"
+        },
+        {
+            "id": "element-reply-mention",
+            "note": "An Element reply with a mention: the matrix.to links of the fallback are not pills.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "> <@bob:example.org> the original text\n\nthanks Alice",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<mx-reply><blockquote><a href=\"https://matrix.to/#/!room:example.org/$orig:example.org\">In reply to</a> <a href=\"https://matrix.to/#/@bob:example.org\">@bob:example.org</a><br>the original text</blockquote></mx-reply>thanks <a href=\"https://matrix.to/#/@alice:example.org\">Alice</a>",
+                "m.relates_to": {
+                    "m.in_reply_to": {
+                        "event_id": "$orig:example.org"
+                    }
+                }
+            },
+            "strip_reply_fallback": true,
+            "expected": "thanks [Alice](https://matrix.to/#/@alice:example.org)",
+            "path": "source+mentions"
+        },
+        {
+            "id": "element-reply-fallback-only-formatted",
+            "note": "A reply whose body is plain but whose formatted_body is only the fallback plus the same text.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "> <@bob:example.org> the original text\n\nok",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<mx-reply><blockquote><a href=\"https://matrix.to/#/!room:example.org/$orig:example.org\">In reply to</a> <a href=\"https://matrix.to/#/@bob:example.org\">@bob:example.org</a><br>the original text</blockquote></mx-reply>ok",
+                "m.relates_to": {
+                    "m.in_reply_to": {
+                        "event_id": "$orig:example.org"
+                    }
+                }
+            },
+            "strip_reply_fallback": true,
+            "expected": "ok",
+            "path": "source"
+        },
+        {
+            "id": "element-edit",
+            "note": "An edit: content is the m.new_content of the replacement, without the star prefix.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "**t**\n\n| a | b |\n|---|---|\n| 1 | 2 |",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p><strong>t</strong></p>\n<p>| a | b |<br>|---|---|<br>| 1 | 2 |</p>\n"
+            },
+            "strip_reply_fallback": false,
+            "expected": "**t**\n\n| a | b |\n|---|---|\n| 1 | 2 |",
+            "path": "source"
+        },
+        {
+            "id": "element-plain-backslash",
+            "note": "Text with a backslash escape: Element sends the unescaped text as formatted_body.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "a\\*b and 2 \\< 3",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "a*b and 2 &lt; 3"
+            },
+            "strip_reply_fallback": false,
+            "expected": "a\\*b and 2 \\< 3",
+            "path": "source"
+        },
+        {
+            "id": "element-lists-nested",
+            "note": "Nested bullet and ordered lists, with a start number.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "- one\n  - nested a\n  - nested b\n- two\n\n3. third\n4. fourth",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<ul>\n<li>one\n<ul>\n<li>nested a</li>\n<li>nested b</li>\n</ul>\n</li>\n<li>two</li>\n</ul>\n<ol start=\"3\">\n<li>third</li>\n<li>fourth</li>\n</ol>\n"
+            },
+            "strip_reply_fallback": false,
+            "expected": "- one\n  - nested a\n  - nested b\n- two\n\n3. third\n4. fourth",
+            "path": "source"
+        },
+        {
+            "id": "element-code-fence",
+            "note": "A fenced block with an info string, and an inline code span.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "Run `make test`:\n\n```js\nconst x = 1;\nconsole.log(x);\n```",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>Run <code>make test</code>:</p>\n<pre><code class=\"language-js\">const x = 1;\nconsole.log(x);\n</code></pre>\n"
+            },
+            "strip_reply_fallback": false,
+            "expected": "Run `make test`:\n\n```js\nconst x = 1;\nconsole.log(x);\n```",
+            "path": "source"
+        },
+        {
+            "id": "element-heading-quote-hr",
+            "note": "Setext and ATX headings, a quote and a thematic break.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "Title\n=====\n\n## Sub\n\n> quoted\n> more\n\n---\n\nend",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<h1>Title</h1>\n<h2>Sub</h2>\n<blockquote>\n<p>quoted<br>more</p>\n</blockquote>\n<hr>\n<p>end</p>\n"
+            },
+            "strip_reply_fallback": false,
+            "expected": "Title\n=====\n\n## Sub\n\n> quoted\n> more\n\n---\n\nend",
+            "path": "source"
+        },
+        {
+            "id": "element-softbreaks",
+            "note": "Several lines in one paragraph and a hard break: every newline is a br in Element's HTML.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "line **one**\nline two  \nline three\n\nnext paragraph",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>line <strong>one</strong><br>line two<br>\nline three</p>\n<p>next paragraph</p>\n"
+            },
+            "strip_reply_fallback": false,
+            "expected": "line **one**\nline two  \nline three\n\nnext paragraph",
+            "path": "source"
+        },
+        {
+            "id": "element-escapes",
+            "note": "Escaped markup characters stay as typed.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "not \\*emphasis\\*, not \\[a link\\](x), a snake_case_name and 5 \\* 3",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "not *emphasis*, not [a link](x), a snake_case_name and 5 * 3"
+            },
+            "strip_reply_fallback": false,
+            "expected": "not \\*emphasis\\*, not \\[a link\\](x), a snake_case_name and 5 \\* 3",
+            "path": "source"
+        },
+        {
+            "id": "element-links",
+            "note": "A link, an autolink and a link with a non-ASCII destination.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "[docs](https://example.org/docs) and <https://example.org/a_b> and [menu](https://example.org/café)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<a href=\"https://example.org/docs\">docs</a> and <a href=\"https://example.org/a_b\">https://example.org/a_b</a> and <a href=\"https://example.org/caf%C3%A9\">menu</a>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "[docs](https://example.org/docs) and <https://example.org/a_b> and [menu](https://example.org/café)",
+            "path": "source"
+        },
+        {
+            "id": "element-image-mxc",
+            "note": "An mxc image is allowed.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "![diagram](mxc://example.org/AbCdEf123)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<img src=\"mxc://example.org/AbCdEf123\" alt=\"diagram\">"
+            },
+            "strip_reply_fallback": false,
+            "expected": "![diagram](mxc://example.org/AbCdEf123)",
+            "path": "source"
+        },
+        {
+            "id": "element-image-http",
+            "note": "An http image: equal to the body, but not safe, so the converter runs (it drops the image).",
+            "content": {
+                "msgtype": "m.text",
+                "body": "see ![remote](https://example.org/i.png) here",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "see <img src=\"https://example.org/i.png\" alt=\"remote\"> here"
+            },
+            "strip_reply_fallback": false,
+            "expected": "see  here",
+            "path": "converter"
+        },
+        {
+            "id": "element-js-link",
+            "note": "A javascript: link: equal to the body, not safe.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "[click](javascript:alert(1)) now",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<a href=\"javascript:alert(1)\">click</a> now"
+            },
+            "strip_reply_fallback": false,
+            "expected": "click now",
+            "path": "converter"
+        },
+        {
+            "id": "element-raw-html-allowed",
+            "note": "Raw HTML that Element lets through (u): the body holds HTML, so it is never copied as source.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "**b** <u>x</u>",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<strong>b</strong> <u>x</u>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "**b** x",
+            "path": "converter"
+        },
+        {
+            "id": "element-raw-html-escaped",
+            "note": "Raw HTML that Element escapes (b): the displayed text is the tag, the body holds raw HTML.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "**b** <b>x</b>",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<strong>b</strong> &lt;b&gt;x&lt;/b&gt;"
+            },
+            "strip_reply_fallback": false,
+            "expected": "**b** \\<b>x\\</b>",
+            "path": "converter"
+        },
+        {
+            "id": "element-latex-on-inline",
+            "note": "The sender had latex maths ON: inline maths is rendered as a data-mx-maths span, so the converter runs.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "Euler: $e^{i\\pi}=-1$ holds",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "Euler: <span data-mx-maths=\"e^{i\\pi}=-1\"><code>e^{i\\pi}=-1</code></span> holds"
+            },
+            "strip_reply_fallback": false,
+            "expected": "Euler: $e^{i\\pi}=-1$ holds",
+            "path": "converter"
+        },
+        {
+            "id": "element-latex-on-display",
+            "note": "The sender had latex maths ON: display maths is a data-mx-maths div.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "Before\n\n$$\n\\int_0^1 x\\,dx\n$$\n\nAfter",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>Before</p>\n<div data-mx-maths=\"\n\\int_0^1 x\\,dx\n\"><code>\n\\int_0^1 x\\,dx\n</code></div>\n<p>After</p>\n"
+            },
+            "strip_reply_fallback": false,
+            "expected": "Before\n\n$$\n    \\int_0^1 x\\,dx\n$$\n\nAfter",
+            "path": "converter"
+        },
+        {
+            "id": "element-latex-off-same-body",
+            "note": "The same body as element-latex-on-inline, sent with latex maths OFF: the dollar signs are text and the body is the source. The result depends on the sender's event only.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "Euler: $e^{i\\pi}=-1$ holds",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "Euler: $e^{i\\pi}=-1$ holds"
+            },
+            "strip_reply_fallback": false,
+            "expected": "Euler: $e^{i\\pi}=-1$ holds",
+            "path": "source"
+        },
+        {
+            "id": "adv-gfm-cell-codespan",
+            "note": "A pipe inside a code span followed by a delimiter row: a GFM table cuts the span open and exposes a tag.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "a `x | <b>y</b>` z\n-|-",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "a <code>x | &lt;b&gt;y&lt;/b&gt;</code> z<br>-|-"
+            },
+            "strip_reply_fallback": false,
+            "expected": "a `x | <b>y</b>` z\\\n-\\|-",
+            "path": "converter"
+        },
+        {
+            "id": "adv-gfm-cell-no-pipe-row",
+            "note": "A GFM row without a pipe is a one-cell row: its tag is exposed once a table cuts the code span.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "a | `b\n-|-\n<b>c</b>`",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "a | <code>b -|- &lt;b&gt;c&lt;/b&gt;</code>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "a \\| `b -|- <b>c</b>`",
+            "path": "converter"
+        },
+        {
+            "id": "residual-element-url-emphasis",
+            "note": "Residual: Element's repairLinks rewrites emphasis inside a bare URL to literal underscores, so the HTML has text where the body parses as emphasis. Falls back to the converter.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "**bold** then https://a.example/*x*/y now",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<strong>bold</strong> then https://a.example/_x_/y now"
+            },
+            "strip_reply_fallback": false,
+            "expected": "**bold** then <https://a.example/_x_/y> now",
+            "path": "converter"
+        },
+        {
+            "id": "residual-element-backslash-multiline",
+            "note": "Residual: plain text with a backslash over two lines. Element sends the text with a newline (no br), which canonicalises to a space.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "a\\*b\nsecond line",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "a*b\nsecond line"
+            },
+            "strip_reply_fallback": false,
+            "expected": "a\\*b second line",
+            "path": "converter"
+        },
+        {
+            "id": "residual-element-list-item-two-paragraphs",
+            "note": "Residual: when the whole message is one list, Element drops the p tags of a loose item and runs its paragraphs together.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "- first paragraph\n\n  second paragraph\n- other",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<ul>\n<li>first paragraphsecond paragraph</li>\n<li>other</li>\n</ul>\n"
+            },
+            "strip_reply_fallback": false,
+            "expected": "- first paragraphsecond paragraph\n- other",
+            "path": "converter"
+        },
+        {
+            "id": "residual-element-table-excess-cell",
+            "note": "Residual: a table row with more cells than its header. A Markdown source drops the excess cell, Element's text shows it, and a cell the body does not match is never hidden, so the converter runs.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "**t**\n\n| a | b |\n|---|---|\n| 1 | 2 | 3 |\n| 4 |",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p><strong>t</strong></p>\n<p>| a | b |<br>|---|---|<br>| 1 | 2 | 3 |<br>| 4 |</p>\n"
+            },
+            "strip_reply_fallback": false,
+            "expected": "**t**\n\n\\| a \\| b \\|\\\n\\|---\\|---\\|\\\n\\| 1 \\| 2 \\| 3 \\|\\\n\\| 4 \\|",
+            "path": "converter"
+        },
+        {
+            "id": "plain-markdown",
+            "note": "A plain body (an SDK agent sending Markdown with no formatted_body) is the source when safe.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "**Done**: 3 of 4\n\n- build `ok`\n- tests `ok`\n\n| a | b |\n|---|---|\n| 1 | 2 |"
+            },
+            "strip_reply_fallback": false,
+            "expected": "**Done**: 3 of 4\n\n- build `ok`\n- tests `ok`\n\n| a | b |\n|---|---|\n| 1 | 2 |",
+            "path": "source"
+        },
+        {
+            "id": "plain-snake-case",
+            "note": "Underscores and a lone asterisk.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "use snake_case_name and a * b here"
+            },
+            "strip_reply_fallback": false,
+            "expected": "use snake_case_name and a * b here",
+            "path": "source"
+        },
+        {
+            "id": "plain-url",
+            "note": "A bare URL.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "https://matrix.org/_matrix/client/versions"
+            },
+            "strip_reply_fallback": false,
+            "expected": "https://matrix.org/_matrix/client/versions",
+            "path": "source"
+        },
+        {
+            "id": "plain-pipe",
+            "note": "A pipe in text.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "a|b and c | d"
+            },
+            "strip_reply_fallback": false,
+            "expected": "a|b and c | d",
+            "path": "source"
+        },
+        {
+            "id": "plain-trailing-whitespace",
+            "note": "Trailing whitespace and newlines are not part of the copy.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "hello  \n\n \n"
+            },
+            "strip_reply_fallback": false,
+            "expected": "hello",
+            "path": "source"
+        },
+        {
+            "id": "plain-leading-indent",
+            "note": "A leading indent is kept as typed.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "    indented"
+            },
+            "strip_reply_fallback": false,
+            "expected": "    indented",
+            "path": "source"
+        },
+        {
+            "id": "plain-reply",
+            "note": "A plain reply (no formatted_body): the fallback lines and the empty line after them are removed.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "> <@bob:example.org> the original text\n\nsnake_case_name",
+                "m.relates_to": {
+                    "m.in_reply_to": {
+                        "event_id": "$orig:example.org"
+                    }
+                }
+            },
+            "strip_reply_fallback": true,
+            "expected": "snake_case_name",
+            "path": "source"
+        },
+        {
+            "id": "plain-not-a-reply-quote",
+            "note": "A body that starts with a quote line is NOT stripped when the event is not a reply.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "> a quote\n\nand a comment"
+            },
+            "strip_reply_fallback": false,
+            "expected": "> a quote\n\nand a comment",
+            "path": "source"
+        },
+        {
+            "id": "plain-raw-html",
+            "note": "Raw HTML in a plain body: escaped text.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "2*3*4 and <b>not bold</b>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "2\\*3\\*4 and \\<b>not bold\\</b>",
+            "path": "escaped"
+        },
+        {
+            "id": "plain-js-link",
+            "note": "A javascript: link in a plain body.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "[x](javascript:alert(1)) and more"
+            },
+            "strip_reply_fallback": false,
+            "expected": "\\[x\\](javascript:alert(1)) and more",
+            "path": "escaped"
+        },
+        {
+            "id": "plain-http-image",
+            "note": "An http image in a plain body.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "![t](https://example.org/t.png) here"
+            },
+            "strip_reply_fallback": false,
+            "expected": "!\\[t\\](<https://example.org/t.png>) here",
+            "path": "escaped"
+        },
+        {
+            "id": "plain-html-comment",
+            "note": "An HTML comment.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "a <!-- hidden --> b"
+            },
+            "strip_reply_fallback": false,
+            "expected": "a \\<!-- hidden --> b",
+            "path": "escaped"
+        },
+        {
+            "id": "plain-gfm-cell-codespan",
+            "note": "CodeRabbit case 1 as a plain body: a pipe cuts a code span open in a GFM table.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "a `x | <b>y</b>` z\n-|-"
+            },
+            "strip_reply_fallback": false,
+            "expected": "a \\`x \\| \\<b>y\\</b>\\` z\\\n-\\|-",
+            "path": "escaped"
+        },
+        {
+            "id": "plain-gfm-cell-no-pipe-row",
+            "note": "CodeRabbit case 2 as a plain body: a no-pipe row is a one-cell row.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "a | `b\n-|-\n<b>c</b>`"
+            },
+            "strip_reply_fallback": false,
+            "expected": "a \\| \\`b\\\n-\\|-\\\n\\<b>c\\</b>\\`",
+            "path": "escaped"
+        },
+        {
+            "id": "plain-blank",
+            "note": "A blank body has nothing to copy.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "  \n "
+            },
+            "strip_reply_fallback": false,
+            "expected": "",
+            "path": "escaped"
+        },
+        {
+            "id": "plain-format-without-body-html",
+            "note": "format says HTML and formatted_body is whitespace only: that is HTML in Element (truthy), it displays nothing, so the copy is empty (spec B9; before v2.2 this was a plain message).",
+            "content": {
+                "msgtype": "m.text",
+                "body": "snake_case_name",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "   "
+            },
+            "strip_reply_fallback": false,
+            "expected": "",
+            "path": "converter"
+        },
+        {
+            "id": "plain-format-other",
+            "note": "formatted_body with an unknown format is ignored: a plain message.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "**kept**",
+                "format": "org.example.other",
+                "formatted_body": "<b>ignored</b>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "**kept**",
+            "path": "source"
+        },
+        {
+            "id": "plain-emote",
+            "note": "msgtype does not matter.",
+            "content": {
+                "msgtype": "m.emote",
+                "body": "waves *hello*"
+            },
+            "strip_reply_fallback": false,
+            "expected": "waves *hello*",
+            "path": "source"
+        },
+        {
+            "id": "plain-nonbreaking-space",
+            "note": "A no-break space is kept.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "a b c"
+            },
+            "strip_reply_fallback": false,
+            "expected": "a b c",
+            "path": "source"
+        },
+        {
+            "id": "plain-emoji-cjk",
+            "note": "Non-ASCII text.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "中文 🎉 done"
+            },
+            "strip_reply_fallback": false,
+            "expected": "中文 🎉 done",
+            "path": "source"
+        },
+        {
+            "id": "rte-bold-italic",
+            "note": "Rich text editor: the body is the plain text of the formatting, so it cannot be the source.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "Hello bold and italic",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "Hello <strong>bold</strong> and <em>italic</em>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "Hello **bold** and *italic*",
+            "path": "converter"
+        },
+        {
+            "id": "rte-list",
+            "note": "Rich text editor: a list whose body is a flat text.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "Items one two",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "Items<ul><li>one</li><li>two</li></ul>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "Items\n\n- one\n- two",
+            "path": "converter"
+        },
+        {
+            "id": "rte-link",
+            "note": "Rich text editor: a link whose body is the bare text.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "open the docs",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "open the <a href=\"https://example.org/docs\">docs</a>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "open the [docs](https://example.org/docs)",
+            "path": "converter"
+        },
+        {
+            "id": "adv-extra-link",
+            "note": "The HTML has a link the body does not.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "see the docs",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "see the <a href=\"https://evil.example/x\">docs</a>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "see the [docs](https://evil.example/x)",
+            "path": "converter"
+        },
+        {
+            "id": "adv-extra-text",
+            "note": "The HTML shows a second paragraph the body does not hold.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "hello",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>hello</p><p>and a second paragraph</p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "hello\n\nand a second paragraph",
+            "path": "converter"
+        },
+        {
+            "id": "adv-different-code",
+            "note": "Same words, different code.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "run `ls -la` first",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "run <code>rm -rf x</code> first"
+            },
+            "strip_reply_fallback": false,
+            "expected": "run `rm -rf x` first",
+            "path": "converter"
+        },
+        {
+            "id": "adv-different-emphasis",
+            "note": "Same text, but the body is emphasis and the HTML is strong.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "this is *important*",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "this is <strong>important</strong>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "this is **important**",
+            "path": "converter"
+        },
+        {
+            "id": "adv-different-href",
+            "note": "Same link text, a different destination.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "[docs](https://example.org/docs)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<a href=\"https://evil.example/docs\">docs</a>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "[docs](https://evil.example/docs)",
+            "path": "converter"
+        },
+        {
+            "id": "adv-different-image",
+            "note": "Same alt text, a different image source.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "![a](mxc://example.org/one)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<img src=\"mxc://example.org/two\" alt=\"a\">"
+            },
+            "strip_reply_fallback": false,
+            "expected": "![a](mxc://example.org/two)",
+            "path": "converter"
+        },
+        {
+            "id": "adv-different-list-start",
+            "note": "A different list start number.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "3. a\n4. b",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<ol start=\"7\"><li>a</li><li>b</li></ol>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "7. a\n8. b",
+            "path": "converter"
+        },
+        {
+            "id": "adv-different-text",
+            "note": "One word differs.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "deploy to staging",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>deploy to production</p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "deploy to production",
+            "path": "converter"
+        },
+        {
+            "id": "adv-hidden-script",
+            "note": "A script element holds text the body also has: scripts are never displayed.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "hello alert(1)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "hello <script>alert(1)</script>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "hello",
+            "path": "converter"
+        },
+        {
+            "id": "adv-equal-raw-html",
+            "note": "A body that holds raw HTML which the HTML repeats as elements.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "<b>x</b> and <i>y</i>",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<b>x</b> and <i>y</i>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "**x** and *y*",
+            "path": "converter"
+        },
+        {
+            "id": "adv-equal-unsafe-link",
+            "note": "Body and HTML agree on a link whose scheme Element does not permit.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "[x](javascript:alert(1))",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<a href=\"javascript:alert(1)\">x</a>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "x",
+            "path": "converter"
+        },
+        {
+            "id": "adv-mention-wrong-name",
+            "note": "A pill whose name is not in the body: no candidate.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "hi Bob",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "hi <a href=\"https://matrix.to/#/@alice:example.org\">Alice</a>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "hi [Alice](https://matrix.to/#/@alice:example.org)",
+            "path": "converter"
+        },
+        {
+            "id": "adv-mention-paren-href",
+            "note": "A pill href with a parenthesis: no candidate.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "hi Alice",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "hi <a href=\"https://matrix.to/#/@alice:example.org/(x)\">Alice</a>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "hi [Alice](https://matrix.to/#/@alice:example.org/%28x%29)",
+            "path": "converter"
+        },
+        {
+            "id": "adv-mention-not-matrix-to",
+            "note": "A link that looks like a pill but is not on matrix.to: no candidate.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "hi Alice",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "hi <a href=\"https://evil.example/#/@alice:example.org\">Alice</a>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "hi [Alice](https://evil.example/#/@alice:example.org)",
+            "path": "converter"
+        },
+        {
+            "id": "adv-mention-extra-link",
+            "note": "A pill plus a second, ordinary link the body does not hold.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "hi Alice see docs",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "hi <a href=\"https://matrix.to/#/@alice:example.org\">Alice</a> see <a href=\"https://evil.example/\">docs</a>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "hi [Alice](https://matrix.to/#/@alice:example.org) see [docs](https://evil.example/)",
+            "path": "converter"
+        },
+        {
+            "id": "adv-mention-splice-accepted",
+            "note": "The splice is allowed to wrap any word the HTML links to a matrix.to target, since the copy shows exactly that.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "click here",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<a href=\"https://matrix.to/#/@x:example.org\">click</a> here"
+            },
+            "strip_reply_fallback": false,
+            "expected": "[click](https://matrix.to/#/@x:example.org) here",
+            "path": "source+mentions"
+        },
+        {
+            "id": "adv-body-not-string",
+            "note": "A body that is not a string: there is no source.",
+            "content": {
+                "msgtype": "m.text",
+                "body": 5,
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>hello</p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "hello",
+            "path": "converter"
+        },
+        {
+            "id": "ruma-F1",
+            "note": "A status report: heading, bold, bullets, task-like items, a table, soft breaks, a fenced block.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "### 1. +14.3% overall, driver Alice\n\n**core-client (main, dev): replace the `../core` path dependency with a git pin on the `vX.Y.Z` tag, then redeploy**\n\n- Moves: core +57.1%. Overall after this step: 53.9%.\n- Repository: `core-client`. Kind: release.\n- Tasks:\n  - [ ] Alice: cut the first annotated `vX.Y.Z` tag of core.\n  - [ ] `core-client`: switch to a git dependency on that tag, commit Cargo.lock, open a PR.\n\n| train | driver | score | cells |\n|---|---|---|---|\n| core | Alice | 🟥🟥🚂⬜⬜🏁 42.6% | 13 |\n| client | Bob | 🚂⬜⬜⬜⬜🏁 0.0% | 7 |\n\n- `short-rev`: a `rev = \"...\"` shorter than 40 characters.\n- `url-spelling`: the git URL is spelled differently from `https://example.org/<repo>`.\n\nEvery **cell** is one (consumer, train) pair: each tracked branch that uses the\ntrain, and each deployed service that runs it.\n\n```\ncell  = max(0, value(status) - min(0.05 * flags, 0.15))\n```",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<h3>1. +14.3% overall, driver Alice</h3>\n<p><strong>core-client (main, dev): replace the <code>../core</code> path dependency with a git pin on the <code>vX.Y.Z</code> tag, then redeploy</strong></p>\n<ul>\n<li>Moves: core +57.1%. Overall after this step: 53.9%.</li>\n<li>Repository: <code>core-client</code>. Kind: release.</li>\n<li>Tasks:\n<ul>\n<li>[ ] Alice: cut the first annotated <code>vX.Y.Z</code> tag of core.</li>\n<li>[ ] <code>core-client</code>: switch to a git dependency on that tag, commit Cargo.lock, open a PR.</li>\n</ul>\n</li>\n</ul>\n<table><thead><tr><th>train</th><th>driver</th><th>score</th><th>cells</th></tr></thead><tbody>\n<tr><td>core</td><td>Alice</td><td>🟥🟥🚂⬜⬜🏁 42.6%</td><td>13</td></tr>\n<tr><td>client</td><td>Bob</td><td>🚂⬜⬜⬜⬜🏁 0.0%</td><td>7</td></tr>\n</tbody></table>\n<ul>\n<li><code>short-rev</code>: a <code>rev = \"...\"</code> shorter than 40 characters.</li>\n<li><code>url-spelling</code>: the git URL is spelled differently from <code>https://example.org/&lt;repo&gt;</code>.</li>\n</ul>\n<p>Every <strong>cell</strong> is one (consumer, train) pair: each tracked branch that uses the<br />\ntrain, and each deployed service that runs it.</p>\n<pre><code>cell  = max(0, value(status) - min(0.05 * flags, 0.15))\n</code></pre>\n"
+            },
+            "strip_reply_fallback": false,
+            "expected": "### 1. +14.3% overall, driver Alice\n\n**core-client (main, dev): replace the `../core` path dependency with a git pin on the `vX.Y.Z` tag, then redeploy**\n\n- Moves: core +57.1%. Overall after this step: 53.9%.\n- Repository: `core-client`. Kind: release.\n- Tasks:\n  - [ ] Alice: cut the first annotated `vX.Y.Z` tag of core.\n  - [ ] `core-client`: switch to a git dependency on that tag, commit Cargo.lock, open a PR.\n\n| train | driver | score | cells |\n|---|---|---|---|\n| core | Alice | 🟥🟥🚂⬜⬜🏁 42.6% | 13 |\n| client | Bob | 🚂⬜⬜⬜⬜🏁 0.0% | 7 |\n\n- `short-rev`: a `rev = \"...\"` shorter than 40 characters.\n- `url-spelling`: the git URL is spelled differently from `https://example.org/<repo>`.\n\nEvery **cell** is one (consumer, train) pair: each tracked branch that uses the\ntrain, and each deployed service that runs it.\n\n```\ncell  = max(0, value(status) - min(0.05 * flags, 0.15))\n```",
+            "path": "source"
+        },
+        {
+            "id": "ruma-F2",
+            "note": "A table and nothing else.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "| train | driver | score | cells |\n|---|---|---|---|\n| core | Alice | 42.6% | 13 |\n| client | Bob | 0.0% | 7 |",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<table><thead><tr><th>train</th><th>driver</th><th>score</th><th>cells</th></tr></thead><tbody>\n<tr><td>core</td><td>Alice</td><td>42.6%</td><td>13</td></tr>\n<tr><td>client</td><td>Bob</td><td>0.0%</td><td>7</td></tr>\n</tbody></table>\n"
+            },
+            "strip_reply_fallback": false,
+            "expected": "| train | driver | score | cells |\n|---|---|---|---|\n| core | Alice | 42.6% | 13 |\n| client | Bob | 0.0% | 7 |",
+            "path": "source"
+        },
+        {
+            "id": "ruma-F3",
+            "note": "Headings, soft breaks, bullets, a table with code and a link, a fenced block, a quote, an ordered list.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "# Weekly status report\n\nSummary of the build and deploy state for the sample project.\n\n## Findings\n\nThe nightly run finished without errors.\nTwo services restarted after the config change.\nNo data was lost.\n\n- **core-client**: pinned to `v1.2.3`\n- **sample-bot**: needs `cargo update -p sample-lib`\n- Plain item without markup\n\n| service | state | notes |\n|---|---|---|\n| `core-client` | ok | see [docs](https://example.org/docs) |\n| `sample-bot` | stale | run `make deploy` |\n\n```rust\nfn main() {\n    println!(\"hello | world\");\n}\n```\n\n> Quoted advice: restart only after the backup finished.\n\n1. Cut the tag.\n2. Update the pin.\n3. Redeploy.",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<h1>Weekly status report</h1>\n<p>Summary of the build and deploy state for the sample project.</p>\n<h2>Findings</h2>\n<p>The nightly run finished without errors.<br />\nTwo services restarted after the config change.<br />\nNo data was lost.</p>\n<ul>\n<li><strong>core-client</strong>: pinned to <code>v1.2.3</code></li>\n<li><strong>sample-bot</strong>: needs <code>cargo update -p sample-lib</code></li>\n<li>Plain item without markup</li>\n</ul>\n<table><thead><tr><th>service</th><th>state</th><th>notes</th></tr></thead><tbody>\n<tr><td><code>core-client</code></td><td>ok</td><td>see <a href=\"https://example.org/docs\">docs</a></td></tr>\n<tr><td><code>sample-bot</code></td><td>stale</td><td>run <code>make deploy</code></td></tr>\n</tbody></table>\n<pre><code class=\"language-rust\">fn main() {\n    println!(\"hello | world\");\n}\n</code></pre>\n<blockquote>\n<p>Quoted advice: restart only after the backup finished.</p>\n</blockquote>\n<ol>\n<li>Cut the tag.</li>\n<li>Update the pin.</li>\n<li>Redeploy.</li>\n</ol>\n"
+            },
+            "strip_reply_fallback": false,
+            "expected": "# Weekly status report\n\nSummary of the build and deploy state for the sample project.\n\n## Findings\n\nThe nightly run finished without errors.\nTwo services restarted after the config change.\nNo data was lost.\n\n- **core-client**: pinned to `v1.2.3`\n- **sample-bot**: needs `cargo update -p sample-lib`\n- Plain item without markup\n\n| service | state | notes |\n|---|---|---|\n| `core-client` | ok | see [docs](https://example.org/docs) |\n| `sample-bot` | stale | run `make deploy` |\n\n```rust\nfn main() {\n    println!(\"hello | world\");\n}\n```\n\n> Quoted advice: restart only after the backup finished.\n\n1. Cut the tag.\n2. Update the pin.\n3. Redeploy.",
+            "path": "source"
+        },
+        {
+            "id": "ruma-F4",
+            "note": "A line that CommonMark reads as the start of an ordered list inside a paragraph.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "Plan for today\n1. first thing is not a list\nuse snake_case_name and a * b here",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>Plan for today</p>\n<ol>\n<li>first thing is not a list<br />\nuse snake_case_name and a * b here</li>\n</ol>\n"
+            },
+            "strip_reply_fallback": false,
+            "expected": "Plan for today\n1. first thing is not a list\nuse snake_case_name and a * b here",
+            "path": "source"
+        },
+        {
+            "id": "ruma-F4b",
+            "note": "The same with a start number other than 1: ruma sends no formatted_body.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "Plan for today\n2. second thing is not a list\nuse snake_case_name and a * b here"
+            },
+            "strip_reply_fallback": false,
+            "expected": "Plan for today\n2. second thing is not a list\nuse snake_case_name and a * b here",
+            "path": "source"
+        },
+        {
+            "id": "ruma-F5",
+            "note": "Strikethrough with ~~, a bare URL and an ampersand.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "This is ~~struck out~~ text.\nSee https://example.org/a_b/c?x=1&y=2 for details.",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "This is <del>struck out</del> text.<br />\nSee https://example.org/a_b/c?x=1&amp;y=2 for details."
+            },
+            "strip_reply_fallback": false,
+            "expected": "This is ~~struck out~~ text.\nSee https://example.org/a_b/c?x=1&y=2 for details.",
+            "path": "source"
+        },
+        {
+            "id": "ruma-strike",
+            "note": "ruma renders ~~x~~ as del; the body keeps the tildes.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "Deploy ~~postponed~~ **done** today.",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "Deploy <del>postponed</del> <strong>done</strong> today."
+            },
+            "strip_reply_fallback": false,
+            "expected": "Deploy ~~postponed~~ **done** today.",
+            "path": "source"
+        },
+        {
+            "id": "ruma-tasklist",
+            "note": "ruma renders task items as plain bracket text.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "Checklist:\n\n- [x] write the spec\n- [ ] write the code\n- [ ] ship it",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>Checklist:</p>\n<ul>\n<li>[x] write the spec</li>\n<li>[ ] write the code</li>\n<li>[ ] ship it</li>\n</ul>\n"
+            },
+            "strip_reply_fallback": false,
+            "expected": "Checklist:\n\n- [x] write the spec\n- [ ] write the code\n- [ ] ship it",
+            "path": "source"
+        },
+        {
+            "id": "ruma-lists-tight",
+            "note": "Tight lists: li without p.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "- one\n- two\n- three\n\n1. first\n1. second",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<ul>\n<li>one</li>\n<li>two</li>\n<li>three</li>\n</ul>\n<ol>\n<li>first</li>\n<li>second</li>\n</ol>\n"
+            },
+            "strip_reply_fallback": false,
+            "expected": "- one\n- two\n- three\n\n1. first\n1. second",
+            "path": "source"
+        },
+        {
+            "id": "ruma-lists-loose",
+            "note": "A loose list: li holds a p.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "- one\n\n- two\n\n- three",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<ul>\n<li>\n<p>one</p>\n</li>\n<li>\n<p>two</p>\n</li>\n<li>\n<p>three</p>\n</li>\n</ul>\n"
+            },
+            "strip_reply_fallback": false,
+            "expected": "- one\n\n- two\n\n- three",
+            "path": "source"
+        },
+        {
+            "id": "ruma-ordered-start",
+            "note": "An ordered list with start 3.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "3. third\n4. fourth\n5. fifth",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<ol start=\"3\">\n<li>third</li>\n<li>fourth</li>\n<li>fifth</li>\n</ol>\n"
+            },
+            "strip_reply_fallback": false,
+            "expected": "3. third\n4. fourth\n5. fifth",
+            "path": "source"
+        },
+        {
+            "id": "ruma-nested-quote",
+            "note": "A quote with two paragraphs and a soft break.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "> quoted line one\n> still quoted\n>\n> second paragraph\n\nafter the quote",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<blockquote>\n<p>quoted line one<br />\nstill quoted</p>\n<p>second paragraph</p>\n</blockquote>\n<p>after the quote</p>\n"
+            },
+            "strip_reply_fallback": false,
+            "expected": "> quoted line one\n> still quoted\n>\n> second paragraph\n\nafter the quote",
+            "path": "source"
+        },
+        {
+            "id": "ruma-link-unicode",
+            "note": "ruma percent-encodes a non-ASCII destination.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "See the [café menu](https://example.org/café/ü) for details.",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "See the <a href=\"https://example.org/caf%C3%A9/%C3%BC\">café menu</a> for details."
+            },
+            "strip_reply_fallback": false,
+            "expected": "See the [café menu](https://example.org/café/ü) for details.",
+            "path": "source"
+        },
+        {
+            "id": "ruma-image-mxc",
+            "note": "An mxc image.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "![diagram](mxc://example.org/AbCdEf123)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<img src=\"mxc://example.org/AbCdEf123\" alt=\"diagram\" />"
+            },
+            "strip_reply_fallback": false,
+            "expected": "![diagram](mxc://example.org/AbCdEf123)",
+            "path": "source"
+        },
+        {
+            "id": "ruma-hardbreak",
+            "note": "A hard break and soft breaks.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "first line  \nsecond line\nthird line",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "first line<br />\nsecond line<br />\nthird line"
+            },
+            "strip_reply_fallback": false,
+            "expected": "first line  \nsecond line\nthird line",
+            "path": "source"
+        },
+        {
+            "id": "ruma-setext",
+            "note": "A setext heading.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "Title\n=====\n\nBody text here.",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<h1>Title</h1>\n<p>Body text here.</p>\n"
+            },
+            "strip_reply_fallback": false,
+            "expected": "Title\n=====\n\nBody text here.",
+            "path": "source"
+        },
+        {
+            "id": "ruma-emph",
+            "note": "Emphasis with asterisks and underscores, and code.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "*one* _two_ **three** __four__ `five`",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<em>one</em> <em>two</em> <strong>three</strong> <strong>four</strong> <code>five</code>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "*one* _two_ **three** __four__ `five`",
+            "path": "source"
+        },
+        {
+            "id": "ruma-hr",
+            "note": "A thematic break.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "above\n\n---\n\nbelow",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>above</p>\n<hr />\n<p>below</p>\n"
+            },
+            "strip_reply_fallback": false,
+            "expected": "above\n\n---\n\nbelow",
+            "path": "source"
+        },
+        {
+            "id": "ruma-indented-code",
+            "note": "An indented code block.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "text\n\n    indented code\n    more code",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>text</p>\n<pre><code>indented code\nmore code</code></pre>\n"
+            },
+            "strip_reply_fallback": false,
+            "expected": "text\n\n    indented code\n    more code",
+            "path": "source"
+        },
+        {
+            "id": "ruma-entities",
+            "note": "Entities in the body.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "Tom &amp; Jerry &copy; 2026 &lt;not a tag&gt;",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "Tom &amp; Jerry © 2026 &lt;not a tag&gt;"
+            },
+            "strip_reply_fallback": false,
+            "expected": "Tom &amp; Jerry &copy; 2026 &lt;not a tag&gt;",
+            "path": "source"
+        },
+        {
+            "id": "ruma-autolink",
+            "note": "An autolink and a link with a title: a link title is text the body carries and Element does not show, so it is opaque (A5).",
+            "content": {
+                "msgtype": "m.text",
+                "body": "<https://example.org/a_b> and [site](https://example.org \"title\")",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<a href=\"https://example.org/a_b\">https://example.org/a_b</a> and <a href=\"https://example.org\" title=\"title\">site</a>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "<https://example.org/a_b> and [site](https://example.org)",
+            "path": "converter"
+        },
+        {
+            "id": "ruma-fence-info",
+            "note": "An info string with a comma: the class carries the whole word.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "```rust,no_run\nlet x = 1;\n```\n\nafter",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<pre><code class=\"language-rust,no_run\">let x = 1;\n</code></pre>\n<p>after</p>\n"
+            },
+            "strip_reply_fallback": false,
+            "expected": "```rust,no_run\nlet x = 1;\n```\n\nafter",
+            "path": "source"
+        },
+        {
+            "id": "ruma-table-align",
+            "note": "Alignment is ignored.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "| name | count |\n|:-----|------:|\n| apples | 3 |\n| pears | 12 |",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<table><thead><tr><th style=\"text-align: left\">name</th><th style=\"text-align: right\">count</th></tr></thead><tbody>\n<tr><td style=\"text-align: left\">apples</td><td style=\"text-align: right\">3</td></tr>\n<tr><td style=\"text-align: left\">pears</td><td style=\"text-align: right\">12</td></tr>\n</tbody></table>\n"
+            },
+            "strip_reply_fallback": false,
+            "expected": "| name | count |\n|:-----|------:|\n| apples | 3 |\n| pears | 12 |",
+            "path": "source"
+        },
+        {
+            "id": "ruma-table-ragged",
+            "note": "A row shorter than the header is padded, a row longer than it is opaque (A7): ruma cut the extra cell from its HTML and a GFM renderer hides it, so the body would carry text nobody sees.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "| a | b |\n|---|---|\n| 1 |\n| 3 | 4 | 5 |",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<table><thead><tr><th>a</th><th>b</th></tr></thead><tbody>\n<tr><td>1</td><td></td></tr>\n<tr><td>3</td><td>4</td></tr>\n</tbody></table>\n"
+            },
+            "strip_reply_fallback": false,
+            "expected": "| a | b |\n| --- | --- |\n| 1 |  |\n| 3 | 4 |",
+            "path": "converter"
+        },
+        {
+            "id": "ruma-raw-html",
+            "note": "Raw HTML passes through ruma: never copied as source.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "text <b>bold</b> done",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "text <b>bold</b> done"
+            },
+            "strip_reply_fallback": false,
+            "expected": "text **bold** done",
+            "path": "converter"
+        },
+        {
+            "id": "ruma-js-link",
+            "note": "A javascript: link: equal but unsafe.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "[click](javascript:alert(1))",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<a href=\"javascript:alert(1)\">click</a>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "click",
+            "path": "converter"
+        },
+        {
+            "id": "ruma-http-image",
+            "note": "An http image: equal but unsafe.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "![remote](https://example.org/i.png) text",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<img src=\"https://example.org/i.png\" alt=\"remote\" /> text"
+            },
+            "strip_reply_fallback": false,
+            "expected": "text",
+            "path": "converter"
+        },
+        {
+            "id": "residual-ruma-table-escaped-pipe",
+            "note": "Residual: an escaped pipe in a table cell splits differently in the post-inline cell split.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "| a | b |\n|---|---|\n| x \\| y | 2 |",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<table><thead><tr><th>a</th><th>b</th></tr></thead><tbody>\n<tr><td>x | y</td><td>2</td></tr>\n</tbody></table>\n"
+            },
+            "strip_reply_fallback": false,
+            "expected": "| a | b |\n| --- | --- |\n| x \\| y | 2 |",
+            "path": "converter"
+        },
+        {
+            "id": "residual-ruma-single-tilde",
+            "note": "Residual: ruma (pulldown-cmark) treats a single tilde as strikethrough.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "a ~b~ c",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "a <del>b</del> c"
+            },
+            "strip_reply_fallback": false,
+            "expected": "a ~~b~~ c",
+            "path": "converter"
+        },
+        {
+            "id": "other-client-bold",
+            "note": "Another client with HTML only: the body is a text version.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "Build 42 passed\nin 3 s",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<strong>Build 42</strong> passed<br>in 3 s"
+            },
+            "strip_reply_fallback": false,
+            "expected": "**Build 42** passed\\\nin 3 s",
+            "path": "converter"
+        },
+        {
+            "id": "other-client-same-as-source",
+            "note": "Another client whose HTML is exactly the rendering of the body.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "**Build 42** passed",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p><strong>Build 42</strong> passed</p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "**Build 42** passed",
+            "path": "source"
+        },
+        {
+            "id": "other-client-details",
+            "note": "A details element has no Markdown source.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "Summary Hidden text",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<details><summary>Summary</summary>Hidden text</details>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "**Summary**\n\nHidden text",
+            "path": "converter"
+        },
+        {
+            "id": "b1-pre-code-style",
+            "note": "B1: a style element inside pre code. Element drops it, a textContent walk keeps HIDDEN.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "```\naHIDDEN\n```",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<pre><code>a<style>HIDDEN</style></code></pre>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "```\naHIDDEN\n```",
+            "path": "converter"
+        },
+        {
+            "id": "b1-pre-code-script",
+            "note": "B1: a script element inside pre code.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "```\naHIDDEN\n```",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<pre><code>a<script>HIDDEN</script></code></pre>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "```\naHIDDEN\n```",
+            "path": "converter"
+        },
+        {
+            "id": "b1-pre-code-textarea",
+            "note": "B1: a textarea element inside pre code.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "```\naHIDDEN\n```",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<pre><code>a<textarea>HIDDEN</textarea></code></pre>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "```\naHIDDEN\n```",
+            "path": "converter"
+        },
+        {
+            "id": "b1-inline-code-script",
+            "note": "B1: a script element inside an inline code span.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "`ab`",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p><code>a<script>b</script></code></p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "`ab`",
+            "path": "converter"
+        },
+        {
+            "id": "b1-pre-code-br",
+            "note": "B1: a br inside pre code is a line break in Element, nothing in the body.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "```\nab\n```",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<pre><code>a<br>b</code></pre>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "```\nab\n```",
+            "path": "converter"
+        },
+        {
+            "id": "b1-inline-code-link",
+            "note": "B1: a link inside inline code is shown by Element, a textContent walk loses it.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "`xy`",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p><code>x<a href=\"https://l.example.invalid\">y</a></code></p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "`xy`",
+            "path": "converter"
+        },
+        {
+            "id": "a4-pre-two-code",
+            "note": "A4: a pre holds exactly one code element or only text.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "```\nab\n```",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<pre><code>a</code><code>b</code></pre>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "```\nab\n```",
+            "path": "converter"
+        },
+        {
+            "id": "a4-pre-text-only",
+            "note": "A4: a pre with only text is a code block, so a plain fence matches it.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "```\nx\ny\n```",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<pre>x\ny\n</pre>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "```\nx\ny\n```",
+            "path": "source"
+        },
+        {
+            "id": "a4-pre-code-whitespace-text",
+            "note": "A4: whitespace text next to the one code element of a pre is allowed, and it is part of the code text.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "```js\n let x = 1;\n```",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<pre> <code class=\"language-js\">let x = 1;\n</code></pre>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "```js\n let x = 1;\n```",
+            "path": "source"
+        },
+        {
+            "id": "b2-nested-mx-reply",
+            "note": "B2: a nested mx-reply in a reply hides the text after it from Element, a string slice exposes it.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "> <@a:example.invalid> q\n\nHIDDEN\n\nvisible",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<mx-reply><blockquote>q<mx-reply></mx-reply><p>HIDDEN</p></blockquote></mx-reply><p>visible</p>",
+                "m.relates_to": {
+                    "m.in_reply_to": {
+                        "event_id": "$orig:example.invalid"
+                    }
+                }
+            },
+            "strip_reply_fallback": true,
+            "expected": "visible",
+            "path": "converter"
+        },
+        {
+            "id": "a3-two-mx-reply",
+            "note": "A3: a reply has exactly one mx-reply, two or more are opaque.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "> <@bob:example.invalid> q\n\nok",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<mx-reply><blockquote><a href=\"https://matrix.to/#/!room:example.invalid/$orig:example.invalid\">In reply to</a> <a href=\"https://matrix.to/#/@bob:example.invalid\">@bob:example.invalid</a><br>q</blockquote></mx-reply><mx-reply><blockquote><a href=\"https://matrix.to/#/!room:example.invalid/$orig:example.invalid\">In reply to</a> <a href=\"https://matrix.to/#/@bob:example.invalid\">@bob:example.invalid</a><br>q</blockquote></mx-reply>ok",
+                "m.relates_to": {
+                    "m.in_reply_to": {
+                        "event_id": "$orig:example.invalid"
+                    }
+                }
+            },
+            "strip_reply_fallback": true,
+            "expected": "ok",
+            "path": "converter"
+        },
+        {
+            "id": "a3-mx-reply-not-first",
+            "note": "A3: the one mx-reply must be the first non-whitespace child of the body.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "> <@bob:example.invalid> q\n\na",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>a</p><mx-reply><blockquote><a href=\"https://matrix.to/#/!room:example.invalid/$orig:example.invalid\">In reply to</a> <a href=\"https://matrix.to/#/@bob:example.invalid\">@bob:example.invalid</a><br>q</blockquote></mx-reply>",
+                "m.relates_to": {
+                    "m.in_reply_to": {
+                        "event_id": "$orig:example.invalid"
+                    }
+                }
+            },
+            "strip_reply_fallback": true,
+            "expected": "a",
+            "path": "converter"
+        },
+        {
+            "id": "a3-reply-leading-whitespace",
+            "note": "A3: whitespace before the mx-reply does not matter.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "> <@bob:example.invalid> q\n\nok",
+                "format": "org.matrix.custom.html",
+                "formatted_body": " \n<mx-reply><blockquote><a href=\"https://matrix.to/#/!room:example.invalid/$orig:example.invalid\">In reply to</a> <a href=\"https://matrix.to/#/@bob:example.invalid\">@bob:example.invalid</a><br>q</blockquote></mx-reply>ok",
+                "m.relates_to": {
+                    "m.in_reply_to": {
+                        "event_id": "$orig:example.invalid"
+                    }
+                }
+            },
+            "strip_reply_fallback": true,
+            "expected": "ok",
+            "path": "source"
+        },
+        {
+            "id": "a3-reply-no-fallback-html",
+            "note": "A3: a reply whose formatted_body carries no mx-reply is fine, the plain strip still applies to the body.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "ok",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>ok</p>",
+                "m.relates_to": {
+                    "m.in_reply_to": {
+                        "event_id": "$orig:example.invalid"
+                    }
+                }
+            },
+            "strip_reply_fallback": true,
+            "expected": "ok",
+            "path": "source"
+        },
+        {
+            "id": "s2-mx-reply-not-a-reply",
+            "note": "S2: an mx-reply in a message that is not a reply is shown by Element, so it is opaque.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "shown",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<mx-reply>HIDDEN</mx-reply>shown"
+            },
+            "strip_reply_fallback": false,
+            "expected": "shown",
+            "path": "converter"
+        },
+        {
+            "id": "s3-edited-reply-keeps-quote",
+            "note": "S3: the new content of an edited reply carries no fallback, so a leading quote line is the sender's text (strip flag false).",
+            "content": {
+                "msgtype": "m.text",
+                "body": "> quoted line\n\nanswer"
+            },
+            "strip_reply_fallback": false,
+            "expected": "> quoted line\n\nanswer",
+            "path": "source"
+        },
+        {
+            "id": "b3-cdata",
+            "note": "B3: CDATA ends at the first > in an HTML5 parse and at ]]> in Element's tokenizer, so a link appears or hides.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "Hello [click](https://l.example.invalid/) ]]>",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>Hello<![CDATA[ x > <a href=\"https://l.example.invalid/\">click</a> ]]></p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "Hello [click](https://l.example.invalid/) \\]\\]>",
+            "path": "converter"
+        },
+        {
+            "id": "a1-comment",
+            "note": "A1: a comment is opaque.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "a b",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>a<!-- c --> b</p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "a b",
+            "path": "converter"
+        },
+        {
+            "id": "a1-doctype",
+            "note": "A1: a doctype is opaque.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "a",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<!DOCTYPE html><p>a</p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "a",
+            "path": "converter"
+        },
+        {
+            "id": "a1-processing-instruction",
+            "note": "A1: a processing instruction is opaque.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "a b",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>a<?pi x?> b</p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "a b",
+            "path": "converter"
+        },
+        {
+            "id": "a1-stray-lt",
+            "note": "A1: a < that does not start a tag is opaque.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "a < b",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>a < b</p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "a \\< b",
+            "path": "converter"
+        },
+        {
+            "id": "a1-xmp",
+            "note": "A1: xmp is raw text in an HTML5 parse and not in Element's, so it is opaque.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "a\n\nb",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>a</p><xmp>b</xmp>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "a\n\nb",
+            "path": "converter"
+        },
+        {
+            "id": "a1-iframe",
+            "note": "A1: iframe is raw text in an HTML5 parse, so it is opaque.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "a\n\nb",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>a</p><iframe>b</iframe>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "a\n\nb",
+            "path": "converter"
+        },
+        {
+            "id": "a1-noframes",
+            "note": "A1: noframes is raw text in an HTML5 parse, so it is opaque.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "a\n\nb",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>a</p><noframes>b</noframes>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "a\n\nb",
+            "path": "converter"
+        },
+        {
+            "id": "a1-noembed",
+            "note": "A1: noembed is raw text in an HTML5 parse, so it is opaque.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "a\n\nb",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>a</p><noembed>b</noembed>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "a\n\nb",
+            "path": "converter"
+        },
+        {
+            "id": "a1-title",
+            "note": "A1: title is raw text in an HTML5 parse, so it is opaque.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "a\n\nb",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>a</p><title>b</title>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "a\n\nb",
+            "path": "converter"
+        },
+        {
+            "id": "a1-noscript",
+            "note": "A1: noscript parses differently with scripting on and off, so it is opaque.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "a\n\nb",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>a</p><noscript>b</noscript>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "a",
+            "path": "converter"
+        },
+        {
+            "id": "a1-svg",
+            "note": "A1: a foreign element (svg) is opaque.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "a\n\nb",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>a</p><svg><text>b</text></svg>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "a\n\nb",
+            "path": "converter"
+        },
+        {
+            "id": "a1-math",
+            "note": "A1: a foreign element (math) is opaque.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "a\n\nb",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>a</p><math><mi>b</mi></math>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "a\n\nb",
+            "path": "converter"
+        },
+        {
+            "id": "a1-uppercase-tags",
+            "note": "A1: tag names are compared in ASCII lower case, so upper case tags are fine.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "**b** and *i*",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<P><STRONG>b</STRONG> and <EM>i</EM></P>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "**b** and *i*",
+            "path": "source"
+        },
+        {
+            "id": "a1-self-closing-br",
+            "note": "A1: br, br/ and br /, all well formed tags, pass the gate.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "a  \nb  \nc",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>a<br>b<br/>c</p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "a  \nb  \nc",
+            "path": "source"
+        },
+        {
+            "id": "a2-div",
+            "note": "A2: div is not on the allow-list.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "x\n\ny",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<div>x</div><p>y</p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "x\n\ny",
+            "path": "converter"
+        },
+        {
+            "id": "a2-span-colour",
+            "note": "A2: span (colours, spoilers) is not on the allow-list.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "a b",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>a <span data-mx-color=\"#ff0000\">b</span></p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "a b",
+            "path": "converter"
+        },
+        {
+            "id": "n5-spoiler-span",
+            "note": "N5/A2: a spoiler is hidden by Element and shown by the copy, so span is opaque.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "a b",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>a <span data-mx-spoiler>b</span></p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "a b",
+            "path": "converter"
+        },
+        {
+            "id": "n5-checkbox-input",
+            "note": "N5/A2: input is not on the allow-list, a ruma-style task checkbox is opaque.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "- [ ] a",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<ul><li><input type=\"checkbox\" disabled> a</li></ul>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "- a",
+            "path": "converter"
+        },
+        {
+            "id": "a2-sub-sup",
+            "note": "A2: sub and sup are not on the allow-list.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "x2 e",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>x<sub>2</sub> e</p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "x2 e",
+            "path": "converter"
+        },
+        {
+            "id": "a2-allowed-inline",
+            "note": "A2: b, i, s, strike and del map to Markdown and stay on the allow-list.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "**x** *y* ~~z~~ ~~w~~",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p><b>x</b> <i>y</i> <s>z</s> <strike>w</strike></p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "**x** *y* ~~z~~ ~~w~~",
+            "path": "source"
+        },
+        {
+            "id": "a2-li-outside-list",
+            "note": "A2: a li outside a list has no Markdown form.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "a",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<li>a</li>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "a",
+            "path": "converter"
+        },
+        {
+            "id": "b4-plain-cell-link-ref",
+            "note": "B4: a GFM row cut inside a code span exposes a reference link to a javascript: destination.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "| a | b | c |\n| - | - | - |\n| `x|[r]|` |\n\n[r]: javascript:void(0)"
+            },
+            "strip_reply_fallback": false,
+            "expected": "\\| a \\| b \\| c \\|\\\n\\| - \\| - \\| - \\|\\\n\\| \\`x\\|\\[r\\]\\|\\` \\|\n\n\\[r\\]: javascript:void(0)",
+            "path": "escaped"
+        },
+        {
+            "id": "b4-plain-cell-img-ref",
+            "note": "B4: the same with a reference image whose destination is not mxc.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "| a | b | c |\n| - | - | - |\n| `x|![t][p]|` |\n\n[p]: https://img.example.invalid/p.png"
+            },
+            "strip_reply_fallback": false,
+            "expected": "\\| a \\| b \\| c \\|\\\n\\| - \\| - \\| - \\|\\\n\\| \\`x\\|!\\[t\\]\\[p\\]\\|\\` \\|\n\n\\[p\\]: <https://img.example.invalid/p.png>",
+            "path": "escaped"
+        },
+        {
+            "id": "b4-plain-refdef-title",
+            "note": "B4: a definition carries text no renderer shows (a hidden payload for agent consumers).",
+            "content": {
+                "msgtype": "m.text",
+                "body": "hello\n\n[x]: https://h.example.invalid \"TEXT\""
+            },
+            "strip_reply_fallback": false,
+            "expected": "hello\n\n\\[x\\]: <https://h.example.invalid> \"TEXT\"",
+            "path": "escaped"
+        },
+        {
+            "id": "b4-html-refdef-title",
+            "note": "B4: the same body against the HTML of the visible paragraph.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "hello\n\n[x]: https://h.example.invalid \"TEXT\"",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>hello</p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "hello",
+            "path": "converter"
+        },
+        {
+            "id": "b4-plain-refdef-only",
+            "note": "B4: a body that is only a definition.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "[r]: https://h.example.invalid/"
+            },
+            "strip_reply_fallback": false,
+            "expected": "\\[r\\]: <https://h.example.invalid/>",
+            "path": "escaped"
+        },
+        {
+            "id": "s1-reserved-amp-eq",
+            "note": "S1: %26 and %3D are reserved characters, a decoded and an encoded query are different links.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "[x](https://b.example.invalid/p?to=a&n=1)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p><a href=\"https://b.example.invalid/p?to=a%26n%3D1\">x</a></p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "[x](https://b.example.invalid/p?to=a%26n%3D1)",
+            "path": "converter"
+        },
+        {
+            "id": "s1-reserved-slash",
+            "note": "S1: %2F is not a slash.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "[x](https://b.example.invalid/a/b)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p><a href=\"https://b.example.invalid/a%2Fb\">x</a></p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "[x](https://b.example.invalid/a%2Fb)",
+            "path": "converter"
+        },
+        {
+            "id": "s1-reserved-hash",
+            "note": "S1: %23 is not a fragment delimiter.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "[x](https://b.example.invalid/page#f)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p><a href=\"https://b.example.invalid/page%23f\">x</a></p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "[x](https://b.example.invalid/page%23f)",
+            "path": "converter"
+        },
+        {
+            "id": "s1-reserved-colon",
+            "note": "S1: %3A in the scheme position makes a relative link, not an https one.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "[x](https://h.example.invalid/)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p><a href=\"https%3A//h.example.invalid/\">x</a></p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "[x](https%3A//h.example.invalid/)",
+            "path": "converter"
+        },
+        {
+            "id": "s1-unreserved-decoded",
+            "note": "S1: %41 and %7E encode unreserved characters, they equal the plain ones.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "[x](https://u.example.invalid/A~-)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p><a href=\"https://u.example.invalid/%41%7e%2d\">x</a></p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "[x](https://u.example.invalid/A~-)",
+            "path": "source"
+        },
+        {
+            "id": "s1-hex-case",
+            "note": "S1: percent-encoded hex digits are compared in upper case.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "[x](https://u.example.invalid/%C3%A9)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p><a href=\"https://u.example.invalid/%c3%a9\">x</a></p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "[x](https://u.example.invalid/%C3%A9)",
+            "path": "source"
+        },
+        {
+            "id": "s1-non-ascii-encoded",
+            "note": "S1: a non-ASCII character is the UTF-8 percent sequence on both sides.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "[x](https://u.example.invalid/café)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p><a href=\"https://u.example.invalid/caf%C3%A9\">x</a></p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "[x](https://u.example.invalid/café)",
+            "path": "source"
+        },
+        {
+            "id": "s5-percent-invalid-utf8",
+            "note": "S5: a percent run that is not UTF-8 is kept as it is (no decoding of non-unreserved bytes).",
+            "content": {
+                "msgtype": "m.text",
+                "body": "[x](https://u.example.invalid/%C3%A4%FF)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p><a href=\"https://u.example.invalid/%C3%A4%FF\">x</a></p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "[x](https://u.example.invalid/%C3%A4%FF)",
+            "path": "source"
+        },
+        {
+            "id": "s4-cell-em-pipe",
+            "note": "S4: GFM cuts the cell at the pipe inside the emphasis, so the post-inline split is not GFM's.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "| h |\n|---|\n| *a|b* |",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<table><thead><tr><th>h</th></tr></thead><tbody><tr><td><em>a|b</em></td></tr></tbody></table>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "| h |\n| --- |\n| *a\\|b* |",
+            "path": "converter"
+        },
+        {
+            "id": "s4-escaped-pipe-real-table",
+            "note": "S4: GFM reads | a \\| b | as one cell, the HTML table has two.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "| h1 | h2 |\n|---|---|\n| a \\| b |",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<table><thead><tr><th>h1</th><th>h2</th></tr></thead><tbody><tr><td>a</td><td>b</td></tr></tbody></table>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "| h1 | h2 |\n| --- | --- |\n| a | b |",
+            "path": "converter"
+        },
+        {
+            "id": "s4-code-pipe-paragraph",
+            "note": "S4: an Element-composed table whose cell has a pipe in a code span: GFM cuts the code span.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "| h |\n|---|\n| `a|b` |",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>| h |<br>|---|<br>| <code>a|b</code> |</p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "\\| h \\|\\\n\\|---\\|\\\n\\| `a|b` \\|",
+            "path": "converter"
+        },
+        {
+            "id": "s4-row-truncation",
+            "note": "S4: a Markdown row with more cells than the header holds text a GFM renderer hides.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "| h |\n|---|\n| a | TEXT |",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<table><thead><tr><th>h</th></tr></thead><tbody><tr><td>a</td></tr></tbody></table>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "| h |\n| --- |\n| a |",
+            "path": "converter"
+        },
+        {
+            "id": "s4-lazy-ordered-item",
+            "note": "S4: a lazy line 2. x after table rows is a table row in CommonMark and a list in GFM.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "| h |\n|---|\n| a |\n2. x",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>| h |<br>|---|<br>| a |<br>2. x</p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "\\| h \\|\\\n\\|---\\|\\\n\\| a \\|\\\n2\\. x",
+            "path": "converter"
+        },
+        {
+            "id": "a7-row-padded",
+            "note": "A7: a short row is padded with empty cells on both sides, never truncated.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "| a | b |\n|---|---|\n| 1 |",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<table><thead><tr><th>a</th><th>b</th></tr></thead><tbody><tr><td>1</td><td></td></tr></tbody></table>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "| a | b |\n|---|---|\n| 1 |",
+            "path": "source"
+        },
+        {
+            "id": "a7-pipe-in-link-cell",
+            "note": "A7: a pipe inside a link in a table line is opaque.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "| h |\n|---|\n| [x](https://t.example.invalid/a|b) |",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>| h |<br>|---|<br>| <a href=\"https://t.example.invalid/a|b\">x</a> |</p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "\\| h \\|\\\n\\|---\\|\\\n\\| [x](https://t.example.invalid/a%7Cb) \\|",
+            "path": "converter"
+        },
+        {
+            "id": "n2-thead-after-tbody",
+            "note": "N2: a thead after a row is displayed first, but the first tr in document order is not the header.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "| x |\n|---|\n| h |",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<table><tbody><tr><td>x</td></tr></tbody><thead><tr><th>h</th></tr></thead></table>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "| x |\n| --- |\n| h |",
+            "path": "converter"
+        },
+        {
+            "id": "s5-bom-trailing-body",
+            "note": "S5: only ASCII whitespace is trimmed from the end of a plain body, a trailing U+FEFF stays.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "hi﻿"
+            },
+            "strip_reply_fallback": false,
+            "expected": "hi﻿",
+            "path": "source"
+        },
+        {
+            "id": "s5-nbsp-trailing-body",
+            "note": "S5: a trailing no-break space stays too.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "hi "
+            },
+            "strip_reply_fallback": false,
+            "expected": "hi ",
+            "path": "source"
+        },
+        {
+            "id": "s5-vt-trailing-body",
+            "note": "S5: a vertical tab is not in the ASCII whitespace set (space, tab, LF, CR, FF).",
+            "content": {
+                "msgtype": "m.text",
+                "body": "hi\u000b"
+            },
+            "strip_reply_fallback": false,
+            "expected": "hi\u000b",
+            "path": "source"
+        },
+        {
+            "id": "s5-bom-formatted-body",
+            "note": "S5/B9: a formatted_body of only U+FEFF is HTML (only the empty string is 'no HTML'): the body is not its source and the converter shows nothing, as Element does.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "hi",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "﻿"
+            },
+            "strip_reply_fallback": false,
+            "expected": "",
+            "path": "converter"
+        },
+        {
+            "id": "s5-delimiter-bom",
+            "note": "S5: U+FEFF is not whitespace in a table delimiter line.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "| a |\n|﻿-﻿|\n| 1 |",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<table><thead><tr><th>a</th></tr></thead><tbody><tr><td>1</td></tr></tbody></table>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "| a |\n| --- |\n| 1 |",
+            "path": "converter"
+        },
+        {
+            "id": "s5-ol-start-huge",
+            "note": "S5: an ol start of more than 9 digits is opaque (it is 1e20 in JS and an error in Rust).",
+            "content": {
+                "msgtype": "m.text",
+                "body": "1. a",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<ol start=\"99999999999999999999\"><li>a</li></ol>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "100000000000000000000. a",
+            "path": "converter"
+        },
+        {
+            "id": "n1-ol-start-3abc",
+            "note": "N1: browsers number from 3, the integer rules of the spec say opaque.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "1. a",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<ol start=\"3abc\"><li>a</li></ol>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "3. a",
+            "path": "converter"
+        },
+        {
+            "id": "a6-ol-start-negative",
+            "note": "A6: a negative start is opaque.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "1. a",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<ol start=\"-1\"><li>a</li></ol>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "-1. a",
+            "path": "converter"
+        },
+        {
+            "id": "a6-ol-start-spaces",
+            "note": "A6: a start is trimmed of ASCII whitespace.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "3. a",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<ol start=\" 3 \"><li>a</li></ol>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "3. a",
+            "path": "source"
+        },
+        {
+            "id": "a6-ol-start-zero",
+            "note": "A6: a start of 0 is a valid start.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "0. a",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<ol start=\"0\"><li>a</li></ol>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "0. a",
+            "path": "source"
+        },
+        {
+            "id": "s5-strike-dotless-i",
+            "note": "S5: a non-ASCII tag name is no strike element, it is opaque.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "a ~~b~~ c",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>a <strıke>b</strıke> c</p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "a b c",
+            "path": "converter"
+        },
+        {
+            "id": "n3-div-dotless-i",
+            "note": "N3: a non-ASCII tag name is no div element, it is opaque.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "x\n\ny",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>x</p><dıv>y</dıv>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "x\n\ny",
+            "path": "converter"
+        },
+        {
+            "id": "s5-nbsp-paragraph-edge",
+            "note": "S5: commonmark.js trims a paragraph with JS trim() and pulldown-cmark does not, so a non-ASCII whitespace at the edge of a source line makes the source opaque.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "hi ",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>hi </p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "hi",
+            "path": "converter"
+        },
+        {
+            "id": "s5-nbsp-inside-line",
+            "note": "S5: a no-break space between two other characters is kept by both parsers, so the body is the source.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "a b",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>a b</p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "a b",
+            "path": "source"
+        },
+        {
+            "id": "n5-link-title",
+            "note": "N5: a link title is text the body carries and Element does not show, so it is opaque.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "[x](https://t.example.invalid/ \"TEXT\")",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p><a href=\"https://t.example.invalid/\" title=\"TEXT\">x</a></p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "[x](https://t.example.invalid/)",
+            "path": "converter"
+        },
+        {
+            "id": "n5-image-title",
+            "note": "N5: an image title is opaque too.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "![x](mxc://example.invalid/i \"TEXT\")",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p><img src=\"mxc://example.invalid/i\" alt=\"x\" title=\"TEXT\"></p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "![x](mxc://example.invalid/i)",
+            "path": "converter"
+        },
+        {
+            "id": "n5-md-link-title-only",
+            "note": "N5: a title in the Markdown only is opaque.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "[x](https://t.example.invalid/ \"TEXT\")",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p><a href=\"https://t.example.invalid/\">x</a></p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "[x](https://t.example.invalid/)",
+            "path": "converter"
+        },
+        {
+            "id": "n5-html-title-only",
+            "note": "N5: a title attribute in the HTML only is opaque.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "[x](https://t.example.invalid/)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p><a href=\"https://t.example.invalid/\" title=\"TEXT\">x</a></p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "[x](https://t.example.invalid/)",
+            "path": "converter"
+        },
+        {
+            "id": "plain-F1",
+            "note": "CM7: the F1 status report as a plain body (an SDK agent sends it with no formatted_body): it is the source.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "### 1. +14.3% overall, driver Alice\n\n**core-client (main, dev): replace the `../core` path dependency with a git pin on the `vX.Y.Z` tag, then redeploy**\n\n- Moves: core +57.1%. Overall after this step: 53.9%.\n- Repository: `core-client`. Kind: release.\n- Tasks:\n  - [ ] Alice: cut the first annotated `vX.Y.Z` tag of core.\n  - [ ] `core-client`: switch to a git dependency on that tag, commit Cargo.lock, open a PR.\n\n| train | driver | score | cells |\n|---|---|---|---|\n| core | Alice | 🟥🟥🚂⬜⬜🏁 42.6% | 13 |\n| client | Bob | 🚂⬜⬜⬜⬜🏁 0.0% | 7 |\n\n- `short-rev`: a `rev = \"...\"` shorter than 40 characters.\n- `url-spelling`: the git URL is spelled differently from `https://example.org/<repo>`.\n\nEvery **cell** is one (consumer, train) pair: each tracked branch that uses the\ntrain, and each deployed service that runs it.\n\n```\ncell  = max(0, value(status) - min(0.05 * flags, 0.15))\n```"
+            },
+            "strip_reply_fallback": false,
+            "expected": "### 1. +14.3% overall, driver Alice\n\n**core-client (main, dev): replace the `../core` path dependency with a git pin on the `vX.Y.Z` tag, then redeploy**\n\n- Moves: core +57.1%. Overall after this step: 53.9%.\n- Repository: `core-client`. Kind: release.\n- Tasks:\n  - [ ] Alice: cut the first annotated `vX.Y.Z` tag of core.\n  - [ ] `core-client`: switch to a git dependency on that tag, commit Cargo.lock, open a PR.\n\n| train | driver | score | cells |\n|---|---|---|---|\n| core | Alice | 🟥🟥🚂⬜⬜🏁 42.6% | 13 |\n| client | Bob | 🚂⬜⬜⬜⬜🏁 0.0% | 7 |\n\n- `short-rev`: a `rev = \"...\"` shorter than 40 characters.\n- `url-spelling`: the git URL is spelled differently from `https://example.org/<repo>`.\n\nEvery **cell** is one (consumer, train) pair: each tracked branch that uses the\ntrain, and each deployed service that runs it.\n\n```\ncell  = max(0, value(status) - min(0.05 * flags, 0.15))\n```",
+            "path": "source"
+        },
+        {
+            "id": "r1-p-link",
+            "note": "R-1 (re-audit): the end tag closes a block while an inline element is open. HTML5 re-creates the element around the text after it, htmlparser2 (Element's sanitiser) does not, so a tree built from the raw string linked text Element shows plain. v2.2 B3: end tags must match the top of the stack, so this is opaque. The golden is the converter's output as a conforming HTML5 parser builds it (the unit run's happy-dom does not reconstruct, so it checks the path only). A link in a p.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "[A](https://l.example.invalid/)\n\n[X](https://l.example.invalid/)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p><a href=\"https://l.example.invalid/\">A</p>X"
+            },
+            "strip_reply_fallback": false,
+            "expected": "[A](https://l.example.invalid/)\n\n[X](https://l.example.invalid/)",
+            "path": "converter"
+        },
+        {
+            "id": "r1-blockquote-link",
+            "note": "R-1 (re-audit): the end tag closes a block while an inline element is open. HTML5 re-creates the element around the text after it, htmlparser2 (Element's sanitiser) does not, so a tree built from the raw string linked text Element shows plain. v2.2 B3: end tags must match the top of the stack, so this is opaque. The golden is the converter's output as a conforming HTML5 parser builds it (the unit run's happy-dom does not reconstruct, so it checks the path only). In a blockquote.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "> [A](https://l.example.invalid/)\n\n[X](https://l.example.invalid/)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<blockquote><a href=\"https://l.example.invalid/\">A</blockquote>X"
+            },
+            "strip_reply_fallback": false,
+            "expected": "> [A](https://l.example.invalid/)\n\n[X](https://l.example.invalid/)",
+            "path": "converter"
+        },
+        {
+            "id": "r1-list-link",
+            "note": "R-1 (re-audit): the end tag closes a block while an inline element is open. HTML5 re-creates the element around the text after it, htmlparser2 (Element's sanitiser) does not, so a tree built from the raw string linked text Element shows plain. v2.2 B3: end tags must match the top of the stack, so this is opaque. The golden is the converter's output as a conforming HTML5 parser builds it (the unit run's happy-dom does not reconstruct, so it checks the path only). In a list item.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "- [A](https://l.example.invalid/)\n\n[X](https://l.example.invalid/)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<ul><li><a href=\"https://l.example.invalid/\">A</li></ul>X"
+            },
+            "strip_reply_fallback": false,
+            "expected": "- [A](https://l.example.invalid/)\n\n[X](https://l.example.invalid/)",
+            "path": "converter"
+        },
+        {
+            "id": "r1-heading-link",
+            "note": "R-1 (re-audit): the end tag closes a block while an inline element is open. HTML5 re-creates the element around the text after it, htmlparser2 (Element's sanitiser) does not, so a tree built from the raw string linked text Element shows plain. v2.2 B3: end tags must match the top of the stack, so this is opaque. The golden is the converter's output as a conforming HTML5 parser builds it (the unit run's happy-dom does not reconstruct, so it checks the path only). In a heading.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "# [A](https://l.example.invalid/)\n\n[X](https://l.example.invalid/)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<h1><a href=\"https://l.example.invalid/\">A</h1>X"
+            },
+            "strip_reply_fallback": false,
+            "expected": "# [A](https://l.example.invalid/)\n\n[X](https://l.example.invalid/)",
+            "path": "converter"
+        },
+        {
+            "id": "r1-two-paragraphs-link",
+            "note": "R-1 (re-audit): the end tag closes a block while an inline element is open. HTML5 re-creates the element around the text after it, htmlparser2 (Element's sanitiser) does not, so a tree built from the raw string linked text Element shows plain. v2.2 B3: end tags must match the top of the stack, so this is opaque. The golden is the converter's output as a conforming HTML5 parser builds it (the unit run's happy-dom does not reconstruct, so it checks the path only). Followed by a second paragraph.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "[A](https://l.example.invalid/)\n\n[X](https://l.example.invalid/)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p><a href=\"https://l.example.invalid/\">A</p><p>X</p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "[A](https://l.example.invalid/)\n\n[X](https://l.example.invalid/)",
+            "path": "converter"
+        },
+        {
+            "id": "r1-bold",
+            "note": "R-1 (re-audit): the end tag closes a block while an inline element is open. HTML5 re-creates the element around the text after it, htmlparser2 (Element's sanitiser) does not, so a tree built from the raw string linked text Element shows plain. v2.2 B3: end tags must match the top of the stack, so this is opaque. The golden is the converter's output as a conforming HTML5 parser builds it (the unit run's happy-dom does not reconstruct, so it checks the path only). Emphasis (b) instead of a link.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "**A**\n\n**X**",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p><b>A</p>X"
+            },
+            "strip_reply_fallback": false,
+            "expected": "**A**\n\n**X**",
+            "path": "converter"
+        },
+        {
+            "id": "r1-code",
+            "note": "R-1 (re-audit): the end tag closes a block while an inline element is open. HTML5 re-creates the element around the text after it, htmlparser2 (Element's sanitiser) does not, so a tree built from the raw string linked text Element shows plain. v2.2 B3: end tags must match the top of the stack, so this is opaque. The golden is the converter's output as a conforming HTML5 parser builds it (the unit run's happy-dom does not reconstruct, so it checks the path only). Code instead of a link.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "`A`\n\n`X`",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p><code>A</p>X"
+            },
+            "strip_reply_fallback": false,
+            "expected": "`A`\n\n`X`",
+            "path": "converter"
+        },
+        {
+            "id": "r1-reply-link",
+            "note": "R-1 (re-audit): the end tag closes a block while an inline element is open. HTML5 re-creates the element around the text after it, htmlparser2 (Element's sanitiser) does not, so a tree built from the raw string linked text Element shows plain. v2.2 B3: end tags must match the top of the stack, so this is opaque. The golden is the converter's output as a conforming HTML5 parser builds it (the unit run's happy-dom does not reconstruct, so it checks the path only). In the reply fallback: the mx-reply end tag closes the open a.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "> <@bob:example.invalid> A\n\n[X](https://l.example.invalid/)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<mx-reply><a href=\"https://l.example.invalid/\">A</mx-reply>X",
+                "m.relates_to": {
+                    "m.in_reply_to": {
+                        "event_id": "$orig:example.invalid"
+                    }
+                }
+            },
+            "strip_reply_fallback": true,
+            "expected": "[X](https://l.example.invalid/)",
+            "path": "converter"
+        },
+        {
+            "id": "r1-reply-text-loss",
+            "note": "R-1 (re-audit): the mx-reply holds an open p when its end tag comes. HTML5 ignores that end tag (the p is a special element), so W stays inside the reply and the copy was empty; Element shows W. Opaque under v2.2. The golden is the HTML5 converter output (the unit run checks the path only).",
+            "content": {
+                "msgtype": "m.text",
+                "body": "> <@bob:example.invalid> Q\n\n",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<mx-reply>Q<p>V</mx-reply>W",
+                "m.relates_to": {
+                    "m.in_reply_to": {
+                        "event_id": "$orig:example.invalid"
+                    }
+                }
+            },
+            "strip_reply_fallback": true,
+            "expected": "",
+            "path": "converter"
+        },
+        {
+            "id": "r2-plain-link-def",
+            "note": "R-2 (re-audit): after a GFM table row an indented line ends the table and the next line starts a paragraph that is a link reference definition only a GFM parser sees. v2.2 B6: a body with a GFM delimiter line and a line with ]: outside code is not safe. A plain body with a javascript: definition.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "| a |\n| - |\n    z\n[r]: javascript:alert(1)\n\n[x][r]"
+            },
+            "strip_reply_fallback": false,
+            "expected": "\\| a \\|\\\n\\| - \\|\\\n    z\\\n\\[r\\]: javascript:alert(1)\n\n\\[x\\]\\[r\\]",
+            "path": "escaped"
+        },
+        {
+            "id": "r2-plain-img-def",
+            "note": "R-2 (re-audit): after a GFM table row an indented line ends the table and the next line starts a paragraph that is a link reference definition only a GFM parser sees. v2.2 B6: a body with a GFM delimiter line and a line with ]: outside code is not safe. A plain body with a non-mxc image definition.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "| a |\n| - |\n    z\n[p]: https://img.example.invalid/p.png\n\n![t][p]"
+            },
+            "strip_reply_fallback": false,
+            "expected": "\\| a \\|\\\n\\| - \\|\\\n    z\\\n\\[p\\]: <https://img.example.invalid/p.png>\n\n!\\[t\\]\\[p\\]",
+            "path": "escaped"
+        },
+        {
+            "id": "r2-plain-pipeless-delimiter",
+            "note": "R-2 (re-audit): after a GFM table row an indented line ends the table and the next line starts a paragraph that is a link reference definition only a GFM parser sees. v2.2 B6: a body with a GFM delimiter line and a line with ]: outside code is not safe. The delimiter line of a one-column table needs no pipe, so B6 does not require one.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "| a |\n:-:\n    z\n[r]: javascript:alert(1)\n\n[x][r]"
+            },
+            "strip_reply_fallback": false,
+            "expected": "\\| a \\|\\\n\\:-:\\\n    z\\\n\\[r\\]: javascript:alert(1)\n\n\\[x\\]\\[r\\]",
+            "path": "escaped"
+        },
+        {
+            "id": "r2-html-link-def",
+            "note": "R-2 (re-audit): after a GFM table row an indented line ends the table and the next line starts a paragraph that is a link reference definition only a GFM parser sees. v2.2 B6: a body with a GFM delimiter line and a line with ]: outside code is not safe. The same body against Element's own render.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "| a |\n| - |\n    z\n[r]: javascript:alert(1)\n\n[x][r]",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>| a |<br />| - |<br />z<br />[r]: javascript:alert(1)</p><p>[x][r]</p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "\\| a \\|\\\n\\| - \\|\\\nz\\\n\\[r\\]: javascript:alert(1)\n\n\\[x\\]\\[r\\]",
+            "path": "converter"
+        },
+        {
+            "id": "r2-html-img-def",
+            "note": "R-2 (re-audit): after a GFM table row an indented line ends the table and the next line starts a paragraph that is a link reference definition only a GFM parser sees. v2.2 B6: a body with a GFM delimiter line and a line with ]: outside code is not safe. The image variant against Element's own render.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "| a |\n| - |\n    z\n[p]: https://img.example.invalid/p.png\n\n![t][p]",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>| a |<br />| - |<br />z<br />[p]: https://img.example.invalid/p.png</p><p>![t][p]</p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "\\| a \\|\\\n\\| - \\|\\\nz\\\n\\[p\\]: <https://img.example.invalid/p.png>\n\n!\\[t\\]\\[p\\]",
+            "path": "converter"
+        },
+        {
+            "id": "r3-backslash-host",
+            "note": "R-3 (re-audit): RFC 3986 reads a backslash as %5C, a browser as a slash, and WHATWG removes a tab, LF or CR, so the host of the link differs. v2.2 B5: such an href is opaque. Host confusion with a backslash.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "[x](https://h.example.invalid%5C@evil.example.invalid/)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p><a href=\"https://h.example.invalid\\@evil.example.invalid/\">x</a></p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "[x](https://h.example.invalid%5C@evil.example.invalid/)",
+            "path": "converter"
+        },
+        {
+            "id": "r3-tab-entity",
+            "note": "R-3 (re-audit): RFC 3986 reads a backslash as %5C, a browser as a slash, and WHATWG removes a tab, LF or CR, so the host of the link differs. v2.2 B5: such an href is opaque. A tab by character reference.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "[x](https://h.example.invalid/a%09b)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p><a href=\"https://h.example.invalid/a&#9;b\">x</a></p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "[x](https://h.example.invalid/a%09b)",
+            "path": "converter"
+        },
+        {
+            "id": "r3-lf-raw",
+            "note": "R-3 (re-audit): RFC 3986 reads a backslash as %5C, a browser as a slash, and WHATWG removes a tab, LF or CR, so the host of the link differs. v2.2 B5: such an href is opaque. A raw LF in the attribute.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "[x](https://h.example.invalid/a%0Ab)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p><a href=\"https://h.example.invalid/a\nb\">x</a></p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "[x](https://h.example.invalid/a%0Ab)",
+            "path": "converter"
+        },
+        {
+            "id": "r3-cr-entity",
+            "note": "R-3 (re-audit): RFC 3986 reads a backslash as %5C, a browser as a slash, and WHATWG removes a tab, LF or CR, so the host of the link differs. v2.2 B5: such an href is opaque. A CR by character reference.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "[x](https://h.example.invalid/a%0Db)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p><a href=\"https://h.example.invalid/a&#13;b\">x</a></p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "[x](https://h.example.invalid/a%0Db)",
+            "path": "converter"
+        },
+        {
+            "id": "r4-blockquote-49",
+            "note": "R-4 (re-audit): sanitize-html drops elements nested deeper than its nestingLimit of 50 and keeps their text. v2.2 B3: more than 40 open elements is opaque. 49 nested blockquotes around a link.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "> > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > [t](https://l.example.invalid/)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><p><a href=\"https://l.example.invalid/\">t</a></p></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "> > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > [t](https://l.example.invalid/)",
+            "path": "converter"
+        },
+        {
+            "id": "r4-list-30",
+            "note": "R-4 (re-audit): sanitize-html drops elements nested deeper than its nestingLimit of 50 and keeps their text. v2.2 B3: more than 40 open elements is opaque. 30 nested lists around a link.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - [t](https://l.example.invalid/)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<ul><li><ul><li><ul><li><ul><li><ul><li><ul><li><ul><li><ul><li><ul><li><ul><li><ul><li><ul><li><ul><li><ul><li><ul><li><ul><li><ul><li><ul><li><ul><li><ul><li><ul><li><ul><li><ul><li><ul><li><ul><li><ul><li><ul><li><ul><li><ul><li><ul><li><a href=\"https://l.example.invalid/\">t</a></li></ul></li></ul></li></ul></li></ul></li></ul></li></ul></li></ul></li></ul></li></ul></li></ul></li></ul></li></ul></li></ul></li></ul></li></ul></li></ul></li></ul></li></ul></li></ul></li></ul></li></ul></li></ul></li></ul></li></ul></li></ul></li></ul></li></ul></li></ul></li></ul></li></ul>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - [t](https://l.example.invalid/)",
+            "path": "converter"
+        },
+        {
+            "id": "r4-blockquote-depth-40-accepted",
+            "note": "R-4 boundary: 38 blockquotes, a p and an a are 40 open elements, the limit, so the source is accepted.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "> > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > [t](https://l.example.invalid/)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><p><a href=\"https://l.example.invalid/\">t</a></p></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "> > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > [t](https://l.example.invalid/)",
+            "path": "source"
+        },
+        {
+            "id": "r4-blockquote-depth-41",
+            "note": "R-4 boundary: 39 blockquotes, a p and an a are 41 open elements, one over the limit, so the message is opaque.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "> > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > [t](https://l.example.invalid/)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><p><a href=\"https://l.example.invalid/\">t</a></p></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "> > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > [t](https://l.example.invalid/)",
+            "path": "converter"
+        },
+        {
+            "id": "r5-ruma-brackets",
+            "note": "R-5 (re-audit): commonmark.js pre-encodes a destination ([ ] and a lone %), pulldown-cmark does not. v2.2 B5: both sides write [ as %5B, ] as %5D and a % without two hex digits as %25 before the RFC 3986 normalisation, so every parser agrees. Real ruma output for brackets in a query.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "[x](https://h.example.invalid/?a[]=1)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p><a href=\"https://h.example.invalid/?a%5B%5D=1\">x</a></p>\n"
+            },
+            "strip_reply_fallback": false,
+            "expected": "[x](https://h.example.invalid/?a[]=1)",
+            "path": "source"
+        },
+        {
+            "id": "r5-ruma-lone-percent",
+            "note": "R-5 (re-audit): commonmark.js pre-encodes a destination ([ ] and a lone %), pulldown-cmark does not. v2.2 B5: both sides write [ as %5B, ] as %5D and a % without two hex digits as %25 before the RFC 3986 normalisation, so every parser agrees. Real ruma output for a lone percent.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "[x](https://h.example.invalid/100%)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p><a href=\"https://h.example.invalid/100%\">x</a></p>\n"
+            },
+            "strip_reply_fallback": false,
+            "expected": "[x](https://h.example.invalid/100%)",
+            "path": "source"
+        },
+        {
+            "id": "r5-html-raw-brackets",
+            "note": "R-5 (re-audit): commonmark.js pre-encodes a destination ([ ] and a lone %), pulldown-cmark does not. v2.2 B5: both sides write [ as %5B, ] as %5D and a % without two hex digits as %25 before the RFC 3986 normalisation, so every parser agrees. The HTML holds raw brackets, the source the encoded form.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "[x](https://h.example.invalid/?a%5B%5D=1)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p><a href=\"https://h.example.invalid/?a[]=1\">x</a></p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "[x](https://h.example.invalid/?a%5B%5D=1)",
+            "path": "source"
+        },
+        {
+            "id": "r5-html-lone-percent",
+            "note": "R-5 (re-audit): commonmark.js pre-encodes a destination ([ ] and a lone %), pulldown-cmark does not. v2.2 B5: both sides write [ as %5B, ] as %5D and a % without two hex digits as %25 before the RFC 3986 normalisation, so every parser agrees. The HTML holds a lone percent, the source %25.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "[x](https://h.example.invalid/100%25)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p><a href=\"https://h.example.invalid/100%\">x</a></p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "[x](https://h.example.invalid/100%25)",
+            "path": "source"
+        },
+        {
+            "id": "r7-entity-pipe-hidden",
+            "note": "R-7 (re-audit): an entity pipe becomes | in text and the canonical split cuts there, GFM splits the raw line first and does not. v2.2 B7: the unescaped pipes of the source line must equal the pipes of its text. GFM sees a 1-column table and hides HIDDEN, Element showed it.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "| a &#124; b |\n| - |\n| c | HIDDEN |",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>| a | b |<br>| - |<br>| c | HIDDEN |</p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "\\| a \\| b \\|\\\n\\| - \\|\\\n\\| c \\| HIDDEN \\|",
+            "path": "converter"
+        },
+        {
+            "id": "r7-entity-pipe-row",
+            "note": "R-7 (re-audit): an entity pipe becomes | in text and the canonical split cuts there, GFM splits the raw line first and does not. v2.2 B7: the unescaped pipes of the source line must equal the pipes of its text. GFM renders one cell, the HTML row has two.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "| x | y |\n| - | - |\n| a &#124; b |",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<table><thead><tr><th>x</th><th>y</th></tr></thead><tbody><tr><td>a</td><td>b</td></tr></tbody></table>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "| x | y |\n| --- | --- |\n| a | b |",
+            "path": "converter"
+        },
+        {
+            "id": "r8-indented-row",
+            "note": "R-8 (re-audit): a row line indented by 4 or more columns is a code block in GFM, a table row in the canonical model. v2.2 B7: it is opaque. Four spaces.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "| a |\n| - |\n    x",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>| a |<br>| - |<br>x</p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "\\| a \\|\\\n\\| - \\|\\\nx",
+            "path": "converter"
+        },
+        {
+            "id": "r8-tab-row",
+            "note": "R-8 (re-audit): a row line indented by 4 or more columns is a code block in GFM, a table row in the canonical model. v2.2 B7: it is opaque. A tab (4 columns).",
+            "content": {
+                "msgtype": "m.text",
+                "body": "| a |\n| - |\n\tx",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>| a |<br>| - |<br>x</p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "\\| a \\|\\\n\\| - \\|\\\nx",
+            "path": "converter"
+        },
+        {
+            "id": "r9-empty-href",
+            "note": "R-9 (re-audit). Element deletes a falsy href, the source link [x]() has an empty destination (opaque, B5).",
+            "content": {
+                "msgtype": "m.text",
+                "body": "[x]()",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p><a href=\"\">x</a></p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "x",
+            "path": "converter"
+        },
+        {
+            "id": "r9-empty-href-plain-body",
+            "note": "R-9 (re-audit). An a with href=\"\" is transparent (B2), so the plain body is its source.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "x",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p><a href=\"\">x</a></p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "x",
+            "path": "source"
+        },
+        {
+            "id": "r9-double-backslash-href",
+            "note": "R-9 (re-audit). Element strips a protocol-relative href, a href that starts with two of / and \\ is opaque (B5).",
+            "content": {
+                "msgtype": "m.text",
+                "body": "[x](%5C%5Cevil.example.invalid/)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p><a href=\"\\\\evil.example.invalid/\">x</a></p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "x",
+            "path": "converter"
+        },
+        {
+            "id": "r9-tfoot-first",
+            "note": "R-9 (re-audit). A tfoot before any row: a browser shows it last, the canonical header would be its row (B4).",
+            "content": {
+                "msgtype": "m.text",
+                "body": "| f |\n| - |\n| b |",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<table><tfoot><tr><td>f</td></tr></tfoot><tbody><tr><td>b</td></tr></tbody></table>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "| f |\n| --- |\n| b |",
+            "path": "converter"
+        },
+        {
+            "id": "r9-tfoot-then-tbody",
+            "note": "R-9 (re-audit). A tfoot followed by rows: a browser shows the tfoot last (opaque, stricter than the spec text).",
+            "content": {
+                "msgtype": "m.text",
+                "body": "| h |\n| - |\n| f |\n| b |",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<table><thead><tr><th>h</th></tr></thead><tfoot><tr><td>f</td></tr></tfoot><tbody><tr><td>b</td></tr></tbody></table>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "| h |\n| --- |\n| f |\n| b |",
+            "path": "converter"
+        },
+        {
+            "id": "r10-whitespace-formatted",
+            "note": "R-10 (re-audit): a whitespace-only formatted_body is HTML in Element (truthy, it displays nothing), not 'no HTML' (B9). The converter shows nothing too.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "hi",
+                "format": "org.matrix.custom.html",
+                "formatted_body": " "
+            },
+            "strip_reply_fallback": false,
+            "expected": "",
+            "path": "converter"
+        },
+        {
+            "id": "r10-nbsp-formatted",
+            "note": "R-10 (re-audit): the converter's own blank test used JS trim(), which counts a no-break space; B9 makes 'no HTML' the empty string on both paths, so this is HTML that shows nothing.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "hi",
+                "format": "org.matrix.custom.html",
+                "formatted_body": " "
+            },
+            "strip_reply_fallback": false,
+            "expected": "",
+            "path": "converter"
+        },
+        {
+            "id": "r10-newline-formatted",
+            "note": "R-10 (re-audit): a formatted_body of only a newline is HTML that shows nothing (B9).",
+            "content": {
+                "msgtype": "m.text",
+                "body": "hi",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "\n"
+            },
+            "strip_reply_fallback": false,
+            "expected": "",
+            "path": "converter"
+        },
+        {
+            "id": "r10-empty-formatted",
+            "note": "B9: the empty formatted_body is 'no HTML': a plain message.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "hi",
+                "format": "org.matrix.custom.html",
+                "formatted_body": ""
+            },
+            "strip_reply_fallback": false,
+            "expected": "hi",
+            "path": "source"
+        },
+        {
+            "id": "r10-reply-only-fallback",
+            "note": "R-10 (re-audit): a reply whose formatted_body is only the fallback: Element sanitises it to the empty string, which is falsy, and shows the plain body (B9).",
+            "content": {
+                "msgtype": "m.text",
+                "body": "> <@bob:example.invalid> quoted\n\nanswer",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<mx-reply><blockquote><a href=\"https://matrix.to/#/!room:example.invalid/$orig:example.invalid\">In reply to</a> <a href=\"https://matrix.to/#/@bob:example.invalid\">@bob:example.invalid</a><br>quoted</blockquote></mx-reply>",
+                "m.relates_to": {
+                    "m.in_reply_to": {
+                        "event_id": "$orig:example.invalid"
+                    }
+                }
+            },
+            "strip_reply_fallback": true,
+            "expected": "answer",
+            "path": "source"
+        },
+        {
+            "id": "r10-reply-only-fallback-unsafe",
+            "note": "R-10 (re-audit): the same with a plain body that is not safe Markdown: the escaped plain text.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "> <@bob:example.invalid> quoted\n\n<b>answer</b>",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<mx-reply><blockquote><a href=\"https://matrix.to/#/!room:example.invalid/$orig:example.invalid\">In reply to</a> <a href=\"https://matrix.to/#/@bob:example.invalid\">@bob:example.invalid</a><br>quoted</blockquote></mx-reply>",
+                "m.relates_to": {
+                    "m.in_reply_to": {
+                        "event_id": "$orig:example.invalid"
+                    }
+                }
+            },
+            "strip_reply_fallback": true,
+            "expected": "\\<b>answer\\</b>",
+            "path": "escaped"
+        },
+        {
+            "id": "r10-reply-fallback-and-whitespace",
+            "note": "B9: whitespace after the fallback keeps the formatted_body truthy: it is HTML that shows nothing.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "> <@bob:example.invalid> quoted\n\nanswer",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<mx-reply><blockquote><a href=\"https://matrix.to/#/!room:example.invalid/$orig:example.invalid\">In reply to</a> <a href=\"https://matrix.to/#/@bob:example.invalid\">@bob:example.invalid</a><br>quoted</blockquote></mx-reply>\n",
+                "m.relates_to": {
+                    "m.in_reply_to": {
+                        "event_id": "$orig:example.invalid"
+                    }
+                }
+            },
+            "strip_reply_fallback": true,
+            "expected": "",
+            "path": "converter"
+        },
+        {
+            "id": "r10-crlf-plain",
+            "note": "R-10 (re-audit): a CRLF body is copied as it is (the reference keeps the CR, Rust lines() would drop it).",
+            "content": {
+                "msgtype": "m.text",
+                "body": "line one\r\nline two"
+            },
+            "strip_reply_fallback": false,
+            "expected": "line one\r\nline two",
+            "path": "source"
+        },
+        {
+            "id": "r10-crlf-reply-fallback",
+            "note": "R-10 (re-audit): the plain reply strip splits at LF only (Element's stripPlainReply), so a CRLF fallback leaves its CR and the empty line is not removed: the copy starts with CRLF. Pinned so a port does the same.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "> <@bob:example.invalid> quoted\r\n\r\nanswer",
+                "m.relates_to": {
+                    "m.in_reply_to": {
+                        "event_id": "$orig:example.invalid"
+                    }
+                }
+            },
+            "strip_reply_fallback": true,
+            "expected": "\r\nanswer",
+            "path": "source"
+        },
+        {
+            "id": "r10-crlf-html",
+            "note": "R-10 (re-audit): CRLF in both the body and the formatted_body (the HTML5 input stream turns CRLF into LF before tokenizing, so the trees are equal).",
+            "content": {
+                "msgtype": "m.text",
+                "body": "a\r\nb\r\n\r\n- c",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>a<br>\r\nb</p>\r\n<ul>\r\n<li>c</li>\r\n</ul>\r\n"
+            },
+            "strip_reply_fallback": false,
+            "expected": "a\r\nb\r\n\r\n- c",
+            "path": "source"
+        },
+        {
+            "id": "r10-crlf-code",
+            "note": "R-10 (re-audit): a CRLF code block: both sides read the lines of the code as LF.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "```\r\nx\r\ny\r\n```",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<pre><code>x\r\ny\r\n</code></pre>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "```\r\nx\r\ny\r\n```",
+            "path": "source"
+        },
+        {
+            "id": "b1-entities-accepted",
+            "note": "B1: the entity set (&amp; &lt; &gt; &quot; &apos; &#39; decimal and hex) is decoded, so these equal the source text.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "x'y A A & < > \" '",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>x&#39;y &#x41; &#65; &amp; &lt; &gt; &quot; &apos;</p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "x'y A A & < > \" '",
+            "path": "source"
+        },
+        {
+            "id": "b1-nbsp-entity",
+            "note": "B1: a named reference outside the set (&nbsp;) is opaque.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "a&nbsp;b",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>a&nbsp;b</p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "a b",
+            "path": "converter"
+        },
+        {
+            "id": "b1-c1-reference",
+            "note": "B1: a numeric reference into the C1 range is opaque (HTML5 remaps it to a Windows-1252 character, here U+20AC, a plain decoder does not).",
+            "content": {
+                "msgtype": "m.text",
+                "body": "a&#128;b",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>a&#128;b</p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "a€b",
+            "path": "converter"
+        },
+        {
+            "id": "b1-unquoted-attribute",
+            "note": "B1: an unquoted attribute value is opaque.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "[x](https://l.example.invalid/)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p><a href=https://l.example.invalid/>x</a></p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "[x](https://l.example.invalid/)",
+            "path": "converter"
+        },
+        {
+            "id": "b1-space-before-gt",
+            "note": "B1: the tag grammar has no whitespace before > (without a slash).",
+            "content": {
+                "msgtype": "m.text",
+                "body": "a",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p >a</p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "a",
+            "path": "converter"
+        },
+        {
+            "id": "b2-class-on-p",
+            "note": "B2: an attribute outside the allow-list is opaque.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "a",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p class=\"x\">a</p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "a",
+            "path": "converter"
+        },
+        {
+            "id": "b2-th-align-style",
+            "note": "B2: th and td may carry style and align.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "| a | b |\n|:--|--:|\n| 1 | 2 |",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<table><thead><tr><th align=\"left\" style=\"text-align: left\">a</th><th align=\"right\">b</th></tr></thead><tbody><tr><td>1</td><td>2</td></tr></tbody></table>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "| a | b |\n|:--|--:|\n| 1 | 2 |",
+            "path": "source"
+        },
+        {
+            "id": "b3-unclosed-p",
+            "note": "B3: every element but br, hr and img needs its end tag.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "a\n\nb",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>a<p>b"
+            },
+            "strip_reply_fallback": false,
+            "expected": "a\n\nb",
+            "path": "converter"
+        },
+        {
+            "id": "b3-unclosed-li",
+            "note": "B3: no implied end tags.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "- a\n- b",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<ul><li>a<li>b</ul>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "- a\n- b",
+            "path": "converter"
+        },
+        {
+            "id": "b3-void-end-tag",
+            "note": "B3: an end tag of a void element is opaque.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "a\\\nb",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<p>a</br>b</p>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "a\\\nb",
+            "path": "converter"
+        },
+        {
+            "id": "b4-p-in-td",
+            "note": "B4: a table cell holds inline content only.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "| a |\n| - |\n| b |",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<table><thead><tr><th>a</th></tr></thead><tbody><tr><td><p>b</p></td></tr></tbody></table>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "| a |\n| --- |\n| b |",
+            "path": "converter"
+        },
+        {
+            "id": "b4-text-in-ul",
+            "note": "B4: a list holds only li (and whitespace).",
+            "content": {
+                "msgtype": "m.text",
+                "body": "- a",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<ul>x<li>a</li></ul>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "- a",
+            "path": "converter"
+        },
+        {
+            "id": "b4-reply-interior-free",
+            "note": "B4/A3: the reply fallback may hold anything that tokenizes and nests properly (here a span and a div, which are not allowed elsewhere); it is removed.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "> <@bob:example.invalid> quoted\n\nok",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<mx-reply><blockquote><span data-mx-color=\"#ff0000\">quoted</span><div><b>x</b></div></blockquote></mx-reply>ok",
+                "m.relates_to": {
+                    "m.in_reply_to": {
+                        "event_id": "$orig:example.invalid"
+                    }
+                }
+            },
+            "strip_reply_fallback": true,
+            "expected": "ok",
+            "path": "source"
+        },
+        {
+            "id": "b4-reply-interior-misnested",
+            "note": "B4: the fallback must nest properly too.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "> <@bob:example.invalid> quoted\n\nok",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<mx-reply><blockquote><b>quoted</blockquote></b></mx-reply>ok",
+                "m.relates_to": {
+                    "m.in_reply_to": {
+                        "event_id": "$orig:example.invalid"
+                    }
+                }
+            },
+            "strip_reply_fallback": true,
+            "expected": "ok",
+            "path": "converter"
+        },
+        {
+            "id": "b3-pre-lf-dropped",
+            "note": "B4: HTML5 drops one LF directly after a pre start tag, so does the tree.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "```\ncode\n```",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<pre>\ncode\n</pre>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "```\ncode\n```",
+            "path": "source"
+        },
+        {
+            "id": "b11-brackets-plain",
+            "note": "Spec B11: a plain body with more than 1000 [ is not parsed as a source candidate (commonmark.js is quadratic on some bracket runs); it is escaped.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[ x"
+            },
+            "strip_reply_fallback": false,
+            "expected": "\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[ x",
+            "path": "escaped"
+        },
+        {
+            "id": "b11-brackets-html",
+            "note": "Spec B11: an HTML message whose body has more than 1000 [ is not parsed as a source candidate; the converter runs.",
+            "content": {
+                "msgtype": "m.text",
+                "body": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[ **x**",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[ <strong>x</strong>"
+            },
+            "strip_reply_fallback": false,
+            "expected": "\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[ **x**",
+            "path": "converter"
+        }
+    ]
+}

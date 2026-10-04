@@ -43,9 +43,9 @@ stores; nothing here can patch it.
 | `entrypoints/element_entrypoint.sh` | Element entrypoint: templates `config.json`, favicons, the theme stylesheet link. Bind-mounted by `docker-compose.yml`. |
 | `config/` | Element config, nginx config and security headers, service-worker boot shim, theme CSS, LiveKit config, brand assets. |
 | `patches/synapse/`, `patches/element-web/` | Vendored patches and their registries (`README.md` in each). |
-| `scripts/` | Registry and hunk checks (run in CI), DID-field guard acceptance test, localpart-vector check, deployment audits, the storage controller, e2e helpers. |
+| `scripts/` | Registry, hunk and Copy Markdown vector checks (run in CI), DID-field guard acceptance test, localpart-vector check, deployment audits, the storage controller, e2e helpers. |
 | `verify-deployment.sh`, `verify-theme.sh` | Probe of a live deployment's public endpoints, read-only unless `--e2ee` (which signs in and sends a message); static theme check. |
-| `docs/` | Element theme contract, Element source build, audits, drafts filed upstream. |
+| `docs/` | Element theme contract, Element source build, the Copy Markdown algorithm and its conformance vectors, audits, drafts filed upstream. |
 | `skills/` | Task guides for agents (see [Skills](#skills)). |
 
 ## Build and deployment model
@@ -260,6 +260,7 @@ Guides and scripts here must not contradict it:
 ```bash
 scripts/check-patch-registry.sh          # patches, registries, Dockerfiles, README agree (CI)
 python3 scripts/check-patch-hunks.py     # hunk headers match their bodies (CI)
+python3 scripts/check-copy-markdown-vectors.py  # Copy Markdown vectors: docs copy == patch copy (CI)
 ./verify-theme.sh                        # static theme invariants
 node --test scripts/browser-eventindex-invariants.mjs
 scripts/did-field-guard-accept.sh        # needs a container runtime; see its header
@@ -267,7 +268,7 @@ scripts/check-did-localpart-vectors.sh   # needs `gh`; compares against siwx-oid
 e2e-harness/run.sh smoke                 # hermetic stack; needs podman and a siwx-oidc checkout
 ```
 
-- `.github/workflows/checks.yml` runs the first two on every pull request and push to
+- `.github/workflows/checks.yml` runs the first three on every pull request and push to
   `main`.
 - Synapse patch tests run inside a Synapse checkout: see
   [patches/synapse/README.md](patches/synapse/README.md) rule 4.
