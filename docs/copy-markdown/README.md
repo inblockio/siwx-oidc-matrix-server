@@ -202,4 +202,22 @@ Each falls back to the converter (G4), never to a wrong copy:
 
 The converter (G4) parses `formatted_body` as HTML5, not with the sanitiser's tokenizer, so for
 crafted HTML (comments, CDATA, raw-text elements) its output can differ from what Element
-displays; that predates this algorithm and is tracked separately.
+displays; that predates this algorithm and is listed under the potential follow-ups below.
+
+## Potential follow-ups
+
+Recorded on 2026-10-05 as candidates, by maintainer decision not scheduled: nothing here is
+promised, and each needs its own go before work starts.
+
+- **Converter fidelity for crafted HTML.** Make the converter (G4) read `formatted_body` the
+  way Element's sanitiser tokenizes it, so that comments, CDATA sections and raw-text elements
+  copy as what Element displays (see the last paragraph of "Known limits"). The source rule
+  (G2) is not affected: it reads the HTML with its own strict grammar and treats such input as
+  opaque.
+- **Independent audit of the strict grammar.** The final review of the current algorithm
+  (the strict HTML grammar, the canonical model and the parser cost guard) was reduced in
+  scope. A full independent audit, ideally with a differential fuzz against a second parser
+  pair, would close that gap.
+- **Rust SDK port.** A port for agents and bots on the Matrix Rust SDK, so that their Markdown
+  export matches Element's byte for byte. It must pass every entry of
+  [vectors.json](vectors.json) and follow the porting notes above.
