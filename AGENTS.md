@@ -109,8 +109,10 @@ change reaches an existing deployment.
   depends on 7 and entry 10 on 9. Keep the Dockerfile, the registry and the README in
   the same order.
 - **UPSTREAM-TRACKED and filed patches mirror their upstream PR byte for byte.** The one
-  recorded exception is Element entry 6, which leads its PR by named increments. Pushing
-  to a mirrored PR is not finished until the vendored patch is re-copied.
+  recorded exception is Element entry 6, which leads its PR by named increments; a
+  test-only exception for entry 9 is approved but takes effect only when its PR picks up
+  element-web#34955 (see the entry). Pushing to a mirrored PR is not finished until the
+  vendored patch is re-copied.
 - **A Synapse bump carries a forward-port obligation.** Run the dry-run in
   [patches/synapse/README.md](patches/synapse/README.md) rule 4 before merging a new
   `FROM matrixdotorg/synapse` line, and read each failing patch's retirement condition
