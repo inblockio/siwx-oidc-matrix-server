@@ -30,7 +30,9 @@ Rules of this registry:
      allowed when it is (a) recorded in the entry, (b) pinned to a named provenance
      commit on a branch of our fork, and (c) carries a stated condition for closing
      the gap. Unrecorded drift is still forbidden — that is the whole point of the
-     rule.
+     rule. A second, test-only exception is approved for entry 9 (a maintainer
+     decision, 2026-10-05). It takes effect only when #35242 picks up #34955; see that
+     entry.
    - **POLICY** — deployment policy that is not upstreamable. The only permanent
      residents.
    Today exactly one entry is UPSTREAM-TRACKED: #6 `browser-eventindex`
@@ -74,7 +76,8 @@ Rules of this registry:
    ```
    Second, compare every entry under the no-drift discipline (rule 3) against its PR's
    current diff. The added/removed lines must be identical (the `index` lines may
-   differ, see entry 9); no output before the echo means no drift:
+   differ, and once in effect entry 9's approved test-only deviation is the expected
+   output; see entry 9); no output before the echo means no drift:
    ```bash
    pm() { grep -E '^[+-]' | grep -vE '^(\+\+\+|---) '; }
    diff <(gh api repos/element-hq/element-web/pulls/35242 -H 'Accept: application/vnd.github.diff' | pm) \
@@ -1237,11 +1240,35 @@ A tag bump must try every patch in this file's order.
   [element-web#35242](https://github.com/element-hq/element-web/pull/35242) (opened
   2026-09-28, head inblockio/element-web `fix/sw-versions-not-cached-on-error` at
   `246724f407` since 2026-09-29, was `4ea5f83813`; no force-push from here on). Checked
-  2026-09-29: #35241 and #35242 both open, not merged. Drafts as filed in
-  `docs/upstream/2026-09-28-element-sw-versions/`. The open maintainer PR #34955 (hughns)
-  adds `serviceworker/index.test.ts` with a fetch mock that lacks `ok`; our tests live in
-  `serverSupport.test.ts` to avoid the file conflict, and we rebase onto #34955 (and move
-  its mock to `new Response(...)`) when it lands.
+  2026-10-05: #35241 and #35242 both open, not merged. #35242's only review requested
+  changes to the description (addressed 2026-09-29, re-review pending), and its build
+  and test workflows still wait for a maintainer's first-time-contributor approval.
+  Drafts as filed in `docs/upstream/2026-09-28-element-sw-versions/`. Our tests live in
+  `serverSupport.test.ts` so that they do not conflict with the maintainer PR #34955
+  (hughns), which adds `serviceworker/index.test.ts`.
+- **#34955 merged 2026-10-05** (`cd558745`, the tip of `develop` that day). It is in no
+  release yet: v1.12.29 (ours) and v1.12.30 (latest) both predate it. It refactors
+  `getAuthData` in `index.ts` and adds `index.test.ts`, whose `/versions` fetch mock
+  returns `{ json }` without `ok`. Checked on `develop` at `cd558745` (2026-10-05):
+  entries 9 and 10 apply with line offsets only; `serverSupport.test.ts` 7/7 and
+  `mediaTokenRetry.test.ts` 6/6 pass; `index.test.ts` fails 2/4 with entry 9 applied,
+  because entry 9 treats a response without `ok` as failed and the two token tests then
+  get the legacy `/_matrix/media/v3` URL. Changing that one mock line to
+  `return new Response(JSON.stringify({ versions: ["v1.11"] }));` makes all 17 pass.
+  Element's `tests.yml` runs on the PR merged with `develop` and in the merge queue, so
+  #35242 needs that change as soon as its CI runs. Bringing it in takes a merge of
+  `develop` into the PR branch (a rebase would be a force-push).
+- **Approved deviation (test-only, a maintainer decision 2026-10-05; NOT in effect
+  yet).** It takes effect when #35242 picks up #34955 together with the mock change
+  above. From then on the PR diff also changes `apps/web/src/serviceworker/index.test.ts`,
+  which does not exist at v1.12.29 or v1.12.30, so the vendored entry 9 cannot carry that
+  hunk and leaves it out. Every other added/removed line stays identical to the PR, and
+  rule 3 still applies to them. (a) Recorded here. (b) Provenance: the PR head commit
+  that carries the mock change; record its sha here in the same change that re-vendors
+  entry 9. (c) Closes at the first tag bump to a release that contains #34955 (entry 9
+  then equals the full PR diff again), or when the patch retires. While it is in effect,
+  the rule 4b drift check prints exactly that hunk's removed and added mock line, and
+  nothing else.
 - **Retirement:** a tag bump where upstream checks `response.ok` (or otherwise stops
   caching a failed `/versions`), i.e. our PR or an equivalent merged. The patch then
   fails to apply: check, and drop it (and rebase entry 10 onto the upstream code).
