@@ -14,6 +14,10 @@ e2e-harness/up.sh [--fresh]         # stack only; --fresh wipes its data volumes
 e2e-harness/down.sh [--volumes] [--network]
 ```
 
+This harness tests the working tree. To rehearse an upgrade from the images a deployment runs,
+use the qualification lab instead (`docker-compose.local.yml` plus `docker-compose.qualify.yml`,
+every image by digest; see the root README, "Qualification lab").
+
 Host ports: edge `18080`, siwx-oidc `18081`, Synapse `18448`, LiveKit
 `7880`, `7881/tcp`, `20100-20200/udp`. Artifacts and `summary.json` land in
 `e2e-harness/artifacts/<run-id>/`.

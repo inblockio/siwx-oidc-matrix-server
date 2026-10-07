@@ -4,6 +4,8 @@
 /proxy/
 /siwx-oidc-config/
 /.env.local
+# The qualification lab's env file (docker-compose.qualify.yml): its own throwaway secrets.
+/.env.qualify
 # Maintainer-local notes and private material (AGENTS.md, "Public-repo
 # hygiene"): they hold deployment details that must never reach this repo.
 /CLAUDE.local.md

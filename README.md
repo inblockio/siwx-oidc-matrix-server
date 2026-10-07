@@ -87,6 +87,42 @@ siwx-oidc, and the `/_synapse/admin/*` and `/_synapse/mas/*` paths it must not e
 has a hostname-based Caddy example. For a local, HTTP-only stack with Caddy included, use
 `docker-compose.local.yml` (see its header).
 
+### Qualification lab: the local stack on pinned images
+
+`docker-compose.local.yml` builds siwx-oidc, Synapse and Element Web from source, so it tests
+whatever checkouts sit next to it. To rehearse an upgrade from the exact images a deployment
+runs, layer `docker-compose.qualify.yml` on it: every service then runs an image named by
+reference, and the stack refuses to start until all four references are set (an unset or empty
+`*_IMAGE_REF` is an error, and nothing can be built). Compose can only check that a reference is
+set, so pass digests (`name@sha256:…`), never a tag: a tag can move between the rehearsal and
+the deployment.
+
+```bash
+# .env.qualify: the lab's own throwaway secrets (MAS_SHARED_SECRET, SIWEOIDC_SIGNING_KEY_PEM),
+# generated as the header of docker-compose.local.yml shows, plus host ports, base URLs and the
+# optional SIWXOIDC_ENS_API_URL / SIWXOIDC_OP_TOS_URI / SIWXOIDC_OP_POLICY_URI. Mode 600, gitignored.
+export REDIS_IMAGE_REF=redis:<version>@sha256:<digest>
+export SYNAPSE_IMAGE_REF=ghcr.io/inblockio/siwx-oidc-matrix-server/synapse@sha256:<digest>
+export ELEMENT_IMAGE_REF=ghcr.io/inblockio/siwx-oidc-matrix-server/element-web@sha256:<digest>
+export SIWX_OIDC_IMAGE_REF=ghcr.io/inblockio/siwx-oidc@sha256:<baseline digest>
+docker compose -p <project> -f docker-compose.local.yml -f docker-compose.qualify.yml \
+  --env-file .env.qualify up -d
+
+# switch ONLY siwx-oidc to the candidate; Redis, Synapse, Element Web and Caddy keep running
+SIWX_OIDC_IMAGE_REF=ghcr.io/inblockio/siwx-oidc@sha256:<candidate digest> \
+docker compose -p <project> -f docker-compose.local.yml -f docker-compose.qualify.yml \
+  --env-file .env.qualify up -d --no-deps siwx-oidc
+```
+
+Keep the image references in the shell, not in the env file, so a later command that forgets
+them is refused instead of converging siwx-oidc back to an older image. The overlay sets the
+siwx-oidc environment the way a production deployment does: `SIWEOIDC_REQUIRE_SECRET=false`,
+the passkey credential-store dual write off (`AQUA_WEBAUTHN_REDIS_URL` unset), and the three
+opt-ins above as pass-throughs (empty means off). It keeps `Caddyfile.local`, whose Matrix port
+sends login, logout, logout/all, refresh, `delete_devices` and `DELETE /devices/*` to
+siwx-oidc. The Element Web upgrade-continuity suite in siwx-oidc
+(`e2e/element/upgrade-survival.sh`) runs on this lab; its README lists the variables.
+
 Calls go through LiveKit. Its embedded TURN is **off** in `config/livekit.yaml`, so
 clients behind symmetric NAT or strict firewalls cannot join a call. Enabling it needs an
 edge that splits `:443` by SNI (the `caddy-l4` image), a DNS record for the TURN host,
