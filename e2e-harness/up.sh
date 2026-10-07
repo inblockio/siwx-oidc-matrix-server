@@ -36,6 +36,12 @@ echo "[up] siwx-oidc image: ${SIWX_OIDC_IMAGE_REF}"
 echo "[up] synapse image  : ${SYNAPSE_IMAGE_REF}"
 LIVEKIT_IMAGE_REF="${LIVEKIT_IMAGE_REF:-livekit/livekit-server:v1.13.6@sha256:e37d68f172556d02aa77968b9fc55ef481468c0315fa38e4fa6c56ce72e3a815}"
 
+# Element Call standalone SPA, the version production embeds (v0.24.0, revision
+# 6f7dac31). Pinned by the multi-arch index digest; element-call-check.sh then
+# pins what is SERVED (entry chunk sha256, plain and .gz). H14 design:
+# aqua-agents docs/handover/2026-10-08-scribe-harness-h14-element-call-design.md.
+ELEMENT_CALL_IMAGE_REF="${ELEMENT_CALL_IMAGE_REF:-ghcr.io/element-hq/element-call:v0.24.0@sha256:e5ffed2141f4807a7437f4bf55da131fb6ac180f8d058d4ad3a32a581d991316}"
+
 FRESH=0
 [ "${1:-}" = "--fresh" ] && FRESH=1
 
@@ -53,6 +59,15 @@ set -a; . "${ENV_FILE}"; set +a
 # (godotenv/compose would do this automatically; raw `podman -e` does not.)
 SIWEOIDC_SIGNING_KEY_PEM="$(printf '%b' "${SIWEOIDC_SIGNING_KEY_PEM}")"
 
+# Element Call's edge port. An .env.e2e generated before 2026-10-08 has no such
+# line, so default it here instead of forcing a regeneration.
+ELEMENT_CALL_HOST_PORT="${ELEMENT_CALL_HOST_PORT:-18082}"
+# MSC4143 rtc/transports must name a focus the browser can reach. The entrypoint
+# default (https://${MATRIX_HOST}/livekit/jwt = https://localhost/livekit/jwt)
+# has no listener here, and Element Call 0.24.0 no longer reads .well-known.
+MATRIX_RTC_LIVEKIT_SERVICE_URL="${MATRIX_BASE_URL}/livekit/jwt"
+echo "[up] synapse rtc/transports livekit_service_url: ${MATRIX_RTC_LIVEKIT_SERVICE_URL}"
+
 # 1b. Ensure the self-signed federation cert for the lk-jwt -> Synapse TLS shim.
 "${REPO_ROOT}/scripts/gen-e2e-fed-cert.sh"
 FED_CERT_DIR="${REPO_ROOT}/e2e-harness/certs"
@@ -61,7 +76,7 @@ FED_CERT_DIR="${REPO_ROOT}/e2e-harness/certs"
 #    Remove the fed-proxy first: it shares siwx-e2eh-lk-jwt's network namespace,
 #    so it must go before the container that owns that namespace.
 echo "[up] removing any existing siwx-e2eh-* containers ..."
-for c in siwx-e2eh-fed-proxy siwx-e2eh-caddy siwx-e2eh-lk-jwt siwx-e2eh-livekit siwx-e2eh-synapse siwx-e2eh-oidc siwx-e2eh-redis; do
+for c in siwx-e2eh-fed-proxy siwx-e2eh-caddy siwx-e2eh-element-call siwx-e2eh-lk-jwt siwx-e2eh-livekit siwx-e2eh-synapse siwx-e2eh-oidc siwx-e2eh-redis; do
   podman rm -f "$c" >/dev/null 2>&1 || true
 done
 
@@ -112,6 +127,7 @@ podman run -d --name siwx-e2eh-synapse --network "${NET}" --restart unless-stopp
   -e SIWEOIDC_PUBLIC_ISSUER="${SIWEOIDC_PUBLIC_ISSUER}" \
   -e SIWEOIDC_INTERNAL_URL="${SIWEOIDC_INTERNAL_URL}" \
   -e MAS_SHARED_SECRET="${MAS_SHARED_SECRET}" \
+  -e MATRIX_RTC_LIVEKIT_SERVICE_URL="${MATRIX_RTC_LIVEKIT_SERVICE_URL}" \
   -v siwx-e2eh-matrix-data:/data \
   --health-cmd "curl -fSs http://localhost:8008/health || exit 1" \
   --health-interval 15s --health-timeout 5s --health-retries 5 --health-start-period 30s \
@@ -165,14 +181,30 @@ podman run -d --name siwx-e2eh-fed-proxy --network "container:siwx-e2eh-lk-jwt" 
   -v "${FED_CERT_DIR}/fed.key:/certs/fed.key:ro" \
   docker.io/library/caddy:2.11.4-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b >/dev/null
 
-# 9. caddy edge (publish 18080 + 18081)
-echo "[up] starting siwx-e2eh-caddy (host ${CADDY_EDGE_PORT} + ${SIWEOIDC_HOST_PORT})"
+# 8c. Element Call SPA (internal :8080; reached via the caddy edge :18082).
+#     config.json is a read-only bind mount of config/element-call.e2e.json
+#     (production's widget config plus the homeserver and LiveKit service URL a
+#     standalone SPA needs). The check fails the bring-up unless the container
+#     serves the pinned entry chunk and that exact config.
+echo "[up] starting siwx-e2eh-element-call"
+podman run -d --name siwx-e2eh-element-call --network "${NET}" --restart unless-stopped \
+  -v "${REPO_ROOT}/config/element-call.e2e.json:/app/config.json:ro" \
+  "${ELEMENT_CALL_IMAGE_REF}" >/dev/null
+"${REPO_ROOT}/e2e-harness/element-call-check.sh" siwx-e2eh-element-call "${REPO_ROOT}/config/element-call.e2e.json" || {
+  echo "[up] FATAL: siwx-e2eh-element-call does not serve the pinned build; removing it." >&2
+  podman rm -f siwx-e2eh-element-call >/dev/null 2>&1 || true
+  exit 1
+}
+
+# 9. caddy edge (publish 18080 + 18081 + 18082)
+echo "[up] starting siwx-e2eh-caddy (host ${CADDY_EDGE_PORT} + ${SIWEOIDC_HOST_PORT} + ${ELEMENT_CALL_HOST_PORT})"
 podman run -d --name siwx-e2eh-caddy --network "${NET}" --restart unless-stopped \
   -p "${CADDY_EDGE_PORT}:18080" \
   -p "${SIWEOIDC_HOST_PORT}:18081" \
+  -p "${ELEMENT_CALL_HOST_PORT}:18082" \
   -v "${REPO_ROOT}/Caddyfile.e2e:/etc/caddy/Caddyfile:ro" \
   docker.io/library/caddy:2.11.4-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b >/dev/null
 
 echo "[up] all siwx-e2eh-* containers launched. Current state:"
 podman ps --filter "name=siwx-e2eh-" --format '  {{.Names}}\t{{.Status}}\t{{.Ports}}'
-echo "[up] done. Edge: http://localhost:${CADDY_EDGE_PORT}  OIDC: http://localhost:${SIWEOIDC_HOST_PORT}  Synapse: http://localhost:${SYNAPSE_HOST_PORT}"
+echo "[up] done. Edge: http://localhost:${CADDY_EDGE_PORT}  OIDC: http://localhost:${SIWEOIDC_HOST_PORT}  Synapse: http://localhost:${SYNAPSE_HOST_PORT}  Element Call: http://localhost:${ELEMENT_CALL_HOST_PORT}"
