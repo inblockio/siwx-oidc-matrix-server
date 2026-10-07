@@ -33,6 +33,7 @@ stores; nothing here can patch it.
 | `start-matrix.sh` | First start: writes `.env` (mode 600) with generated secrets, then `docker compose up --pull always`. `--stop`, `--reset` (destroys all data). |
 | `docker-compose.yml` | The deployable stack: `matrix_synapse`, `siwx-oidc`, `redis`, `element-web`, `livekit`, `lk-jwt-service`. No reverse proxy; it joins the external `portal-net` network, where the proxy runs. |
 | `docker-compose.local.yml`, `Caddyfile.local` | Local HTTP-only stack that builds the images from source and includes a stock Caddy. `Caddyfile.local` is the public reference for every route a proxy must provide. |
+| `docker-compose.qualify.yml` | Overlay for `docker-compose.local.yml`: every image by explicit reference (`*_IMAGE_REF`, refused when unset), no builds, the siwx-oidc environment of a production deployment. The lab for upgrade rehearsals; see the README's "Qualification lab". |
 | `docker-compose.e2e.yml`, `Caddyfile.e2e`, `e2e-harness/` | Hermetic local end-to-end stack (podman). See [e2e-harness/README.md](e2e-harness/README.md). |
 | `docker-compose.override.yml.example` | Template that binds Synapse's `/data` to a dedicated volume. |
 | `dockerfiles/Dockerfile` | The Synapse image: pinned upstream base, pinned `yq`, the Synapse patches, `entrypoints/matrix_server.sh`. |
@@ -55,7 +56,8 @@ stores; nothing here can patch it.
   dispatch) and publishes them to `ghcr.io/inblockio/siwx-oidc-matrix-server/<image>` with
   the tags `main`, `latest` and `sha-<commit>`. A push that touches only `docs/**` or
   `**.md` builds nothing. Images built locally (`docker-compose.local.yml`, the e2e
-  harness) are for testing and are never deployed.
+  harness) are for testing and are never deployed. An upgrade rehearsal runs the deployed
+  images themselves, by digest, through `docker-compose.qualify.yml`.
 - **Promote digests, not tags.** CI builds are not reproducible: the Element image stamps
   a build timestamp into `sw.js`, so every build has a new digest. `docker-compose.yml`
   defaults each first-party image to a `sha-<commit>` tag plus digest; a deployment pins

@@ -1,0 +1,66 @@
+# Qualification overlay for docker-compose.local.yml: the same local stack, but every
+# service runs an image named by an explicit, pinned reference instead of a local build.
+#
+# Why: a local build tests whatever checkout happens to sit next to this repository, which
+# can be weeks behind what a deployment runs. An upgrade rehearsal must start from the exact
+# images the deployment runs and switch to the exact candidate image, so this overlay names
+# every image by reference and refuses to start without one (`${VAR:?}` fails on unset AND
+# empty). Nothing here can build an image: `build` is reset on every service.
+#
+# Layer it on the local file, always with an explicit project name:
+#
+#   export REDIS_IMAGE_REF=redis:<version>@sha256:<digest>
+#   export SYNAPSE_IMAGE_REF=<registry>/synapse@sha256:<digest>
+#   export ELEMENT_IMAGE_REF=<registry>/element-web@sha256:<digest>
+#   export SIWX_OIDC_IMAGE_REF=<registry>/siwx-oidc@sha256:<baseline digest>
+#   docker compose -p <project> -f docker-compose.local.yml -f docker-compose.qualify.yml \
+#     --env-file .env.qualify up -d
+#
+# Switch ONLY siwx-oidc to a candidate, Redis, Synapse, Element Web and Caddy kept running:
+#
+#   SIWX_OIDC_IMAGE_REF=<registry>/siwx-oidc@sha256:<candidate digest> \
+#   docker compose -p <project> -f docker-compose.local.yml -f docker-compose.qualify.yml \
+#     --env-file .env.qualify up -d --no-deps siwx-oidc
+#
+# Keep the image references in the shell environment, not in the env file: a later command
+# that forgets them is refused, instead of silently converging siwx-oidc back to whatever
+# the env file names. A variable set in the shell wins over the same name in --env-file.
+#
+# `.env.qualify` holds only the lab's own secrets and settings (MAS_SHARED_SECRET,
+# SIWEOIDC_SIGNING_KEY_PEM, host ports, base URLs, the opt-ins below), mode 600, gitignored.
+# Generate it as the header of docker-compose.local.yml describes. Never use a deployment's
+# env file here.
+#
+# The siwx-oidc environment follows a production deployment's key set:
+#   - SIWEOIDC_REQUIRE_SECRET "false" (set by docker-compose.local.yml, repeated here so the
+#     qualification lab keeps it even if the local file changes);
+#   - the passkey credential-store dual write stays off: AQUA_WEBAUTHN_REDIS_URL is not set;
+#   - the three opt-ins of siwx-oidc >= 3547bd2 are pass-throughs, empty (off) unless the env
+#     file sets them: SIWXOIDC_ENS_API_URL, SIWXOIDC_OP_TOS_URI, SIWXOIDC_OP_POLICY_URI.
+#     A build that predates them reads only SIWEOIDC_* and ignores the three.
+#   - RUST_LOG defaults to the server's own default filter instead of the local file's debug.
+
+services:
+  redis:
+    image: ${REDIS_IMAGE_REF:?set REDIS_IMAGE_REF to a pinned Redis image (name:tag@sha256:digest)}
+
+  siwx-oidc:
+    build: !reset null
+    image: ${SIWX_OIDC_IMAGE_REF:?set SIWX_OIDC_IMAGE_REF to a pinned siwx-oidc image (name@sha256:digest)}
+    pull_policy: missing
+    environment:
+      SIWEOIDC_REQUIRE_SECRET: "false"
+      SIWXOIDC_ENS_API_URL: ${SIWXOIDC_ENS_API_URL:-}
+      SIWXOIDC_OP_TOS_URI: ${SIWXOIDC_OP_TOS_URI:-}
+      SIWXOIDC_OP_POLICY_URI: ${SIWXOIDC_OP_POLICY_URI:-}
+      RUST_LOG: ${RUST_LOG:-siwx_oidc=info,tower_http=info,warn}
+
+  matrix_synapse:
+    build: !reset null
+    image: ${SYNAPSE_IMAGE_REF:?set SYNAPSE_IMAGE_REF to a pinned Synapse image (name@sha256:digest)}
+    pull_policy: missing
+
+  element-web:
+    build: !reset null
+    image: ${ELEMENT_IMAGE_REF:?set ELEMENT_IMAGE_REF to a pinned Element Web image (name@sha256:digest)}
+    pull_policy: missing
