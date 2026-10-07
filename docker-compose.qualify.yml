@@ -7,6 +7,10 @@
 # every image by reference and refuses to start without one (`${VAR:?}` fails on unset AND
 # empty). Nothing here can build an image: `build` is reset on every service.
 #
+# Compose interpolation can check that a reference is set, not that it is pinned: `redis:latest`
+# would pass. Passing digests (name@sha256:...) is the caller's job; siwx-oidc's
+# e2e/element/upgrade-survival.sh, which drives this lab, refuses any other reference.
+#
 # Layer it on the local file, always with an explicit project name:
 #
 #   export REDIS_IMAGE_REF=redis:<version>@sha256:<digest>

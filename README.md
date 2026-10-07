@@ -93,7 +93,9 @@ has a hostname-based Caddy example. For a local, HTTP-only stack with Caddy incl
 whatever checkouts sit next to it. To rehearse an upgrade from the exact images a deployment
 runs, layer `docker-compose.qualify.yml` on it: every service then runs an image named by
 reference, and the stack refuses to start until all four references are set (an unset or empty
-`*_IMAGE_REF` is an error, and nothing can be built):
+`*_IMAGE_REF` is an error, and nothing can be built). Compose can only check that a reference is
+set, so pass digests (`name@sha256:…`), never a tag: a tag can move between the rehearsal and
+the deployment.
 
 ```bash
 # .env.qualify: the lab's own throwaway secrets (MAS_SHARED_SECRET, SIWEOIDC_SIGNING_KEY_PEM),
