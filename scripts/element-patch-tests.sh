@@ -173,7 +173,10 @@ say "element-patch-tests: ${#CARRIED[@]} test file(s) derived from ${#patch_file
 VITEST_OWNS="$WORK/vitest-owns.txt"; JEST_OWNS="$WORK/jest-owns.txt"
 ( cd "$WEB" && pnpm exec vitest list --filesOnly --config vitest.config.ts 2>"$WORK/vitest-list.err" ) >"$VITEST_OWNS" \
   || { cat "$WORK/vitest-list.err" >&2; die "vitest list failed in $WEB"; }
-( cd "$WEB" && pnpm exec jest --listTests 2>"$WORK/jest-list.err" ) | sed "s#^$WEB/##" >"$JEST_OWNS" \
+# jest lists absolute paths; strip "$WEB/" as a literal prefix (a sed pattern would read
+# `*`, `[` or the delimiter in a tree path as syntax and leave the paths absolute).
+( cd "$WEB" && pnpm exec jest --listTests 2>"$WORK/jest-list.err" ) \
+  | while IFS= read -r p; do printf '%s\n' "${p#"$WEB/"}"; done >"$JEST_OWNS" \
   || { cat "$WORK/jest-list.err" >&2; die "jest --listTests failed in $WEB"; }
 [ -s "$VITEST_OWNS" ] && [ -s "$JEST_OWNS" ] || die "a runner listed no test files; is $WEB installed?"
 
