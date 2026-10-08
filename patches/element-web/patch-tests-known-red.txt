@@ -1,0 +1,31 @@
+# Known-red tests among the unit tests our Element Web patches carry
+# (scripts/element-patch-tests.sh reads this file; CI job "Patch unit tests").
+#
+# A test is listed here ONLY when it is red on the UNPATCHED upstream tag too.
+# A test that is red only with our patches applied is our defect: fix the patch
+# (or its test), never list it. This list is the one exception to "every test a
+# patch carries runs in CI and must pass" (patches/element-web/README.md, rule 2).
+#
+# One row per test, six non-empty TAB-separated columns:
+#   entry     registry entry number of the patch that carries the file
+#   runner    vitest | jest | vitest:<config file>  (the runner column of the script's summary)
+#   file      path relative to apps/web
+#   test      the runner's full test name (ancestor titles and title joined by a space),
+#             or * when the whole file fails to load or run
+#   reason    why it is red upstream
+#   evidence  how to reproduce it on the unpatched tag: tag, command, date
+#
+# How to prove a row. Check out the tag with NO patch (the Dockerfile's clone step),
+# `pnpm install --frozen-lockfile`, `pnpm exec nx run element-web:test:unit:prepare`,
+# then from apps/web run the same file on the unpatched tree:
+#   vitest:  pnpm exec vitest run --config vitest.config.ts <file>
+#   jest:    pnpm exec jest <file>
+# The test must be red there for the reason stated. A row whose test turns green
+# or disappears is reported as STALE by the script: delete it.
+#
+# At v1.12.29 (2026-10-08) no carried test is red on the unpatched tag, so there are
+# no rows. One suite looks like one: test/unit-tests/components/views/dialogs/
+# SpotlightDialog-test.tsx does not load at this tag (content-type@3 is ESM and
+# missing from jest's transformIgnorePatterns). The script runs it with that package
+# added to the allowlist on the command line instead of listing it, because listing
+# it would leave entry 8's six Spotlight cases running nowhere.

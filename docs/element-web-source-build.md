@@ -66,7 +66,12 @@ DevTools → Application → Service Workers → inspect.
 2. `git apply --verbose` each vendored patch, in registry order. **The build fails
    loudly** if one does not apply cleanly, so a tag bump that breaks a patch is caught
    at build time.
-3. `corepack enable && pnpm install --frozen-lockfile`.
+3. `corepack enable && pnpm install --frozen-lockfile`. Steps 1 to 3 are the `deps`
+   stage. The `patch-tests` stage starts from it and runs the unit tests our patches
+   carry (`docker build --target patch-tests -f dockerfiles/Dockerfile.element .`, run
+   by CI on every pull request); nothing copies from it, so it is never part of the
+   image. Locally, `scripts/element-patch-tests.sh <tree>` does the same on a tag tree
+   you patched and installed yourself.
 4. `pnpm --filter element-web build` (the nx `build` target) produces the
    complete bundle at `apps/web/webapp/` (index.html, bundles, vector-icons/,
    themes, i18n, version).

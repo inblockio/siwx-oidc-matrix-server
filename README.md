@@ -289,8 +289,10 @@ every `patches/*/*.patch` to have a numbered entry in its directory's registry, 
 applied by the Dockerfile that owns that directory, and to be listed above, with the
 registry and the list in the Dockerfile's apply order. CI runs it together with
 `scripts/check-patch-hunks.py` on every pull request and every push to `main`
-(`.github/workflows/checks.yml`). The pin half is not checked: a Dependencies row is
-updated by hand. [CONTRIBUTING.md](CONTRIBUTING.md) describes how to bump Synapse and
+(`.github/workflows/checks.yml`), where a second job also runs the unit tests the Element
+Web patches carry on the patched upstream tree (`scripts/element-patch-tests.sh`, via
+`docker build --target patch-tests -f dockerfiles/Dockerfile.element .`). The pin half is
+not checked: a Dependencies row is updated by hand. [CONTRIBUTING.md](CONTRIBUTING.md) describes how to bump Synapse and
 Element Web.
 
 ```bash

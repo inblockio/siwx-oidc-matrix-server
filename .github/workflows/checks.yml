@@ -3,8 +3,11 @@
 # Until this workflow the repository had no pull-request checks at all:
 # docker.yml only builds and publishes images on a push to main. So a patch
 # registry could drift from the patches it describes and nothing said so. Every
-# step here reads the checked-out tree only (no network, no container runtime,
-# no secrets), which also makes it safe on pull requests from forks.
+# step of the `patches` job reads the checked-out tree only (no network, no
+# container runtime, no secrets), which also makes it safe on pull requests from
+# forks. The `patch-unit-tests` job is the one exception: it needs network (it
+# clones Element Web and installs its dependencies) and a container runtime, and
+# still uses no secrets and a read-only token, so it is just as safe on forks.
 #
 # Deliberately NO `paths-ignore: ['**.md']`: the patch registries are markdown,
 # and a registry-only edit is exactly what check-patch-registry.sh must see.
@@ -41,3 +44,26 @@ jobs:
 
       - name: Copy Markdown conformance vectors match the patch
         run: python3 scripts/check-copy-markdown-vectors.py
+
+  # The unit tests our Element Web patches carry have to run somewhere: they are
+  # written against the patched upstream tree, so only that tree can run them.
+  # The Dockerfile's `patch-tests` stage builds exactly the tree the image is
+  # built from (pinned tag, every patch, lockfile install) and runs
+  # scripts/element-patch-tests.sh on it; the stage is never part of the image.
+  # A cold run clones, installs and builds the workspace packages, so budget
+  # minutes, not seconds.
+  patch-unit-tests:
+    name: Element patch unit tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      # Dockerfile.element needs BuildKit (RUN --mount, ADD --checksum).
+      DOCKER_BUILDKIT: '1'
+    steps:
+      # Pinned by commit, not by a movable tag; the comment names the release.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Tests carried by the patches, on the patched tag tree
+        run: docker build --progress=plain --target patch-tests -f dockerfiles/Dockerfile.element .

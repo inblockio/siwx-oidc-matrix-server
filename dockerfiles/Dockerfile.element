@@ -8,7 +8,9 @@
 # See docs/element-web-source-build.md.
 
 # ---------------------------------------------------------------------------
-# Builder: clone element-web at the pinned tag, apply our patches, build webapp.
+# Deps, then (patch-tests | builder): clone element-web at the pinned tag, apply
+# our patches and install (stage `deps`), then build the webapp (stage `builder`).
+# Stage `patch-tests` also starts from `deps`; see it below.
 # Node >= 22.18 required by upstream; node:24-bullseye matches their builder.
 # TODO(bookworm): Debian bullseye left LTS on 2026-08-31.
 #
@@ -19,7 +21,7 @@
 # (index digest: `skopeo inspect --raw docker://<image>:<tag> | sha256sum`;
 # commit: `git ls-remote <repo> 'refs/tags/<tag>^{}'`).
 # ---------------------------------------------------------------------------
-FROM node:24.20.0-bullseye@sha256:25f3016fcdae6b5d65bd9bcb4064b7e4198ec8d49493fa40d73f9b463d04fb15 AS builder
+FROM node:24.20.0-bullseye@sha256:25f3016fcdae6b5d65bd9bcb4064b7e4198ec8d49493fa40d73f9b463d04fb15 AS deps
 
 ARG ELEMENT_WEB_TAG=v1.12.29
 ARG ELEMENT_WEB_COMMIT=2d90d6b7b601ecb9ccdf81239a43b4396b4b0c9e
@@ -175,6 +177,38 @@ RUN git apply --verbose /tmp/ew-copy-markdown.patch
 
 # Install exactly what the lockfile pins.
 RUN corepack enable && pnpm install --frozen-lockfile
+
+# ---------------------------------------------------------------------------
+# patch-tests: runs the unit tests our patches carry on the tree above (tag +
+# every patch + lockfile install), derived from the patches by
+# scripts/element-patch-tests.sh. Never part of the image: nothing COPYs from
+# this stage, so a plain build does not build it, and the final image is
+# byte-for-byte what it was when this was one stage. Run it with
+#   docker build --progress=plain --target patch-tests -f dockerfiles/Dockerfile.element .
+# (.github/workflows/checks.yml does, on every pull request). The script and the
+# patches arrive as read-only bind mounts, so they add no layer. Chromium is for
+# the one patch-carried suite that needs a real browser (entry 11's conformance
+# vectors; happy-dom's HTML parser is not conforming).
+# ---------------------------------------------------------------------------
+FROM deps AS patch-tests
+ENV CI=true
+# Debian 11 is past LTS: deb.debian.org still lists bullseye-security but no longer
+# serves its files (404), so Chromium's system libraries come from
+# archive.debian.org, where EOL releases live (its Release files have expired,
+# hence Check-Valid-Until). One more thing the TODO(bookworm) above has to carry.
+RUN sed -i '/bullseye-updates/d; s|http://deb.debian.org|http://archive.debian.org|' /etc/apt/sources.list \
+    && echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99archive \
+    && apt-get update \
+    && (cd apps/web && pnpm exec playwright install --with-deps chromium) \
+    && rm -rf /var/lib/apt/lists/*
+RUN --mount=type=bind,source=patches/element-web,target=/patches,readonly \
+    --mount=type=bind,source=scripts/element-patch-tests.sh,target=/usr/local/bin/element-patch-tests.sh,readonly \
+    bash /usr/local/bin/element-patch-tests.sh /src --patches-dir /patches
+
+# ---------------------------------------------------------------------------
+# builder: the production bundle, from the same `deps` state.
+# ---------------------------------------------------------------------------
+FROM deps AS builder
 
 # Build the web app. The nx target for the element-web app produces the full
 # bundle at apps/web/webapp/ (index.html, bundles, vector-icons/, themes, i18n,
