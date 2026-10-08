@@ -74,7 +74,12 @@ DevTools → Application → Service Workers → inspect.
    you patched and installed yourself.
 4. `pnpm --filter element-web build` (the nx `build` target) produces the
    complete bundle at `apps/web/webapp/` (index.html, bundles, vector-icons/,
-   themes, i18n, version).
+   themes, i18n, version). CI passes the commit as `SOURCE_REVISION`, and the
+   version, baked into the bundle and written to `/version`, becomes
+   `<release>+<7 hex>` (for example `1.12.29+c300ebd`). An open tab polls `/version`
+   every 10 minutes and offers a reload when it differs from its own, so a deploy
+   reaches open tabs even when the release stays the same. Without the argument the
+   version is the release alone.
 5. The build fails if the built `sw.js` lacks the markers of patches 9 and 10, or the
    bundle no longer exposes `window.mxMatrixClientPeg`.
 6. Runtime stage: `nginxinc/nginx-unprivileged:1.31.6-alpine-slim`, pinned by digest
