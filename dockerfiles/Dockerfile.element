@@ -214,8 +214,30 @@ FROM deps AS builder
 # Build the web app. The nx target for the element-web app produces the full
 # bundle at apps/web/webapp/ (index.html, bundles, vector-icons/, themes, i18n,
 # config.sample.json). 6 GiB heap headroom for the bundler.
+#
+# The version carries the build. Element bakes VERSION into the bundle and writes
+# the same value to /version, which an open tab polls every 10 minutes to offer a
+# reload when the two differ (WebPlatform.pollForUpdate). Upstream's VERSION is the
+# release ("1.12.29"), so a deploy of a new build of the same release never reached
+# an open tab: it kept the old bundle until someone reloaded by hand. CI passes the
+# commit as SOURCE_REVISION and the version becomes "<release>+<7 hex>" (semver
+# build metadata), in the bundle and in /version alike; the build fails if either
+# does not carry it. Without the argument (a local build) the version stays the
+# release.
+ARG SOURCE_REVISION=
 ENV NODE_OPTIONS=--max-old-space-size=6144
-RUN pnpm --filter element-web build
+RUN release=$(node -p "require('./apps/web/package.json').version") \
+    && if [ -n "$SOURCE_REVISION" ]; then \
+         export VERSION="$release+$(echo "$SOURCE_REVISION" | cut -c1-7)"; \
+       fi \
+    && pnpm --filter element-web build \
+    && served=$(cat apps/web/webapp/version) \
+    && echo "webapp/version: $served" \
+    && if [ -n "$SOURCE_REVISION" ]; then \
+         test "$served" = "$VERSION" \
+         && grep -rqF --include='*.js' "\"$VERSION\"" apps/web/webapp/bundles/ \
+         || { echo "version stamp missing: want $VERSION in /version and the bundle" >&2; exit 1; }; \
+       fi
 
 # Provide a default config.json in the bundle (upstream ships none). Our runtime
 # overlay overwrites /app/config.json, but this keeps the bundle self-consistent

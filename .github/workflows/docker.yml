@@ -110,6 +110,11 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Element Web stamps its version with the commit ("<release>+<7 hex>",
+          # dockerfiles/Dockerfile.element, builder stage) so an open tab sees a
+          # deploy. The other Dockerfiles do not declare it and ignore it.
+          build-args: |
+            SOURCE_REVISION=${{ github.sha }}
 
   # Deploys the just-published `main` images to a dev-staging host. Only fires
   # on an actual push to `main` (not tag pushes or GitHub releases, both of
