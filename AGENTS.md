@@ -44,7 +44,7 @@ stores; nothing here can patch it.
 | `entrypoints/element_entrypoint.sh` | Element entrypoint: templates `config.json`, favicons, the theme stylesheet link. Bind-mounted by `docker-compose.yml`. |
 | `config/` | Element config, nginx config and security headers, service-worker boot shim, theme CSS, LiveKit config, brand assets. |
 | `patches/synapse/`, `patches/element-web/` | Vendored patches and their registries (`README.md` in each). |
-| `scripts/` | Registry, hunk and Copy Markdown vector checks (run in CI), DID-field guard acceptance test, localpart-vector check, deployment audits, the storage controller, e2e helpers. |
+| `scripts/` | Registry, hunk and Copy Markdown vector checks and the Element patch unit tests (`element-patch-tests.sh`, run in CI), DID-field guard acceptance test, localpart-vector check, deployment audits, the storage controller, e2e helpers. |
 | `verify-deployment.sh`, `verify-theme.sh` | Probe of a live deployment's public endpoints, read-only unless `--e2ee` (which signs in and sends a message); static theme check. |
 | `docs/` | Element theme contract, Element source build, the Copy Markdown algorithm and its conformance vectors, audits, drafts filed upstream. |
 | `skills/` | Task guides for agents (see [Skills](#skills)). |
@@ -265,6 +265,7 @@ Guides and scripts here must not contradict it:
 scripts/check-patch-registry.sh          # patches, registries, Dockerfiles, README agree (CI)
 python3 scripts/check-patch-hunks.py     # hunk headers match their bodies (CI)
 python3 scripts/check-copy-markdown-vectors.py  # Copy Markdown vectors: docs copy == patch copy (CI)
+docker build --target patch-tests -f dockerfiles/Dockerfile.element .  # unit tests the Element patches carry, on the patched tag tree (CI)
 ./verify-theme.sh                        # static theme invariants
 node --test scripts/browser-eventindex-invariants.mjs
 scripts/did-field-guard-accept.sh        # needs a container runtime; see its header
@@ -273,11 +274,15 @@ e2e-harness/run.sh smoke                 # hermetic stack; needs podman and a si
 ```
 
 - `.github/workflows/checks.yml` runs the first three on every pull request and push to
-  `main`.
+  `main`, and the `patch-tests` build in a second job (it clones Element Web and installs
+  its dependencies, so it needs network and a few minutes; `scripts/element-patch-tests.sh
+  <tree>` runs the same thing on a local tag tree). A test red on the unpatched tag too goes
+  in `patches/element-web/patch-tests-known-red.txt`; a test red only with our patches is a
+  defect and is never listed.
 - Synapse patch tests run inside a Synapse checkout: see
   [patches/synapse/README.md](patches/synapse/README.md) rule 4.
 - Element patch behaviour is covered by Playwright suites in siwx-oidc (`e2e/element/`);
-  each registry entry names its leg.
+  each registry entry names its leg. The unit tests a patch carries run in CI as above.
 - `scripts/element-deploy-audit.sh` and `verify-deployment.sh` probe a live deployment's
   public endpoints, read-only; both take the target as a required argument or variable,
   with no default. `verify-deployment.sh --e2ee` is **not** read-only: its test agent

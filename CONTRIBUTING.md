@@ -35,10 +35,12 @@ python3 scripts/check-patch-hunks.py     # every hunk header matches its body
 node --test scripts/browser-eventindex-invariants.mjs
 ```
 
-CI (`.github/workflows/checks.yml`) runs the first two on every pull request. Heavier tests
-are listed under "How to test" in [AGENTS.md](AGENTS.md): the DID-field guard acceptance
-test, the hermetic end-to-end harness in [e2e-harness/](e2e-harness/README.md), and the
-Synapse patch's own tests.
+CI (`.github/workflows/checks.yml`) runs the first two on every pull request, and in a
+second job the unit tests the Element Web patches carry, on the patched upstream tree
+(`docker build --target patch-tests -f dockerfiles/Dockerfile.element .`; it needs network
+and a few minutes). Heavier tests are listed under "How to test" in [AGENTS.md](AGENTS.md):
+the DID-field guard acceptance test, the hermetic end-to-end harness in
+[e2e-harness/](e2e-harness/README.md), and the Synapse patch's own tests.
 
 To run a stack locally, use `docker-compose.local.yml` (see its header). It builds the
 images from source and is for testing only; deployed images come from CI.

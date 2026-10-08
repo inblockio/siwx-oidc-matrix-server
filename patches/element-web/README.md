@@ -18,6 +18,20 @@ Rules of this registry:
    observable fact that lets us delete it. A patch nobody can retire is a fork forever.
 2. **No behavioral patch without test coverage.** User-visible behavior gets a Playwright
    leg in the siwx-oidc repo's Element suite (`e2e/element/`); the entry names it.
+   **Unit tests a patch carries run in CI.** Every test file a patch adds or modifies
+   (`*.test.ts(x)`, `*-test.ts(x)`, `*.spec.*`, except Playwright specs under `playwright/`)
+   runs on the patched tag tree in the `Element patch unit tests` job of
+   `.github/workflows/checks.yml`, which builds `dockerfiles/Dockerfile.element --target
+   patch-tests`, i.e. runs `scripts/element-patch-tests.sh`. The files are derived from the
+   patches' `+++ b/` paths, never listed by hand, and each goes to the runner that owns it
+   at the tag (vitest or jest); a test file no runner would execute fails the job. A patch
+   that adds a vitest config (entry 11's `vitest.browser.copy-md.config.ts`) has that config
+   run too, in headless Chromium. The only exception is
+   [`patch-tests-known-red.txt`](patch-tests-known-red.txt): a test that is red on the
+   unpatched tag as well, with reason and evidence. A test red only with our patches is a
+   defect, not an exception. The script has one fixup, documented in its header: jest at
+   v1.12.29 cannot load suites that import `matrix-js-sdk` until `content-type` joins its
+   `transformIgnorePatterns` allowlist, so the script adds it on the command line.
 3. **Upstream-first.** Three classifications, and only one is permanent:
    - **UPSTREAM DEFECT** — interim carrier for an upstream bug. File the issue/PR and
      link it here.
