@@ -18,6 +18,12 @@
 # order, and it is load-bearing: several Element patches only apply on top of
 # an earlier one.
 #
+# Where a directory is listed in NEEDS_MARKERS (Element Web), it also proves that
+# patches/<dir>/markers.tsv, the served-artifact markers the build and
+# scripts/element-patch-markers.sh check, is well formed, has at least one row for
+# every numbered registry entry and none for an entry that does not exist, and that
+# the owning Dockerfile still reads it.
+#
 # WHY. The registries are markdown that nothing builds. The only check was a
 # loop in the README that grepped each file name anywhere in the text, so a
 # patch named once in prose passed, and nothing noticed a registry entry whose
@@ -38,6 +44,12 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 declare -A OWNER=(
   [synapse]=dockerfiles/Dockerfile
   [element-web]=dockerfiles/Dockerfile.element
+)
+
+# Directories whose patches must be provable in the built artifact: each needs a
+# patches/<dir>/markers.tsv with a row for every numbered registry entry.
+declare -A NEEDS_MARKERS=(
+  [element-web]=1
 )
 
 FAILS=0
@@ -127,6 +139,20 @@ registry_entries() {
     }' "$1"
 }
 
+# One line per row of a markers file: the entry number, or "!<message>" for a row that
+# is not entry<TAB>path<TAB>string with a supported served path. Comment (#) and blank
+# lines are skipped. Keep the path grammar in step with scripts/element-patch-markers.sh.
+marker_rows() {
+  awk -F'\t' '
+    /^[ \t]*$/ || /^#/ { next }
+    NF != 3 { printf "!line %d: want entry<TAB>path<TAB>string, found %d field(s)\n", NR, NF; next }
+    $1 !~ /^[0-9]+$/ { printf "!line %d: entry \"%s\" is not a number\n", NR, $1; next }
+    $2 !~ /^(index\.html|sw\.js|sw-boot\.js|bundles\/\*\/[A-Za-z0-9_.-]+|i18n\/[A-Za-z0-9_-]+\.json)$/ {
+      printf "!line %d: unsupported served path \"%s\"\n", NR, $2; next }
+    $3 == "" { printf "!line %d: empty marker string\n", NR; next }
+    { print $1 + 0 }' "$1"
+}
+
 # Patch files the root README links to under patches/<dir>/, first mention wins.
 readme_links() {
   grep -oE "\(patches/$1/[^)/]+\.patch\)" README.md | sed -E 's#^\(patches/[^/]+/##; s#\)$##' | awk '!seen[$0]++' || true
@@ -182,6 +208,33 @@ for dir in patches/*/; do
   while IFS= read -r f; do [ -z "$f" ] || fail "patches/$d/$f is not listed in README.md (Upstream deviations)"; done < <(minus "$disk" "$linked")
   while IFS= read -r f; do [ -z "$f" ] || fail "README.md links patches/$d/$f, which does not exist"; done < <(minus "$linked" "$disk")
 
+  # 5: registry <-> markers (served-artifact markers; spec layer L2)
+  markers_note=""
+  mf="patches/$d/markers.tsv"
+  if [ -f "$mf" ] || [ -n "${NEEDS_MARKERS[$d]:-}" ]; then
+    if [ ! -f "$mf" ]; then
+      fail "$mf does not exist; every numbered entry in $registry_md needs a marker row"
+    else
+      mrows="$(marker_rows "$mf")"
+      while IFS= read -r msg; do [ -z "$msg" ] || fail "$mf: ${msg#!}"; done < <(sed -n 's/^!//p' <<<"$mrows")
+      m_entries="$(grep -v '^!' <<<"$mrows" | sed '/^$/d' | sort -u || true)"
+      r_entries="$(awk '{ print $1 + 0 }' <<<"$entries" | sed '/^$/d' | sort -u)"
+      while read -r num f; do
+        [ -n "${num:-}" ] || continue
+        grep -qx "$((10#$num))" <<<"$m_entries" || fail "$mf has no row for entry $num ($f); a patch with no marker cannot be proved present in the artifact"
+      done <<<"$entries"
+      while IFS= read -r n; do
+        [ -z "$n" ] || fail "$mf has a row for entry $n, which has no numbered entry in $registry_md"
+      done < <(minus "$m_entries" "$r_entries")
+      if [ -n "${NEEDS_MARKERS[$d]:-}" ]; then
+        # Into a variable first: `instructions | grep -q` can die of SIGPIPE under pipefail.
+        df_text="$(instructions "$df")"
+        grep -qF "$mf" <<<"$df_text" || fail "$df never reads $mf, so the build would not fail when a patch's marker is missing"
+      fi
+      markers_note=", $(grep -vc '^!' <<<"$mrows" || true) marker row(s) cover every entry"
+    fi
+  fi
+
   # Order, once the sets agree (a set mismatch above already says what is wrong).
   if [ "$FAILS" -eq "$before" ]; then
     [ "$reg" = "$applied" ] || fail "$registry_md lists its entries in a different order than $df applies them:
@@ -193,12 +246,12 @@ for dir in patches/*/; do
   fi
 
   if [ "$FAILS" -eq "$before" ]; then
-    printf 'OK    patches/%s/: %d patch(es) registered, applied by %s and listed in README.md, in one order\n' \
-      "$d" "$(sed '/^$/d' <<<"$disk" | wc -l)" "$df"
+    printf 'OK    patches/%s/: %d patch(es) registered, applied by %s and listed in README.md, in one order%s\n' \
+      "$d" "$(sed '/^$/d' <<<"$disk" | wc -l)" "$df" "$markers_note"
   fi
 done
 
 if [ "$FAILS" -gt 0 ]; then
-  printf '\n%d problem(s). Every patch needs a numbered registry entry, an apply step in its Dockerfile and a README line, in Dockerfile order.\n' "$FAILS"
+  printf '\n%d problem(s). Every patch needs a numbered registry entry, an apply step in its Dockerfile and a README line, in Dockerfile order; every Element Web entry also needs a row in markers.tsv.\n' "$FAILS"
   exit 1
 fi
