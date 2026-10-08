@@ -386,7 +386,8 @@ A tag bump must try every patch in this file's order.
 - **Coverage:** siwx-oidc `e2e/element/ew-patch-honesty.spec.mjs` PH-0 (served strings) and
   PH-2 (the current session with a null verification status gets a verify exit instead of the
   encryption claim). In the patch, `DeviceVerificationStatusCard.test.tsx` (vitest) carries
-  the matching test edit; its four neighbouring snapshots are the known red ones above.
+  the matching test edit; it and `SessionManagerTab.test.tsx` pass with their upstream
+  snapshots unchanged since the 2026-10-08 fix above, and the `patch-tests` CI job runs it.
 
 ### 5. `auto-approve-check-code.patch` — UX POLICY (review at each bump)
 
