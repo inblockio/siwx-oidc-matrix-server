@@ -17,7 +17,8 @@ Rules of this registry:
    that made it necessary, its *upstream status*, and its *retirement condition* — the
    observable fact that lets us delete it. A patch nobody can retire is a fork forever.
 2. **No behavioral patch without test coverage.** User-visible behavior gets a Playwright
-   leg in the siwx-oidc repo's Element suite (`e2e/element/`); the entry names it.
+   leg in the siwx-oidc repo's Element suite (`e2e/element/`); the entry names the spec
+   file and the test IDs, and says plainly where there is none (entries 5 and 7 today).
    **Unit tests a patch carries run in CI.** Every test file a patch adds or modifies
    (`*.test.ts(x)`, `*-test.ts(x)`, `*.spec.*`, except Playwright specs under `playwright/`)
    runs on the patched tag tree in the `Element patch unit tests` job of
@@ -32,6 +33,15 @@ Rules of this registry:
    defect, not an exception. The script has one fixup, documented in its header: jest at
    v1.12.29 cannot load suites that import `matrix-js-sdk` until `content-type` joins its
    `transformIgnorePatterns` allowlist, so the script adds it on the command line.
+   **Every entry also has a marker:** a fixed string, listed in
+   [`markers.tsv`](markers.tsv), that is present in our build and absent from stock
+   upstream at the same tag, with the proof under "Marker discrimination record" at the
+   bottom of this file. A marker proves that the entry's code reached the built or served
+   app, nothing more; it does not stand in for a leg. `scripts/check-patch-registry.sh`
+   fails when an entry has no row or a row names no entry, `dockerfiles/Dockerfile.element`
+   fails the build when a row is missing from the built webapp, and
+   `scripts/element-patch-markers.sh <element_url>` runs the rows against a served
+   deployment.
 3. **Upstream-first.** Three classifications, and only one is permanent:
    - **UPSTREAM DEFECT** — interim carrier for an upstream bug. File the issue/PR and
      link it here.
@@ -79,6 +89,9 @@ Rules of this registry:
    For each failing patch, consult its retirement condition **before** forward-porting:
    an upstream-defect patch that no longer applies often means upstream changed that
    code — check whether they fixed it, and if so DROP the patch, don't port it by reflex.
+   Once they apply, re-prove the markers against the new tag's stock image (last section of
+   this file): the Dockerfile fails the build on a row that no longer holds, and a row that
+   stock now also carries (upstream shipped the string) no longer discriminates.
 
    **4b. Upstream refresh (every tag bump, from the repo root).** First, refresh the
    upstream status of every upstream link in both registries and update each entry's
@@ -416,11 +429,11 @@ A tag bump must try every patch in this file's order.
   `RoomSearchAuxPanel.tsx` at the tag is byte-identical to the PR branch's
   copy. So the deletion is correct against what we build, not only against
   `develop`; without that check the deployed build would have lost the
-  warning entirely. **Consequence for the artifact-grep table at the bottom
-  of this file:** the marker is now `element-eventindex`, the old
-  `inblock-ew-eventindex` and `still_indexing` markers will find nothing,
-  and the code is still emitted into `bundles/<hash>/init.js`, not
-  `bundle.js`.
+  warning entirely. **Consequence for the markers
+  (`markers.tsv`):** they are the database name `element-eventindex` and the
+  labs flag `feature_web_event_index`, both in `bundles/<hash>/init.js`; the
+  old `inblock-ew-eventindex` and `still_indexing` strings find nothing, and
+  the code is emitted into `init.js`, not `bundle.js`.
 - **Why we maintain it:** every inblock room is E2EE; upstream Web has no
   EventIndex, so Search is N/A. Product client is hosted Element Web, not
   Desktop. A Seshat WASM port was evaluated and rejected (SQLCipher /
@@ -1196,8 +1209,8 @@ A tag bump must try every patch in this file's order.
   and (c) shares one in-flight check per server between concurrent media requests. The
   bodies of discarded error responses are cancelled. Ships the co-located vitest file
   `serverSupport.test.ts` (7 tests). Markers in the built `/app/sw.js`: `not caching
-  server support`, `retrying without one` (the Dockerfile greps both and fails the build
-  if either is missing).
+  server support`, `retrying without one` (rows of `markers.tsv`, which the Dockerfile
+  checks and fails the build on if either is missing).
 - **Byte-for-byte the upstream PR diff.** The patch is `git diff upstream/develop` of
   branch `fix/sw-versions-not-cached-on-error` on inblockio/element-web (four commits:
   (b), (a), (c), then a SonarCloud follow-up; PR head `246724f407`), byte-identical apart
@@ -1342,7 +1355,7 @@ A tag bump must try every patch in this file's order.
   `mediaTokenRetry.test.ts` (6 vitest tests: retry, 5 s bound with no refresh, silent-tab
   bound with zero leaked listeners, 20 concurrent requests share one wait, homeserver
   change keeps the 401, discarded body cancelled). Marker in the built `/app/sw.js`:
-  `retrying media request with a refreshed access token` (grepped at build time).
+  `retrying media request with a refreshed access token` (a row of `markers.tsv`, checked at build time).
 - **Order:** applied after entry 9, whose context it needs.
 - **Header refresh (2026-09-29):** regenerated on top of entry 9 re-vendored from
   `246724f407`. It still applied (hunks 4 and 5 at offset -4), but its `index` line and
@@ -1450,7 +1463,8 @@ A tag bump must try every patch in this file's order.
   property test) and five new tests in `MessageContextMenu.test.tsx` (45 in the file;
   the two "not offered" tests first assert that an item which must be present is, so they
   cannot pass on a menu that failed to render).
-  Marker in the built bundle: the string `Copy Markdown` (not grepped at build time).
+  Marker: the i18n key `copy_markdown` in the served English strings (a row of `markers.tsv`,
+  checked at build time).
 - **Order:** applied last. Its single `en_EN.json` hunk was generated against the tree with
   entries 1-10 applied.
 - **Why:** [siwx-oidc-matrix-server#24](https://github.com/inblockio/siwx-oidc-matrix-server/issues/24).
@@ -1578,29 +1592,76 @@ Verified afterwards in BOTH apply orders against a pristine v1.12.26 tree: the
 all-six order and the then-`main` subset (1, 5, 6). Only the all-six order still
 exists; the subset is kept here as the record of what was checked.
 
-**Verified in the DEPLOYED artifact, not just against a tree (2026-08-31).** "Applies
-clean" only proves a patch can be applied; it does not prove the code reached the
-served app. After the `5089872` converge, every patch was confirmed by grepping its own
-distinctive string in the webroot of the running dev-staging element-web container:
+## Marker discrimination record
 
-| # | Patch | Marker grepped in `/app` | Files |
-|---|---|---|---|
-| 1 | `force-first-device-recovery` | `Set up recovery to continue` | 1 |
-| 2 | `setup-encryption-busy-wedge` | `cross-signing not ready` | 2 |
-| 3 | `honest-qr-disabled-reason` | `Not supported by your account provider` | 2 |
-| 4 | `offer-verify-current-session` | `verify_blocked_current_session_unverified` | 3 |
-| 5 | `auto-approve-check-code` | `open_approval_page` | 5 |
-| 6 | `browser-eventindex` | `inblock-ew-eventindex` | 2 |
+"Applies clean" proves a patch can be applied; it does not prove that its code reached the
+served app. [`markers.tsv`](markers.tsv) lists, per entry, the fixed strings that do (rule 2).
+It replaces the grep table that stood here (written 2026-08-31 after the dev converge): its
+entry 3 row was a string stock Element also has, its entry 6 row was retired by the
+2026-09-12 regeneration, and entries 7-11 had no row.
 
-**Row 6's marker is stale for anything built after 2026-09-12.** The regenerated
-patch renames the database, so the marker to grep is now `element-eventindex`
-(and `feature_web_event_index` for the gate). `inblock-ew-eventindex`,
-`feature_inblock_encrypted_search` and `still_indexing` will find nothing in a
-build made from the current patch, and finding them instead proves the image is
-an OLD one. The row above is left as the record of what was checked on that
-artifact.
+Three consumers read the file: `dockerfiles/Dockerfile.element` checks every row against the
+builder's webapp and fails the build on a missing one; `scripts/element-patch-markers.sh
+[--absent N[,N..]] <element_url>` checks a served deployment and prints one
+`CHECK id=ew-marker.<entry> result=pass|fail :: <detail>` line per entry (`--absent` for the
+entries a deployment is expected to lack, such as 9-11 on a build that predates them);
+`scripts/check-patch-registry.sh` fails when an entry has no row or a row names no entry.
 
-**Trap for whoever repeats this:** the EventIndex code is emitted into
-`bundles/<hash>/init.js`, **not** `bundle.js`. Grepping only `bundle.js` returns zero
-hits for every EventIndex marker and looks exactly like "the patch is missing". Search
-the whole webroot.
+**Proof (2026-10-08).** Three images were pulled, `/app` copied out of each (none was run), and
+every row counted in the file it names, in the file the served path resolves to. The same rows
+were then run through `scripts/element-patch-markers.sh` against each webroot served from
+loopback (candidate: all 11 entries pass; baseline: 1-8 pass, 9-11 fail, and all pass with
+`--absent 9,10,11`; stock: all 11 fail, and all pass with `--absent` of every entry), and
+through the Dockerfile's loop in a real build (candidate passes; baseline fails on exactly the
+four rows of entries 9-11; stock fails on all). `/version` of all three is `1.12.29`.
+
+- **candidate:** CI image of `main` at `75c6d69`, entries 1-11.
+- **baseline:** CI image of `main` at `0a58e7e`, entries 1-8.
+- **stock:** `docker.io/vectorim/element-web:v1.12.29` (`sha256:665ed1b1c723e531e4e56bed18500d13e154b3a71609bb5ed3ad584778b3a7aa`,
+  revision label `2d90d6b7b601`, which is `ELEMENT_WEB_COMMIT`).
+
+Occurrences of the marker in the named file:
+
+| # | file | marker | candidate | baseline | stock |
+|---|---|---|---|---|---|
+| 1 | `bundles/*/element-web-app.js` | `force_recovery_setup_title` | 1 | 1 | 0 |
+| 1 | `i18n/en_EN.json` | `Set up recovery to continue` | 1 | 1 | 0 |
+| 2 | `bundles/*/element-web-app.js` | `cross-signing not ready 10s after verification` | 1 | 1 | 0 |
+| 3 | `bundles/*/element-web-app.js` | `sign_in_with_qr_unverified_session` | 1 | 1 | 0 |
+| 3 | `i18n/en_EN.json` | `sign_in_with_qr_unverified_session` | 1 | 1 | 0 |
+| 4 | `bundles/*/element-web-app.js` | `verify_blocked_current_session_unverified` | 1 | 1 | 0 |
+| 4 | `i18n/en_EN.json` | `verify_blocked_current_session_unverified` | 1 | 1 | 0 |
+| 5 | `i18n/en_EN.json` | `open_approval_page` | 1 | 1 | 0 |
+| 6 | `bundles/*/init.js` | `element-eventindex` | 3 | 3 | 0 |
+| 6 | `bundles/*/init.js` | `feature_web_event_index` | 3 | 3 | 0 |
+| 7 | `bundles/*/element-web-app.js` | `did_label_unsigned` | 1 | 1 | 0 |
+| 7 | `i18n/en_EN.json` | `DID (unsigned)` | 1 | 1 | 0 |
+| 8 | `bundles/*/element-web-app.js` | `./src/utils/didLocalpart.ts` | 1 | 1 | 0 |
+| 9 | `sw.js` | `not caching server support` | 2 | 0 | 0 |
+| 9 | `sw.js` | `retrying without one` | 1 | 0 | 0 |
+| 10 | `sw.js` | `retrying media request with a refreshed access token` | 1 | 0 | 0 |
+| 11 | `i18n/en_EN.json` | `copy_markdown` | 1 | 0 | 0 |
+
+What the table does not say, and the choices behind it:
+
+- **Only named files.** The code is in `bundles/<hash>/init.js` (EventIndex; not `bundle.js`,
+  which returns zero hits for every entry-6 marker and looks exactly like a missing patch) and
+  `bundles/<hash>/element-web-app.js`. Numbered chunks (`2506.js`, `4479.js`) are not used: their
+  names come from chunk ids that a tag bump can change. Entries 5 and 11 therefore have only an
+  i18n row; their code lives in numbered lazy chunks. `i18n/en_EN.json` is served as
+  `i18n/en_EN.<hash>.json`; both consumers resolve the name through `i18n/languages.json`.
+- **What survives minification:** string literals, i18n keys, log messages, property and method
+  names, and webpack's `n("./src/...")` module references. Class, function and module-level
+  constant names do not (see entry 6), and a module that webpack concatenates into its importer
+  leaves no path (the Copy Markdown converter has none).
+- **Entry 6 uses the IndexedDB name and the labs flag**, not code that the cold-scan, eviction or
+  redaction logic changes, so a carry that edits that logic keeps the markers valid.
+- **Entry 8 lists only what the baseline also has.** The baseline's resolve-did-search predates
+  proof verification (2026-09-29), so `did_search_verified` (`i18n/en_EN.json`, candidate 1,
+  baseline 0, stock 0) is not a row; it becomes one once every build to be checked carries it.
+- **Entry 3's old row was wrong.** `Not supported by your account provider` is Element's own
+  string and is present in stock; the key `sign_in_with_qr_unverified_session` is ours.
+- **To re-prove after a tag bump or a new entry:** extract `/app` of the new build and of the stock
+  image for the new tag, serve each from a loopback static server, and run
+  `scripts/element-patch-markers.sh --absent <every entry> http://127.0.0.1:<port>` against stock
+  (every row must be absent) and without `--absent` against the new build.

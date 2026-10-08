@@ -1,0 +1,44 @@
+# Served-artifact markers for the vendored Element Web patches (spec layer L2).
+#
+# One row per marker: entry<TAB>served-path<TAB>fixed-string. `entry` is the number of the
+# registry entry in README.md. A marker is a fixed string (grep -F, no regex) that is PRESENT in
+# a build that carries the entry and ABSENT from stock upstream Element Web at the same tag.
+# The discrimination record (image, path, count per marker) is in README.md, section
+# "Marker discrimination record".
+#
+# Served paths, relative to the webroot:
+#   index.html, sw.js, sw-boot.js    the file itself
+#   bundles/*/<file>                 the `*` is the bundle hash, read from index.html
+#                                    (bundles/<hash>/bundle.js); use the NAMED files init.js
+#                                    and element-web-app.js, not the numbered chunks (<n>.js)
+#   i18n/<name>.json                 the language file whose hashed name languages.json gives
+#                                    (i18n/en_EN.json is served as i18n/en_EN.<hash>.json)
+#
+# Used by dockerfiles/Dockerfile.element (fails the build when a row is missing from the
+# builder's webapp), by scripts/element-patch-markers.sh (a served deployment) and by
+# scripts/check-patch-registry.sh (every numbered entry has a row, no row names a missing entry).
+#
+# Rules: no tab inside a field; a marker survives minification (string literals, i18n keys,
+# log messages, property and module-path strings; NOT class or function names, which are
+# mangled); entry 6 uses the IndexedDB name and the labs flag, never code the cold-scan,
+# eviction or redaction logic changes. Entry 8 lists only strings that the form without proof
+# verification (before 2026-09-29) also has, because the baseline build predates the verifying
+# form; `did_search_verified` marks that form and becomes a row once every build to be
+# checked carries it.
+1	bundles/*/element-web-app.js	force_recovery_setup_title
+1	i18n/en_EN.json	Set up recovery to continue
+2	bundles/*/element-web-app.js	cross-signing not ready 10s after verification
+3	bundles/*/element-web-app.js	sign_in_with_qr_unverified_session
+3	i18n/en_EN.json	sign_in_with_qr_unverified_session
+4	bundles/*/element-web-app.js	verify_blocked_current_session_unverified
+4	i18n/en_EN.json	verify_blocked_current_session_unverified
+5	i18n/en_EN.json	open_approval_page
+6	bundles/*/init.js	element-eventindex
+6	bundles/*/init.js	feature_web_event_index
+7	bundles/*/element-web-app.js	did_label_unsigned
+7	i18n/en_EN.json	DID (unsigned)
+8	bundles/*/element-web-app.js	./src/utils/didLocalpart.ts
+9	sw.js	not caching server support
+9	sw.js	retrying without one
+10	sw.js	retrying media request with a refreshed access token
+11	i18n/en_EN.json	copy_markdown

@@ -221,15 +221,37 @@ RUN pnpm --filter element-web build
 # and the /config.json healthcheck path populated if the overlay is ever absent.
 RUN cp /src/apps/web/config.sample.json /src/apps/web/webapp/config.json
 
-# Fail loudly if the built service worker lost a vendored patch's code (entries
-# 9 and 10: each marker is a log string only that patch emits), or if the bundle
-# no longer exposes window.mxMatrixClientPeg, which sw-boot.js guard (E) polls
-# for the SYNCING gate. Without that global the gate would silently wait out its
-# 120 s deadline on every load instead of gating anything.
-RUN grep -q 'not caching server support' /src/apps/web/webapp/sw.js \
-    && grep -q 'retrying without one' /src/apps/web/webapp/sw.js \
-    && grep -q 'retrying media request with a refreshed access token' /src/apps/web/webapp/sw.js \
-    && grep -rqF 'mxMatrixClientPeg' /src/apps/web/webapp/bundles/
+# Fail loudly if the built webapp lost a vendored patch. patches/element-web/
+# markers.tsv lists, per registry entry, fixed strings that are present in a build
+# carrying the entry and absent from stock upstream (the proof is the "Marker
+# discrimination record" in the registry); every row must hold in the webapp as
+# built. scripts/element-patch-markers.sh runs the same rows against a served
+# deployment. A row's path is relative to the webapp: `bundles/*/<file>` globs the
+# bundle hash, and `i18n/<name>.json` resolves through i18n/languages.json to the
+# hashed file name. A row whose file is missing counts as a missing marker.
+RUN --mount=type=bind,source=patches/element-web/markers.tsv,target=/tmp/markers.tsv \
+    cd /src/apps/web/webapp \
+    && tab="$(printf '\t')" && rows=0 && bad=0 \
+    && while IFS="$tab" read -r entry path str; do \
+         case "$entry" in ''|'#'*) continue ;; esac; \
+         rows=$((rows + 1)); \
+         case "$path" in \
+           i18n/*.json) name="${path#i18n/}"; name="${name%.json}"; \
+             files="i18n/$(grep -oE "\"${name}\.[0-9a-f]+\.json\"" i18n/languages.json | head -n 1 | tr -d '"')" ;; \
+           *) files="$path" ;; \
+         esac; \
+         found=0; \
+         for f in $files; do if [ -f "$f" ] && grep -qF -- "$str" "$f"; then found=1; fi; done; \
+         if [ "$found" -eq 0 ]; then echo "FATAL: entry $entry: '$str' not found in $path" >&2; bad=$((bad + 1)); fi; \
+       done < /tmp/markers.tsv \
+    && [ "$rows" -gt 0 ] && [ "$bad" -eq 0 ] \
+    && echo "markers.tsv: $rows rows present in the built webapp"
+
+# Not a patch marker but a precondition of a runtime delta: the bundle must still
+# expose window.mxMatrixClientPeg, which sw-boot.js guard (E) polls for the SYNCING
+# gate. Without that global the gate would silently wait out its 120 s deadline on
+# every load instead of gating anything.
+RUN grep -rqF 'mxMatrixClientPeg' /src/apps/web/webapp/bundles/
 
 # ---------------------------------------------------------------------------
 # License texts for the Alpine packages of the nginx-unprivileged base below
