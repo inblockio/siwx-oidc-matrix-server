@@ -870,12 +870,12 @@ A tag bump must try every patch in this file's order.
   same A+B+C+D-core+E content.** Same sanctioned-exception rule as the earlier carries (rule
   3 above); this entry is the record it requires. **No schema change** (`EVENTINDEX_DB_VERSION`
   untouched), so existing indexes are kept on upgrade and on rollback; no i18n string.
-  - **Provenance commit: `dd3b84ddea`** on
+  - **Provenance commit: `d37876a72b`** on
     [`inblockio/element-web`](https://github.com/inblockio/element-web/tree/integration/web-event-index-prod-20261008),
     branch **`integration/web-event-index-prod-20261008`**: the fourth carry's provenance
     `cae2496d7c` plus the UX3 fix (`192e9c2312` and `f0ea812219` from
     `fix/web-event-index-edit-removal`, cherry-picked as `63e54e1d35`, `a52c82a6f8`) and the
-    fixes of two adversarial reviews (2026-10-03 and 2026-10-08). Supersedes `cae2496d7c`.
+    fixes of three adversarial reviews (2026-10-03, and 2026-10-08 twice). Supersedes `cae2496d7c`.
     Still **not** merged into `feat/web-event-index` (the PR branch has no cold tier).
   - **What it fixes** (all live on prod since the third carry, none caused by the fourth):
     1. **UX3:** the cold scan served a resident record's stale chunk copy, so an edited
@@ -896,9 +896,14 @@ A tag bump must try every patch in this file's order.
        what the header lists; capped at `PENDING_REDACTIONS_MAX` = 4096). A parked id is
        forgotten only after the chunk rewrite that removes the record has committed; a
        redaction parked under the record's own id is applied too; an unreadable row is left
-       alone for the session rather than overwritten.
-    5. A wall-clock test (a flush under 10 ms, load-sensitive since `f9b0fac601`) now counts
-       the manifest pages a flush re-encrypts instead.
+       alone for the session rather than overwritten (that session's parked ids are then
+       memory only). Hydration's drain forgets only parked ids no pending rewrite has
+       claimed, so the ordering holds on the hydration path too.
+    5. **A message deleted before hydration reached its chunk came back (pre-existing since
+       `0912b6b299`):** hydration reloaded it from its own read, so it stayed searchable for
+       the rest of the session. Hydration now skips ids whose disk delete is queued.
+    6. A wall-clock test (a flush under 10 ms, load-sensitive since `f9b0fac601`) now counts
+       the manifest pages a flush re-encrypts instead (at most two per flush).
   - **Known limitations, next increment (documented in the manager's header):** a deleted
     message that had been edited comes back with its edited text after a backward crawl
     (Element redacts only the original; the edit stays on the server and the crawler rebuilds
@@ -912,31 +917,33 @@ A tag bump must try every patch in this file's order.
   - **How it was regenerated (the 2026-09-25 method):** pristine `v1.12.29` + entries 1-5
     committed as the base, the fourth-carry patch applied (re-exporting it with
     `git diff --abbrev=7 -O<the patch's own file order>` reproduces it **byte for byte**),
-    then `git diff cae2496d7c dd3b84ddea` applied on top **without** `--3way` (clean), then
+    then `git diff cae2496d7c d37876a72b` applied on top **without** `--3way` (clean), then
     re-exported the same way against the 1-5 base.
   - **Verification:**
-    - **Patch size: nineteen files, 16646 lines** (was 15339). Old -> new patch: only the
+    - **Patch size: nineteen files, 16954 lines** (was 15339). Old -> new patch: only the
       sections of `BrowserEventIndexManager.ts` and `BrowserEventIndexManager.test.ts`
-      change; both files in the applied tree are byte-identical to `dd3b84ddea`.
+      change; both files in the applied tree are byte-identical to `d37876a72b`.
     - **Apply check:** eleven `OK` lines, one per entry, in Dockerfile order on a pristine
       `v1.12.29` (`2d90d6b7b6`).
     - **Gates on v1.12.29 with all eleven patches applied:** the `patch-tests` job script
-      (`scripts/element-patch-tests.sh`): 14 files, **1832** tests passed, 0 failed
-      (`BrowserEventIndexManager` 224); `tsc --noEmit` 0 errors in project sources (the 7
+      (`scripts/element-patch-tests.sh`): 14 files, **1838** tests passed, 0 failed
+      (`BrowserEventIndexManager` 230); `tsc --noEmit` 0 errors in project sources (the 7
       known ones in `node_modules/matrix-js-sdk`); `node --test
-      scripts/browser-eventindex-invariants.mjs` 12/12. In the fork: vitest 273/273 three
+      scripts/browser-eventindex-invariants.mjs` 12/12. In the fork: vitest 279/279 three
       times, jest 44/44, oxlint and oxfmt clean.
     - **Mutation checks:** every fix and part-fix reverted in turn fails its new tests (S3,
-      S2, N2 whole and by part; N1, N2 own-id, N3, N8, the count test); the reviews' own 15
-      mutants are killed, including M11 (forget the parked id before the rewrite commits),
-      which survived until its test was added.
+      S2, N2 whole and by part; N1, N2 own-id, N3, N8, the hydration drain, the queued-delete
+      skip, the post-encrypt session check, the count test); the reviews' own mutants are
+      killed, including M11 (forget the parked id before the rewrite commits) and RR-N7d
+      (a flush re-encrypting 3 of 4 pages), which survived until their tests were added.
     - **Upstream's own Playwright spec `web-event-index.spec.ts`: 3/3 on Chromium against
-      the provenance branch.** The fourth carry's 3/3 failure was the local harness, not
+      the provenance branch at `07a8bb4613`** (before the review follow-ups, which the vitest
+      cases above cover). The fourth carry's 3/3 failure was the local harness, not
       the code: `routeConfigJson` routes only `http://localhost:8080/config.json*`, so with
       port 8080 taken the `labsFlags` never reached the app; restoring that route reproduces
       the old "Use the Desktop app" failure exactly.
-    - Reviews: `SHIP WITH FOLLOW-UPS` (2026-10-08); the follow-ups in this list are in the
-      provenance commit, the rest are the limitations above.
+    - Reviews: `SHIP WITH FOLLOW-UPS` twice (2026-10-08, the carry and its follow-ups); the
+      follow-ups in this list are in the provenance commit, the rest are the limitations above.
 - **Upstream status: FILED AND ACTIVELY TRACKED — we are trying to get this
   merged.** [element-hq/element-web#34718](https://github.com/element-hq/element-web/pull/34718)
   "Add a browser EventIndex so encrypted-room search works on the web"
@@ -1023,7 +1030,7 @@ A tag bump must try every patch in this file's order.
   cold-tier defect the fifth carry fixes); its result on a built image is recorded by
   the promotion that ships it, and entry 6 counts as covered once UX1-UX8 passes there.
   The in-patch Playwright spec covers the same journey against upstream's own harness:
-  3/3 on the fifth carry's provenance branch (see that carry). Upgrade continuity (the
+  3/3 on the fifth carry's provenance branch (see that carry for the commit). Upgrade continuity (the
   index survives an image swap in both directions) is the siwx-oidc T2 element swap
   (`upgrade-survival.sh` with `T2_SWAP=element-web`). Default `enableEventIndexing`
   stays upstream's `true` (same as Desktop).
