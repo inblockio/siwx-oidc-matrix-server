@@ -257,8 +257,19 @@ A tag bump must try every patch in this file's order.
   convention as deliberate. So the tombstone half of this patch is effectively
   permanent, not "carry until fixed". Verified 2026-09-01.
 - **Retirement:** only if upstream ships an equivalent forced-recovery deployment option.
-- **Coverage:** Element suite journey walks (first-login wizard legs, reset-after-no-
-  recovery walk) exercise the forced wizard on every login.
+- **Coverage:** siwx-oidc `e2e/element/`. Gating: `ew-journey-reset-after-no-recovery.spec.mjs`
+  EW-R1 (cancel recovery, log out, log in again, reset the identity); `ew-journey-exits.spec.mjs`
+  EW-J1, EW-J4 and EW-J5 (every screen of the forced wizard offers an exit; cancelling or
+  dismissing it neither strands the user nor exempts them), and EW-J2 for the reload path;
+  `ew-recovery-entry.spec.mjs` EW-R1-0 (after the wizard, the cross-signing master is in 4S)
+  and EW-R1-1 (a reload restores the app or offers a recovery-key entry that works);
+  `ew-login.spec.mjs` EW-L1b; `ew-clickpath.spec.mjs` EW-C1 (a fresh user is walked through
+  the wizard: `wizard === true`); `ew-u3prime-no-forced-reset.spec.mjs` EW-U3P-0 (control: a
+  real `M_NOT_FOUND` takes the create path). **Not covered:** the "an indeterminate probe
+  must unlock, never reset" half. EW-U3P-1 and EW-U3P-2 exist for it but come back
+  inconclusive: the spec's header quotes the old probe (`.then(() => true)`), and the patch
+  now reads the body and requires `!!r?.key`, so the leg has to be brought up to date before
+  it counts. No unit test ships with the patch.
 
 ### 2. `setup-encryption-busy-wedge.patch` — UPSTREAM DEFECT (carry until fixed)
 
@@ -268,7 +279,7 @@ A tag bump must try every patch in this file's order.
   Log marker: `cross-signing not ready 10s after verification` (used by deploy audits).
 - **Why:** the wedge is indistinguishable from "verification failed" for the user; it
   was amplifier-class in the verify-session-loop forensics.
-- **Evidence:** `ew-verify-sas.spec.mjs` header (leg 8 fails on `Phase.Busy` unpatched,
+- **Evidence:** `ew-verify-sas.spec.mjs` header (assertion [8] fails on `Phase.Busy` unpatched,
   observed at 1.12.20); still applies cleanly at 1.12.24 **and at 1.12.26** (2026-08-30
   bump) — i.e. upstream has NOT restructured or fixed the Busy handling, so the
   retirement condition below is NOT met and the patch is carried forward unchanged.
@@ -283,7 +294,13 @@ A tag bump must try every patch in this file's order.
   Verified 2026-09-01.
 - **Retirement:** a tag bump where the patch no longer applies because upstream
   restructured/fixed the Busy handling, or an upstream fix lands. Drop, don't port.
-- **Coverage:** `ew-verify-sas.spec.mjs` leg 8; H3-C completes SAS through the patched path.
+- **Coverage:** siwx-oidc `e2e/element/`: `ew-h3-second-device-walk.spec.mjs` H3-C (a
+  B-initiated "Use another device" walk reaches a verified session) is the leg that gates.
+  `ew-verify-sas.spec.mjs` EW-V1 has assertion [8] (the second session reaches a usable app
+  shell after SAS); it is an assertion inside EW-V1, not a test of its own, so a failure in
+  it names EW-V1. `ew-recovery-entry.spec.mjs` EW-R1-2 and `ew-journey-add-device.spec.mjs`
+  EW-D1 sample the ceremony view for the wedged state (`T_C_Wedged`) but do not assert on
+  this patch's code path alone. No unit test ships with the patch.
 
 ### 3. `honest-qr-disabled-reason.patch` — UPSTREAM HONESTY DEFECT (carry until fixed)
 
@@ -307,7 +324,9 @@ A tag bump must try every patch in this file's order.
   section, so it is not our bug. Filing is gated: see "Upstream filing policy" above.
 - **Retirement:** upstream replaces the blanket "not supported" string with a
   crypto-state-aware reason.
-- **Coverage:** `ew-patch-honesty.spec.mjs` PH-0/PH-1 (siwx-oidc repo).
+- **Coverage:** siwx-oidc `e2e/element/ew-patch-honesty.spec.mjs` PH-0 (the served English
+  strings carry both honesty-patch keys) and PH-1 (a session whose crypto is not ready sees the
+  honest QR reason and a Verify session action). No unit test ships with the patch.
 
 ### 4. `offer-verify-current-session.patch` — UPSTREAM DEAD END (carry until fixed)
 
@@ -362,7 +381,10 @@ A tag bump must try every patch in this file's order.
   "unskippable verification" x2 (forced 4S recovery replaces the Complete Security screen)
   and `LoginWithQR.test.tsx` "reciprocate" x2 (check-code auto-approve changes the props).
 - **Retirement:** upstream accepts the PR or fixes the null-handling equivalently.
-- **Coverage:** `ew-patch-honesty.spec.mjs` PH-0/PH-2 (siwx-oidc repo).
+- **Coverage:** siwx-oidc `e2e/element/ew-patch-honesty.spec.mjs` PH-0 (served strings) and
+  PH-2 (the current session with a null verification status gets a verify exit instead of the
+  encryption claim). In the patch, `DeviceVerificationStatusCard.test.tsx` (vitest) carries
+  the matching test edit; its four neighbouring snapshots are the known red ones above.
 
 ### 5. `auto-approve-check-code.patch` — UX POLICY (review at each bump)
 
@@ -376,7 +398,14 @@ A tag bump must try every patch in this file's order.
   auto-approval, in element-web, element-desktop, the archived matrix-react-sdk, or
   matrix-authentication-service. Filing fresh is safe. See also the keep ruling above.
 - **Retirement:** upstream streamlines the check-code step.
-- **Coverage:** exercised by the QR-link browser walks (check-code leg).
+- **Coverage: none.** No leg in `e2e/element/` types a check code. The QR and device-link
+  legs (`ew-qr-second-device.spec.mjs`, `ew-h3-second-device-walk.spec.mjs` H3-A and H3-B) stop
+  before that step, because it needs a second MSC4108 client to scan the QR code and the lab has
+  none (`ew-qr-second-device.spec.mjs` says so in its header). This is a rule-2 exception,
+  registered as a gap (a human walk, or a second client, closes it). No unit test ships with the patch either:
+  upstream's `LoginWithQR.test.tsx` has two cases (reciprocate) that this patch turns red, as
+  entry 4's note records. The marker (`open_approval_page` in the served English strings)
+  proves only that the patch's string hunk reached the build.
 
 ### 6. `browser-eventindex.patch` — UPSTREAM-TRACKED (PR #34718 open; carry until merged)
 
@@ -909,13 +938,20 @@ A tag bump must try every patch in this file's order.
   tree; it was written against the old HKDF info string and is updated here,
   but it does NOT yet cover the checkpoint HMAC or the v1 → v2 reset — a
   known gap, and the reason it is a supplement to the vitest rather than the
-  proof. The siwx-oidc leg rule 2 asks for,
-  `e2e/element/ew-encrypted-search.spec.mjs`, exists only on the unmerged
-  branch `feat/ew-encrypted-search-eventindex` and is NOT on that repo's
-  checked-out tree; the in-patch Playwright spec now covers the same user
-  journey against upstream's own harness, so the honest statement is that
-  the behaviour is covered and the siwx-oidc leg is still unlanded. Default
-  `enableEventIndexing` stays upstream's `true` (same as Desktop).
+  proof. The siwx-oidc leg rule 2 asks for is
+  `e2e/element/ew-encrypted-search.spec.mjs`, test `UX1-UX8 encrypted search on
+  hosted Element Web`, on that repository's `main` (commit `2c80f2a`). It drives
+  a deployed build with throwaway accounts: the search is offered (UX1), a
+  unique token is found (UX2), an edit moves the hit (UX3: the old text leaves
+  the index, the new text is searchable, the hit keeps the original event id),
+  logout leaves no index (UX4) and no plaintext in browser storage (UX5), a
+  second account cannot search the first (UX6), a reload keeps the index (UX7),
+  and the siwx login is unchanged (UX8). **UX3 does not pass on the current
+  carry**, so entry 6 is not counted as covered until it does. The in-patch
+  Playwright spec covers the same journey against upstream's own harness; it
+  was last green on the third carry and is not verified on the later ones (see
+  the carry notes). Default `enableEventIndexing` stays upstream's `true` (same
+  as Desktop).
 
 ---
 
@@ -974,12 +1010,15 @@ A tag bump must try every patch in this file's order.
   landed). Its `en_EN.json` hunk was generated against the tree with entries 1-6
   already applied; moving it earlier breaks that hunk. Entry 8 depends on it and must
   follow it.
-- **Coverage:** none yet in `e2e/element/` — both rows render from a profile field, so a
-  leg needs an account with a published DID on the lab stack. **This is a rule-2
+- **Coverage: none.** No test in `e2e/element/` opens either surface (the member panel
+  or All settings → Account); the upgrade legs EW-U5 and EW-UA6 search for a DID in
+  Spotlight (entry 8) and never open the panel. Both rows render from a profile field, so
+  a leg needs an account with a published DID on the lab stack. **This is a rule-2
   exception and it should be closed**: add a leg that opens the member panel for a
   siwx-provisioned user, and one that opens All settings → Account, asserting in each
-  case that the DID text matches the field read over the C-S API. Note that there is no
-  unit-test cover to fall back on either: `apps/web/test/unit-tests/**` looks like a test
+  case that the DID text matches the field read over the C-S API. The marker
+  (`did_label_unsigned`, `DID (unsigned)`) proves only that the code reached the build.
+  Note that there is no unit-test cover to fall back on either: `apps/web/test/unit-tests/**` looks like a test
   tree but is NOT executed at v1.12.26 — the vitest project includes only
   `src/**/*.test.{ts,tsx}`, and those files use the older `*-test.tsx` spelling. Do not
   add a case there expecting it to run.
@@ -1171,8 +1210,13 @@ A tag bump must try every patch in this file's order.
   own-only or published-`did` check each fails at least one case. Verified against
   v1.12.29 with all eight patches applied in Dockerfile order: 97/97 across
   `didLocalpart`, `useProfileInfo`, `InviteDialog` and `DMRoomTile`; `tsc --noEmit` adds
-  no errors; oxlint/oxfmt clean; `pnpm --filter element-web build` succeeds. No
-  `e2e/element/` leg yet: like entry 7 it needs a lab account with a published DID.
+  no errors; oxlint/oxfmt clean; `pnpm --filter element-web build` succeeds.
+  **Playwright (siwx-oidc `e2e/element/`):** `ew-upgrade-capture.spec.mjs` EW-U5 and
+  `ew-upgrade-assert.spec.mjs` EW-UA6, each "Spotlight resolves a DID to its MXID", run on the
+  baseline before and on the candidate after an element-web swap (helper
+  `spotlightFindsDid` in `helpers/upgrade.mjs`). They cover Spotlight only: the invite /
+  start-DM dialog and the DID verification markers have no leg, and the two tests run only
+  as part of the upgrade-survival walk, not as a patch leg of their own.
 - **Stale profile cache (2026-09-29):** matrix-js-sdk's `getExtendedProfileProperty` is
   cache-first: the first read of `io.inblock.did` is written through to the client store
   (IndexedDB) and every later read returns that copy, which only an MSC4429 sync update
@@ -1305,12 +1349,13 @@ A tag bump must try every patch in this file's order.
 - **Retirement:** a tag bump where upstream checks `response.ok` (or otherwise stops
   caching a failed `/versions`), i.e. our PR or an equivalent merged. The patch then
   fails to apply: check, and drop it (and rebase entry 10 onto the upstream code).
-- **Coverage (rule 2):** Playwright leg `e2e/element/ew-sw-media-auth.spec.mjs` in the
-  siwx-oidc repo, branch `test/ew-sw-media-auth` (commit 207f4b8), legs SW-1 (authed
-  `/versions` 401, anonymous retry, image renders, zero legacy requests, SW logs the
-  retry marker) and SW-2 (one `/versions` check 503s; a room opened afterwards and the
-  room opened during the outage both render). Plus the vitest file in the patch, and the
-  harness below.
+- **Coverage (rule 2):** siwx-oidc `e2e/element/ew-sw-media-auth.spec.mjs` (on that
+  repository's `main`): SW-1 (authed `/versions` 401, anonymous retry, image renders, zero
+  legacy requests, the SW logs the retry marker) and SW-2 (one `/versions` check 503s; a room
+  opened afterwards and the room opened during the outage both render). The spec runs serially,
+  so a SW-1 failure skips SW-2 and SW-3. `EW_SW_OVERRIDE` serves a stock `sw.js` through its
+  pass-through proxy, which is the leg's negative control. Plus the vitest file in the patch,
+  and the harness below.
 - **Verified on dev (rev 3a3dae8, `element-web@sha256:9db9df51…`, 2026-09-28):** served
   `sw.js` carries all three entry 9/10 markers. Playwright leg (siwx-oidc 207f4b8,
   re-run 2026-09-28 evening) **3/3 runs green** (SW-1, SW-2, SW-3 each pass in every
@@ -1386,9 +1431,10 @@ A tag bump must try every patch in this file's order.
 - **Retirement:** upstream fixes the service worker's stale-token handling (any form:
   the tab-refresh message above, or the SW retrying a 401 itself). The patch then fails
   to apply or becomes redundant: check, and drop it.
-- **Coverage (rule 2):** Playwright leg SW-3 in `e2e/element/ew-sw-media-auth.spec.mjs`
-  (siwx-oidc branch `test/ew-sw-media-auth`), plus the vitest file in the patch and the
-  harness `live` mode.
+- **Coverage (rule 2):** siwx-oidc `e2e/element/ew-sw-media-auth.spec.mjs` SW-3 (a media
+  request answered 401 is retried once the app has refreshed its token; on `main`; serial
+  mode skips it when SW-1 fails), plus the vitest file in the patch (`mediaTokenRetry.test.ts`)
+  and the harness `live` mode.
 
 ### 11. `copy-markdown.patch` - FEATURE, upstreamable (not filed; carry until upstream ships an equivalent)
 
@@ -1542,9 +1588,11 @@ A tag bump must try every patch in this file's order.
 - **Retirement:** upstream ships a copy-as-Markdown (or equivalent) message action. The patch
   then fails to apply on the `MessageContextMenu.tsx` hunks or becomes redundant: check, and
   drop it, together with `utils/eventToMarkdown.ts` and the `action.copy_markdown` string.
-- **Coverage (rule 2):** Playwright spec `e2e/element/ew-copy-markdown.spec.mjs` (siwx-oidc
-  branch `feature/ew-copy-markdown`, CM5 added on `e2e/ew-copy-markdown-cm5`, CM6 and CM7 on
-  `e2e/ew-copy-markdown-cm6-cm7`), plus the two vitest suites in the patch and its conformance
+- **Coverage (rule 2):** siwx-oidc `e2e/element/ew-copy-markdown.spec.mjs` (on that repository's
+  `main`): CM1 (the entry sits directly above Pin), CM2 (content after an edit), CM3 (absent on
+  an image; passes on stock by design), CM4 (a plain body is escaped), CM5 (Markdown typed in
+  the composer is copied back exactly), CM6 (content sent through the Matrix Rust SDK) and CM7
+  (a plain-body Markdown bot). Plus the two vitest suites in the patch and its conformance
   vectors.
 - **Potential follow-ups (not scheduled, 2026-10-05):** converter fidelity for crafted HTML,
   an independent audit of the strict grammar, and a Rust SDK port of the rule. Each is
