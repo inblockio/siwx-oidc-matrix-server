@@ -18,7 +18,7 @@ Rules of this registry:
    observable fact that lets us delete it. A patch nobody can retire is a fork forever.
 2. **No behavioral patch without test coverage.** User-visible behavior gets a Playwright
    leg in the siwx-oidc repo's Element suite (`e2e/element/`); the entry names the spec
-   file and the test IDs, and says plainly where there is none (entries 5 and 7 today).
+   file and the test IDs, and says plainly where there is none (entry 5 today).
    **Unit tests a patch carries run in CI.** Every test file a patch adds or modifies
    (`*.test.ts(x)`, `*-test.ts(x)`, `*.spec.*`, except Playwright specs under `playwright/`)
    runs on the patched tag tree in the `Element patch unit tests` job of
@@ -188,7 +188,7 @@ re-litigated each time someone audits the registry.
 | 3 | `honest-qr-disabled-reason` | When "Show QR code" is blocked by **this session's own** crypto state, stop reporting it as the account provider not supporting device link. The stock string is simply false for us and hides the actual remedy. | none |
 | 4 | `offer-verify-current-session` | `DeviceVerificationStatusCard` gave an unverified **current** session a card with no action and no reason, leaving the destructive identity reset as the only visible exit. | none |
 | 5 | `auto-approve-check-code` | MSC4108 QR device-link check-code auto-approves once both digits are typed. The deliberate read-and-type is the security property; the extra confirm click is not. | none |
-| 6 | `browser-eventindex` | A `BrowserEventIndexManager` implementing `BaseEventIndexManager` so E2EE room search works in hosted Element Web, with a **non-blocking** load so a large index cannot delay app start, bounded crawl/memory/disk budgets, a chunked encrypted store, and a streamed cold scan for what is on disk outside the resident window. Upstream PR #34718 plus increments A, B, C, D-core and E, which lead it. | labs flag `feature_web_event_index` (off unless set; this repository's config sets it) |
+| 6 | `browser-eventindex` | A `BrowserEventIndexManager` implementing `BaseEventIndexManager` so E2EE room search works in hosted Element Web, with a **non-blocking** load so a large index cannot delay app start, bounded crawl/memory/disk budgets, a chunked encrypted store, and a streamed cold scan for what is on disk outside the resident window. Upstream PR #34718 plus increments A, B, C, D-core and E, which lead it, and the fifth carry's edit and redaction fixes of the cold tier. | labs flag `feature_web_event_index` (off unless set; this repository's config sets it) |
 | 7 | `show-attested-did` | Shows the provider-attested DID (`io.inblock.did`) under the MXID in the member panel and in All settings -> Account. | none |
 | 8 | `resolve-did-search` | A DID typed into Spotlight or the invite/DM dialog resolves to the user's MXID. Depends on 7. | none |
 | 9 | `sw-versions-no-cache-on-error` | The service worker never caches a failed `/versions` check, retries it anonymously, and shares one check per server. | none |
@@ -269,7 +269,8 @@ A tag bump must try every patch in this file's order.
   must unlock, never reset" half. EW-U3P-1 and EW-U3P-2 exist for it but come back
   inconclusive: the spec's header quotes the old probe (`.then(() => true)`), and the patch
   now reads the body and requires `!!r?.key`, so the leg has to be brought up to date before
-  it counts. No unit test ships with the patch.
+  it counts. Until then both carry no `@ew-p1` tag, so the promotion selection does not run
+  them, and the branch is a registered gap. No unit test ships with the patch.
 
 ### 2. `setup-encryption-busy-wedge.patch` — UPSTREAM DEFECT (carry until fixed)
 
@@ -372,8 +373,9 @@ A tag bump must try every patch in this file's order.
   2 in `SessionManagerTab.test.tsx`); this entry used to call them "known red upstream",
   but all four were caused by this patch, and prod has served the empty div since the
   patch landed. The patch now passes ONE child (`actions`, `null` when there is nothing to
-  offer; the button and the reason are exclusive), so the DOM matches stock and the
-  upstream snapshots pass unchanged: 62/62 across both files on v1.12.29 with all eleven
+  offer; the button and the reason are exclusive; with the `type JSX` import React 19's
+  types require, which `tsc` caught and vitest, which does not type-check, did not), so the
+  DOM matches stock and the upstream snapshots pass unchanged: 62/62 across both files on v1.12.29 with all eleven
   patches applied (before: 2 failed in each file). Found by the `patch-tests` CI job, the
   first time the tests this patch carries ran anywhere. Patches 1 and 5 carry red tests
   of a different kind, in files no patch carries (so `patch-tests` does not run them):
@@ -384,7 +386,8 @@ A tag bump must try every patch in this file's order.
 - **Coverage:** siwx-oidc `e2e/element/ew-patch-honesty.spec.mjs` PH-0 (served strings) and
   PH-2 (the current session with a null verification status gets a verify exit instead of the
   encryption claim). In the patch, `DeviceVerificationStatusCard.test.tsx` (vitest) carries
-  the matching test edit; its four neighbouring snapshots are the known red ones above.
+  the matching test edit; it and `SessionManagerTab.test.tsx` pass with their upstream
+  snapshots unchanged since the 2026-10-08 fix above, and the `patch-tests` CI job runs it.
 
 ### 5. `auto-approve-check-code.patch` — UX POLICY (review at each bump)
 
@@ -864,6 +867,84 @@ A tag bump must try every patch in this file's order.
     `coldTouched` 3, `isSearchPartial` 1, `maxTouchPoints` 2, `shouldCrawl` 2,
     `manifestCeilingBytes` 2, `waitForHydration` 1, `hydrationFailure` 4,
     `feature_web_event_index` 3, `element-eventindex` 3, `runManifestMigration` 0).
+- **FIFTH CARRY, 2026-10-08: edit and redaction correctness of the cold tier, on top of the
+  same A+B+C+D-core+E content.** Same sanctioned-exception rule as the earlier carries (rule
+  3 above); this entry is the record it requires. **No schema change** (`EVENTINDEX_DB_VERSION`
+  untouched), so existing indexes are kept on upgrade and on rollback; no i18n string.
+  - **Provenance commit: `d37876a72b`** on
+    [`inblockio/element-web`](https://github.com/inblockio/element-web/tree/integration/web-event-index-prod-20261008),
+    branch **`integration/web-event-index-prod-20261008`**: the fourth carry's provenance
+    `cae2496d7c` plus the UX3 fix (`192e9c2312` and `f0ea812219` from
+    `fix/web-event-index-edit-removal`, cherry-picked as `63e54e1d35`, `a52c82a6f8`) and the
+    fixes of three adversarial reviews (2026-10-03, and 2026-10-08 twice). Supersedes `cae2496d7c`.
+    Still **not** merged into `feat/web-event-index` (the PR branch has no cold tier).
+  - **What it fixes** (all live on prod since the third carry, none caused by the fourth):
+    1. **UX3:** the cold scan served a resident record's stale chunk copy, so an edited
+       message was found by its old text while the edit waited to be flushed. The cold tier
+       now serves the resident record.
+    2. **Eviction dropped a pending edit (S3, permanent):** the resident budget evicted a
+       record whose edit was still in `liveWriteBuffer`, a queued flush or a crawler batch
+       being assembled, so the edit never reached disk and the old text stayed findable after
+       every reload. Eviction now defers exactly the records with an uncommitted write (they
+       are evicted in the pass after their commit; holds are released in `finally`).
+    3. **A cold hit's context showed a redacted neighbour's body (S2):** context lines came
+       from the decrypted chunk snapshot. They now come from the current index and drop ids
+       whose disk delete is pending or that left the manifest.
+    4. **A redacted edit stayed findable (N2):** a redaction naming an edit whose original is
+       not resident was parked in memory only and dropped at hydration end. The cold scan now
+       skips and removes such a record, and the parked ids persist in ONE encrypted,
+       AAD-bound row of the existing `meta` store while non-empty (no new cleartext beyond
+       what the header lists; capped at `PENDING_REDACTIONS_MAX` = 4096). A parked id is
+       forgotten only after the chunk rewrite that removes the record has committed; a
+       redaction parked under the record's own id is applied too; an unreadable row is left
+       alone for the session rather than overwritten (that session's parked ids are then
+       memory only). Hydration's drain forgets only parked ids no pending rewrite has
+       claimed, so the ordering holds on the hydration path too.
+    5. **A message deleted before hydration reached its chunk came back (pre-existing since
+       `0912b6b299`):** hydration reloaded it from its own read, so it stayed searchable for
+       the rest of the session. Hydration now skips ids whose disk delete is queued.
+    6. A wall-clock test (a flush under 10 ms, load-sensitive since `f9b0fac601`) now counts
+       the manifest pages a flush re-encrypts instead (at most two per flush).
+  - **Known limitations, next increment (documented in the manager's header):** a deleted
+    message that had been edited comes back with its edited text after a backward crawl
+    (Element redacts only the original; the edit stays on the server and the crawler rebuilds
+    the record from it; needs bounded tombstones); on large accounts the parked set lives at
+    its cap, so a parked edit-redaction lasts about 4096 later unmatched redactions (remedy:
+    a background sweep of the chunks when the set passes half the cap); a deferred oldest
+    record makes the eviction pass evict newer records in its place.
+  - **Rollback note:** rollback, then a logout and login on the older build, then forward
+    again: the older build cannot read the parked-redactions row the newer one wrote, and that
+    user's index is wiped once (privacy-safe; one re-crawl).
+  - **How it was regenerated (the 2026-09-25 method):** pristine `v1.12.29` + entries 1-5
+    committed as the base, the fourth-carry patch applied (re-exporting it with
+    `git diff --abbrev=7 -O<the patch's own file order>` reproduces it **byte for byte**),
+    then `git diff cae2496d7c d37876a72b` applied on top **without** `--3way` (clean), then
+    re-exported the same way against the 1-5 base.
+  - **Verification:**
+    - **Patch size: nineteen files, 16954 lines** (was 15339). Old -> new patch: only the
+      sections of `BrowserEventIndexManager.ts` and `BrowserEventIndexManager.test.ts`
+      change; both files in the applied tree are byte-identical to `d37876a72b`.
+    - **Apply check:** eleven `OK` lines, one per entry, in Dockerfile order on a pristine
+      `v1.12.29` (`2d90d6b7b6`).
+    - **Gates on v1.12.29 with all eleven patches applied:** the `patch-tests` job script
+      (`scripts/element-patch-tests.sh`): 14 files, **1838** tests passed, 0 failed
+      (`BrowserEventIndexManager` 230); `tsc --noEmit` 0 errors in project sources (the 7
+      known ones in `node_modules/matrix-js-sdk`); `node --test
+      scripts/browser-eventindex-invariants.mjs` 12/12. In the fork: vitest 279/279 three
+      times, jest 44/44, oxlint and oxfmt clean.
+    - **Mutation checks:** every fix and part-fix reverted in turn fails its new tests (S3,
+      S2, N2 whole and by part; N1, N2 own-id, N3, N8, the hydration drain, the queued-delete
+      skip, the post-encrypt session check, the count test); the reviews' own mutants are
+      killed, including M11 (forget the parked id before the rewrite commits) and RR-N7d
+      (a flush re-encrypting 3 of 4 pages), which survived until their tests were added.
+    - **Upstream's own Playwright spec `web-event-index.spec.ts`: 3/3 on Chromium against
+      the provenance branch at `07a8bb4613`** (before the review follow-ups, which the vitest
+      cases above cover). The fourth carry's 3/3 failure was the local harness, not
+      the code: `routeConfigJson` routes only `http://localhost:8080/config.json*`, so with
+      port 8080 taken the `labsFlags` never reached the app; restoring that route reproduces
+      the old "Use the Desktop app" failure exactly.
+    - Reviews: `SHIP WITH FOLLOW-UPS` twice (2026-10-08, the carry and its follow-ups); the
+      follow-ups in this list are in the provenance commit, the rest are the limitations above.
 - **Upstream status: FILED AND ACTIVELY TRACKED — we are trying to get this
   merged.** [element-hq/element-web#34718](https://github.com/element-hq/element-web/pull/34718)
   "Add a browser EventIndex so encrypted-room search works on the web"
@@ -946,12 +1027,14 @@ A tag bump must try every patch in this file's order.
   the index, the new text is searchable, the hit keeps the original event id),
   logout leaves no index (UX4) and no plaintext in browser storage (UX5), a
   second account cannot search the first (UX6), a reload keeps the index (UX7),
-  and the siwx login is unchanged (UX8). **UX3 does not pass on the current
-  carry**, so entry 6 is not counted as covered until it does. The in-patch
-  Playwright spec covers the same journey against upstream's own harness; it
-  was last green on the third carry and is not verified on the later ones (see
-  the carry notes). Default `enableEventIndexing` stays upstream's `true` (same
-  as Desktop).
+  and the siwx login is unchanged (UX8). **UX3 failed on the fourth carry** (the
+  cold-tier defect the fifth carry fixes); its result on a built image is recorded by
+  the promotion that ships it, and entry 6 counts as covered once UX1-UX8 passes there.
+  The in-patch Playwright spec covers the same journey against upstream's own harness:
+  3/3 on the fifth carry's provenance branch (see that carry for the commit). Upgrade continuity (the
+  index survives an image swap in both directions) is the siwx-oidc T2 element swap
+  (`upgrade-survival.sh` with `T2_SWAP=element-web`). Default `enableEventIndexing`
+  stays upstream's `true` (same as Desktop).
 
 ---
 
@@ -1010,14 +1093,13 @@ A tag bump must try every patch in this file's order.
   landed). Its `en_EN.json` hunk was generated against the tree with entries 1-6
   already applied; moving it earlier breaks that hunk. Entry 8 depends on it and must
   follow it.
-- **Coverage: none.** No test in `e2e/element/` opens either surface (the member panel
-  or All settings → Account); the upgrade legs EW-U5 and EW-UA6 search for a DID in
-  Spotlight (entry 8) and never open the panel. Both rows render from a profile field, so
-  a leg needs an account with a published DID on the lab stack. **This is a rule-2
-  exception and it should be closed**: add a leg that opens the member panel for a
-  siwx-provisioned user, and one that opens All settings → Account, asserting in each
-  case that the DID text matches the field read over the C-S API. The marker
-  (`did_label_unsigned`, `DID (unsigned)`) proves only that the code reached the build.
+- **Coverage:** siwx-oidc `e2e/element/ew-attested-did.spec.mjs` (`@ew-p7`, on that
+  repository's `main` since `869921c`): EW-DID1 (the member panel) and EW-DID2 (All
+  settings → Account) sign in a fresh wallet, whose binding siwx-oidc publishes at first
+  sign-in, and assert the DID row (label, the wallet's `did:pkh` prefix, the copy button
+  copies the full DID). Negative control `EW_DID_NEGATIVE=hide-field` (the DID profile
+  reads answer 404) fails both. The marker (`did_label_unsigned`, `DID (unsigned)`) proves
+  only that the code reached the build.
   Note that there is no unit-test cover to fall back on either: `apps/web/test/unit-tests/**` looks like a test
   tree but is NOT executed at v1.12.26 — the vitest project includes only
   `src/**/*.test.{ts,tsx}`, and those files use the older `*-test.tsx` spelling. Do not
