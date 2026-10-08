@@ -999,10 +999,10 @@ index fe75a94..f9aedf6 100644
          labsGroup: LabGroup.Messaging,
 diff --git a/apps/web/src/vector/platform/BrowserEventIndexManager.test.ts b/apps/web/src/vector/platform/BrowserEventIndexManager.test.ts
 new file mode 100644
-index 0000000..a70a991
+index 0000000..b3e9fbe
 --- /dev/null
 +++ b/apps/web/src/vector/platform/BrowserEventIndexManager.test.ts
-@@ -0,0 +1,6650 @@
+@@ -0,0 +1,7575 @@
 +/*
 +Copyright 2026 inblock.io
 +
@@ -1037,6 +1037,7 @@ index 0000000..a70a991
 +    isWebEventIndexSupported,
 +    MANIFEST_BYTES_PER_ENTRY_ESTIMATE,
 +    MANIFEST_PAGE_SIZE,
++    PENDING_REDACTIONS_MAX,
 +    replacedEventId,
 +    RESIDENT_BYTES_PER_EVENT_ESTIMATE,
 +    tokenize,
@@ -3460,7 +3461,7 @@ index 0000000..a70a991
 +            }
 +        });
 +
-+        it("R8: pendingRedactions is drained once hydration ends", async () => {
++        it("R8: pendingRedactions is drained once a complete hydration ends", async () => {
 +            await seed(4);
 +            const restore = slowDownDecrypt(15);
 +            try {
@@ -5722,34 +5723,56 @@ index 0000000..a70a991
 +            }
 +        });
 +
-+        it("per-flush cost is proportional to the (now 1k) page, not the old 10k one (review-pr-c.md C2-F3)", async () => {
-+            // Fill the current page to exactly MANIFEST_PAGE_SIZE first (each in its own flush, so
-+            // the *timed* flush below is the one that re-encrypts a genuinely full page, not a
-+            // partially-filled one), then time one more flush that touches (dirties) it again.
++        it("per-flush cost is proportional to the (now 1k) page, not the old 10k one or the whole manifest (review-pr-c.md C2-F3)", async () => {
++            // This used to time one flush against a 10 ms bound, which failed under load without any regression. What
++            // the bound stood for is how much a flush re-encrypts, so that is what is counted: the manifest pages the
++            // flush dirtied, never every page there is, and none larger than the 1k page.
++            expect(MANIFEST_PAGE_SIZE).toBeLessThanOrEqual(1_000); // the old 10k page re-encrypted 10x this per flush
 +            setEventIndexBoundsOverrideForTesting(null);
 +            const manager = track(new BrowserEventIndexManager());
 +            await manager.initEventIndex(userId, DEVICE);
 +            await manager.waitForHydration();
-+            for (let i = 0; i < MANIFEST_PAGE_SIZE; i++) {
-+                await manager.addEventToIndex(
-+                    msg(`$pf${String(i).padStart(5, "0")}`, "x", { room_id: ROOM, origin_server_ts: 3_000_000 + i }),
-+                    {},
-+                );
-+            }
-+            await manager.commitLiveEvents(); // one batched flush fills the page
++            const internals = manager as unknown as {
++                manifestPages: Array<Set<string>>;
++                prepareManifestPageWrites: (...args: unknown[]) => Promise<unknown>;
++            };
 +
++            // Three manifest pages filled to exactly MANIFEST_PAGE_SIZE entries, each in its own flush.
++            for (let page = 0; page < 3; page++) {
++                for (let i = 0; i < MANIFEST_PAGE_SIZE; i++) {
++                    await manager.addEventToIndex(
++                        msg(`$pf${page}-${String(i).padStart(5, "0")}`, "x", {
++                            room_id: ROOM,
++                            origin_server_ts: 3_000_000 + page * 100_000 + i,
++                        }),
++                        {},
++                    );
++                }
++                await manager.commitLiveEvents();
++            }
++            expect(internals.manifestPages.map((p) => p.size)).toEqual([
++                MANIFEST_PAGE_SIZE,
++                MANIFEST_PAGE_SIZE,
++                MANIFEST_PAGE_SIZE,
++            ]);
++
++            // One more flush; record how many entries each manifest page it re-encrypts holds. Read off the records
++            // the preparation returns (their key ends in the page number), not off the pages it was asked for.
++            const realPrepare = internals.prepareManifestPageWrites.bind(manager);
++            const reencrypted: number[] = [];
++            vi.spyOn(internals, "prepareManifestPageWrites").mockImplementation(async (...args: unknown[]) => {
++                const records = (await realPrepare(...args)) as Array<{ userId: string }>;
++                for (const rec of records) {
++                    reencrypted.push(internals.manifestPages[Number(rec.userId.split(":").pop())].size);
++                }
++                return records;
++            });
 +            await manager.addEventToIndex(msg("$pfDirty", "x", { room_id: ROOM, origin_server_ts: 4_000_000 }), {});
-+            const t0 = performance.now();
-+            await manager.commitLiveEvents(); // this flush re-encrypts the now-full page, timed
-+            const flushMs = performance.now() - t0;
-+            console.log(
-+                `review-pr-c.md C2-F3: one flush touching a full ${MANIFEST_PAGE_SIZE}-entry page: ${flushMs.toFixed(2)}ms`,
-+            );
-+            // Generous headroom over the ~1.6ms the review's own linear scaling predicts for a page
-+            // 10x smaller than the original 10k (measured ~15.8ms there) -- loose enough not to be
-+            // flaky on a shared CI runner, tight enough to catch a regression back toward the old
-+            // page size's cost.
-+            expect(flushMs).toBeLessThan(10);
++            await manager.commitLiveEvents();
++
++            expect(reencrypted.length).toBeGreaterThan(0); // control: the flush was seen
++            expect(reencrypted.length).toBeLessThan(internals.manifestPages.length); // not every page there is
++            for (const entries of reencrypted) expect(entries).toBeLessThanOrEqual(MANIFEST_PAGE_SIZE);
 +        });
 +    });
 +
@@ -7652,13 +7675,915 @@ index 0000000..a70a991
 +        expect(ids.some((id) => resident.has(id))).toBe(true);
 +        expect(ids.some((id) => !resident.has(id))).toBe(true);
 +    });
++
++    // siwx-oidc e2e UX3 (e2e/element/ew-encrypted-search.spec.mjs): after an m.replace, the pre-edit body was
++    // still found. The edit updates the resident record at once, but its encrypted rewrite waits in the live
++    // write buffer (up to LIVE_WRITE_FLUSH_INTERVAL_MS) -- and since E3-F1 the cold scan skips only the hot
++    // *matches* (session.hotIds), so the resident record the hot tier had correctly rejected was re-evaluated
++    // against its stale disk copy, and the old body matched there. The resident record is the authoritative
++    // copy of anything it holds; the disk copy is only authoritative for what is not resident.
++    describe("UX3: an edit's pre-edit body is not served from the not-yet-rewritten disk copy", () => {
++        async function editedBeforeFlush(): Promise<BrowserEventIndexManager> {
++            const m = track(new BrowserEventIndexManager());
++            await m.initEventIndex(userId, DEVICE);
++            await m.waitForHydration();
++            await m.addEventToIndex(msg("$orig", "ewsearch-123-alpha", { room_id: ROOM }), {});
++            await m.addEventToIndex(msg("$other", "alpha other", { room_id: ROOM, origin_server_ts: 500 }), {});
++            await m.commitLiveEvents(); // both on disk, so every search below reaches the cold tier
++            await m.addEventToIndex({ ...edit("$edit", "$orig", "ewsearch-123-beta"), room_id: ROOM }, {});
++            // Deliberately no commitLiveEvents(): the rewrite of $orig's chunk is still buffered.
++            return m;
++        }
++
++        it("substring path: the old body is gone at once, the new body is found under the original id", async () => {
++            const m = await editedBeforeFlush();
++            const oldHit = await m.searchEventIndex(search("ewsearch-123-alpha"));
++            expect(resultIds(oldHit)).toEqual([]);
++            expect(oldHit.count).toBe(0);
++
++            const newHit = await m.searchEventIndex(search("ewsearch-123-beta"));
++            expect(resultIds(newHit)).toEqual(["$orig"]);
++            expect(newHit.results![0].result.content.body).toBe("ewsearch-123-beta");
++
++            await m.commitLiveEvents();
++            expect(resultIds(await m.searchEventIndex(search("ewsearch-123-alpha")))).toEqual([]);
++        });
++
++        it("term path: a token only the pre-edit body held matches only the record that still holds it", async () => {
++            const m = await editedBeforeFlush();
++            // `alpha` still has a resident match ($other), so this query takes the token path, not the substring
++            // fallback; $orig must not ride along on its stale disk copy.
++            const hit = await m.searchEventIndex(search("alpha"));
++            expect(resultIds(hit)).toEqual(["$other"]);
++            expect(hit.count).toBe(1);
++        });
++
++        it("room scope: the stale copy is not served to its own room, and the resident copy does not leak into another", async () => {
++            const m = track(new BrowserEventIndexManager());
++            await m.initEventIndex(userId, DEVICE);
++            await m.waitForHydration();
++            // The same old body in two rooms, written together so both land in one chunk: the walk for either
++            // room's search then decrypts a chunk that holds the other room's record too.
++            await m.addEventToIndex(msg("$orig", "ewsearch-123-alpha", { room_id: ROOM, origin_server_ts: 1000 }), {});
++            await m.addEventToIndex(msg("$twin", "ewsearch-123-alpha", { room_id: ROOM2, origin_server_ts: 900 }), {});
++            await m.commitLiveEvents();
++            await m.addEventToIndex({ ...edit("$edit", "$orig", "ewsearch-123-beta"), room_id: ROOM }, {});
++            // Deliberately no commitLiveEvents(): the chunk still holds $orig's pre-edit body.
++
++            // The room the edit happened in: neither the substring query nor the term query may find the old body.
++            for (const term of ["ewsearch-123-alpha", "alpha"]) {
++                const stale = await m.searchEventIndex(search(term, { room_id: ROOM }));
++                expect(resultIds(stale)).toEqual([]);
++                expect(stale.count).toBe(0);
++            }
++            // The other room still finds its own untouched record by that body (the cold tier is not muted) ...
++            const twin = await m.searchEventIndex(search("ewsearch-123-alpha", { room_id: ROOM2 }));
++            expect(resultIds(twin)).toEqual(["$twin"]);
++            // ... and the edited record, which now matches the NEW body, does not cross into it.
++            const leak = await m.searchEventIndex(search("ewsearch-123-beta", { room_id: ROOM2 }));
++            expect(resultIds(leak)).toEqual([]);
++            const own = await m.searchEventIndex(search("ewsearch-123-beta", { room_id: ROOM }));
++            expect(resultIds(own)).toEqual(["$orig"]);
++        });
++
++        it("the cold tier serves the resident copy of a record the hot snapshot rejected, not the chunk copy", async () => {
++            const m = track(new BrowserEventIndexManager());
++            await m.initEventIndex(userId, DEVICE);
++            await m.waitForHydration();
++            await m.addEventToIndex(msg("$x1", "ewsearchbeta one", { room_id: ROOM, origin_server_ts: 1000 }), {});
++            await m.addEventToIndex(msg("$x2", "ewsearchbeta two", { room_id: ROOM, origin_server_ts: 1001 }), {});
++            await m.addEventToIndex(msg("$y", "unrelated text", { room_id: ROOM, origin_server_ts: 1002 }), {});
++            await m.commitLiveEvents();
++
++            // Page one snapshots the hot matches ($x2, $x1) and opens a session; $y is resident but not a hit.
++            const first = await m.searchEventIndex(search("ewsearchbeta", { limit: 2 }));
++            expect(resultIds(first)).toEqual(["$x2", "$x1"]);
++            expect(first.next_batch).toBeDefined();
++
++            // $y is edited into a match while the session is open. Its chunk copy still says "unrelated text".
++            await m.addEventToIndex({ ...edit("$edit", "$y", "ewsearchbeta three"), room_id: ROOM }, {});
++
++            // Page two reaches $y only through the cold step. It must evaluate AND serve the resident copy.
++            const second = await m.searchEventIndex(search("ewsearchbeta", { limit: 2, next_batch: first.next_batch }));
++            expect(resultIds(second)).toEqual(["$y"]);
++            expect(second.results![0].result.content.body).toBe("ewsearchbeta three");
++            expect(second.count).toBe(3);
++            expect(second.next_batch).toBeUndefined();
++        });
++    });
++
++    // Fifth carry, S3. enforceResidentBudget used to evict the oldest resident record even when that record had been
++    // edited and its rewrite had not committed yet (waiting in the live write buffer, or in a batch queued on the
++    // persist chain). flushLiveWrites skips an id it can no longer find in `events`, so the edit never reached disk:
++    // the pre-edit body stayed findable from the cold tier, after every reload. Eviction now defers such a record
++    // until its write has committed.
++    describe("S3: eviction defers a record whose write has not committed", () => {
++        type Priv = {
++            events: Map<string, unknown>;
++            persistChain: Promise<void>;
++            pendingWriteIds: Map<string, number>;
++            liveWriteBuffer: Set<string>;
++        };
++        const priv = (m: BrowserEventIndexManager): Priv => m as unknown as Priv;
++        const crawl = (...events: any[]): Array<{ event: any; profile: object }> =>
++            events.map((event) => ({ event, profile: {} }));
++        const editOld = (): any => ({ ...edit("$e", "$old", "zznewword", 9000), room_id: ROOM });
++        const historic = (id: string, ts: number): any =>
++            msg(id, `zzhistoric ${id}`, { room_id: ROOM, origin_server_ts: ts });
++        const oneEvents = (n: number): number => RESIDENT_BYTES_PER_EVENT_ESTIMATE * n;
++
++        async function open(): Promise<BrowserEventIndexManager> {
++            const m = track(new BrowserEventIndexManager());
++            await m.initEventIndex(userId, DEVICE);
++            await m.waitForHydration();
++            return m;
++        }
++
++        /** `$old` (the oldest record) in its own sealed chunk, plus `fillers` newer ones; all committed. */
++        async function seedOld(m: BrowserEventIndexManager, fillers = 5): Promise<void> {
++            await m.addEventToIndex(msg("$old", "zzoldword", { room_id: ROOM, origin_server_ts: 1000 }), {});
++            for (let i = 0; i < fillers; i++) {
++                await m.addEventToIndex(
++                    msg(`$n${i}`, `zzfiller ${i}`, { room_id: ROOM, origin_server_ts: 2000 + i }),
++                    {},
++                );
++            }
++            await m.commitLiveEvents();
++        }
++
++        /** What is on disk for `$old` right now, decrypted straight off a second connection. */
++        async function oldOnDisk(): Promise<any> {
++            return (await decryptAllChunkEvents(pickleKey, DEVICE)).find((r) => r.eventId === "$old");
++        }
++
++        async function expectEditedEverywhere(m: BrowserEventIndexManager): Promise<void> {
++            const fresh = await m.searchEventIndex(search("zznewword"));
++            expect(resultIds(fresh)).toEqual(["$old"]);
++            expect(fresh.results![0].result.content.body).toBe("zznewword");
++            expect(resultIds(await m.searchEventIndex(search("zzoldword")))).toEqual([]);
++        }
++
++        /** Reopen with the default bounds, as the next browser session would: only what reached disk survives. */
++        async function reopen(m: BrowserEventIndexManager): Promise<BrowserEventIndexManager> {
++            await m.closeEventIndex();
++            setEventIndexBoundsOverrideForTesting(null);
++            return open();
++        }
++
++        beforeEach(() => {
++            setChunkTargetBytesOverrideForTesting(150); // one record per chunk: $old's rewrite is a sealed-chunk rewrite
++        });
++
++        it("CONTROL: with no eviction the edit reaches disk and only the new body is found", async () => {
++            const m = await open();
++            await seedOld(m);
++            await m.addEventToIndex(editOld(), {});
++            await m.addHistoricEvents(crawl(historic("$h", 3000)), null, null);
++            await priv(m).persistChain;
++            await m.commitLiveEvents();
++
++            await expectEditedEverywhere(m);
++            expect((await oldOnDisk()).searchText).toBe("zznewword");
++        });
++
++        it("a crawler commit inside the flush window does not evict the edited record; the edit lands, then it is evicted", async () => {
++            const m = await open();
++            await seedOld(m);
++            await m.addEventToIndex(editOld(), {}); // buffered, not flushed
++            expect(priv(m).liveWriteBuffer.has("$old")).toBe(true);
++
++            setEventIndexBoundsOverrideForTesting({ hotWindowBytes: oneEvents(3) });
++            // The crawler batch commits on its own and runs the resident budget, whose oldest candidate is $old.
++            await m.addHistoricEvents(crawl(historic("$h", 3000)), null, null);
++            await priv(m).persistChain;
++            expect(priv(m).events.has("$old")).toBe(true); // deferred (before the fix: evicted here, edit dropped)
++            expect(priv(m).events.size).toBe(3); // the pass still brought the set to budget, evicting newer records
++
++            // What the 5 s timer would do, with a budget that now needs $old gone as well.
++            setEventIndexBoundsOverrideForTesting({ hotWindowBytes: oneEvents(2) });
++            await m.commitLiveEvents();
++            expect(priv(m).events.has("$old")).toBe(false); // deferral is not retention: evicted once durable
++            expect(priv(m).events.size).toBe(2);
++            expect(priv(m).pendingWriteIds.size).toBe(0);
++
++            expect((await oldOnDisk()).searchText).toBe("zznewword");
++            await expectEditedEverywhere(m); // $old is only on disk now: served by the cold tier
++        });
++
++        it("the edit is permanent: it is still there after closing and reopening", async () => {
++            const m = await open();
++            await seedOld(m);
++            await m.addEventToIndex(editOld(), {});
++            setEventIndexBoundsOverrideForTesting({ hotWindowBytes: oneEvents(3) });
++            await m.addHistoricEvents(crawl(historic("$h", 3000)), null, null);
++            await priv(m).persistChain;
++            await m.commitLiveEvents();
++
++            const next = await reopen(m);
++            expect(priv(next).events.has("$old")).toBe(true); // resident again, from its disk row
++            await expectEditedEverywhere(next);
++        });
++
++        it("MATERIALIZE: an edit of an old message pulled in from disk for it survives a crawler commit", async () => {
++            const seed = await open();
++            await seed.addEventToIndex(msg("$old", "zzoldword", { room_id: ROOM, origin_server_ts: 1000 }), {});
++            for (let i = 0; i < 9; i++) {
++                await seed.addEventToIndex(
++                    msg(`$n${i}`, `zzfiller ${i}`, { room_id: ROOM, origin_server_ts: 2000 + i }),
++                    {},
++                );
++            }
++            await seed.commitLiveEvents();
++            await seed.closeEventIndex();
++
++            setEventIndexBoundsOverrideForTesting({ hotWindowBytes: oneEvents(4) });
++            const m = await open(); // hydration stops at the budget: the oldest record stays on disk
++            expect(priv(m).events.has("$old")).toBe(false);
++
++            await m.addEventToIndex(editOld(), {}); // materializes $old (the heap minimum) and edits it in place
++            expect(priv(m).events.has("$old")).toBe(true);
++            await m.addHistoricEvents(crawl(historic("$h", 3000)), null, null);
++            await priv(m).persistChain;
++            expect(priv(m).events.has("$old")).toBe(true); // before the fix: evicted by the crawler commit
++
++            setEventIndexBoundsOverrideForTesting({ hotWindowBytes: oneEvents(3) });
++            await m.commitLiveEvents();
++            expect(priv(m).events.has("$old")).toBe(false);
++            await expectEditedEverywhere(m);
++
++            const next = await reopen(m);
++            await expectEditedEverywhere(next);
++        });
++
++        it("a record edited by a batch still queued behind another batch's commit is not evicted by it", async () => {
++            const m = await open();
++            await seedOld(m);
++            setEventIndexBoundsOverrideForTesting({ hotWindowBytes: oneEvents(3) });
++
++            // Hold the persist chain so both batches are queued, uncommitted, at the same time.
++            let release!: () => void;
++            const gate = new Promise<void>((resolve) => (release = resolve));
++            priv(m).persistChain = priv(m).persistChain.then(() => gate);
++            await m.addHistoricEvents(crawl(historic("$h1", 3000)), null, null); // batch A: its commit runs the budget
++            await m.addHistoricEvents(crawl(editOld()), null, null); // batch B: the crawler's copy of the edit
++            expect(priv(m).liveWriteBuffer.has("$old")).toBe(false); // queued, not buffered
++            expect(priv(m).pendingWriteIds.get("$old")).toBe(1);
++            release();
++            await priv(m).persistChain;
++
++            expect(priv(m).pendingWriteIds.size).toBe(0);
++            expect((await oldOnDisk()).searchText).toBe("zznewword"); // before the fix: still "zzoldword"
++            await expectEditedEverywhere(m);
++        });
++
++        it("a record the crawler already edited in a batch it is still assembling is not evicted by a commit mid-batch", async () => {
++            const seed = await open();
++            await seed.addEventToIndex(msg("$z", "zzzbody", { room_id: ROOM, origin_server_ts: 500 }), {});
++            await seedOld(seed);
++            await seed.closeEventIndex();
++
++            // Six records fit: $n4..$n0 and $old. $z, the oldest, stays on disk.
++            setEventIndexBoundsOverrideForTesting({ hotWindowBytes: oneEvents(6) });
++            const m = await open();
++            expect(priv(m).events.has("$old")).toBe(true);
++            expect(priv(m).events.has("$z")).toBe(false);
++
++            // The crawler batch edits $old, then has to read $z's chunk from disk; hold that read open.
++            let release!: () => void;
++            const gate = new Promise<void>((resolve) => (release = resolve));
++            const realDecrypt = (m as any).decryptChunkOnce.bind(m);
++            const decrypt = vi.spyOn(m as any, "decryptChunkOnce").mockImplementation(async (...args: any[]) => {
++                await gate;
++                return realDecrypt(...args);
++            });
++            const batch = m.addHistoricEvents(
++                crawl(editOld(), msg("$z", "zzzbody refreshed", { room_id: ROOM, origin_server_ts: 500 })),
++                null,
++                null,
++            );
++            await vi.waitFor(() => expect(decrypt).toHaveBeenCalled());
++            expect(priv(m).pendingWriteIds.get("$old")).toBe(1); // held from the mutation, not from the enqueue
++
++            // Meanwhile a live write commits, and its flush runs the resident budget.
++            await m.addEventToIndex(msg("$live", "zzlive", { room_id: ROOM, origin_server_ts: 3000 }), {});
++            await m.commitLiveEvents();
++            expect(priv(m).events.has("$old")).toBe(true); // before the fix: evicted here, its edit never written
++
++            release();
++            await batch;
++            await priv(m).persistChain;
++            expect(priv(m).pendingWriteIds.size).toBe(0);
++            expect((await oldOnDisk()).searchText).toBe("zznewword");
++        });
++    });
++
++    // Fifth carry, S2. A cold hit's context lines come from the decrypted chunk, a snapshot that can be behind the
++    // index. A neighbour redacted since (its disk rewrite still pending) used to appear in them with its body.
++    describe("S2: the context of a cold hit follows the index, not the chunk snapshot", () => {
++        type Priv = {
++            events: Map<string, any>;
++            manifest: Map<string, { chunkId: number }>;
++            persistChain: Promise<void>;
++            dek: CryptoKey;
++            userId: string;
++            decryptChunkOnce(userId: string, dek: CryptoKey, chunkId: number): Promise<Map<string, any>>;
++            coldContextFor(chunk: Map<string, any>, hit: any, before: number, after: number): any;
++        };
++        const priv = (m: BrowserEventIndexManager): Priv => m as unknown as Priv;
++        const oneEvents = (n: number): number => RESIDENT_BYTES_PER_EVENT_ESTIMATE * n;
++        const withContext = (term: string): any => search(term, { before_limit: 3, after_limit: 3 });
++        const contextBodies = (r: any): string[] =>
++            [...(r.results[0].context?.events_before ?? []), ...(r.results[0].context?.events_after ?? [])].map(
++                (e: any) => e.content?.body,
++            );
++
++        /** `$hit` and `$near` (adjacent in the room, one chunk), both on disk only; the newest four are resident. */
++        async function reopenedWithNeighbour(): Promise<BrowserEventIndexManager> {
++            const seed = track(new BrowserEventIndexManager());
++            await seed.initEventIndex(userId, DEVICE);
++            await seed.waitForHydration();
++            await seed.addEventToIndex(msg("$hit", "zzhitword", { room_id: ROOM, origin_server_ts: 1000 }), {});
++            await seed.addEventToIndex(msg("$near", "zzneighbourbody", { room_id: ROOM, origin_server_ts: 1001 }), {});
++            for (let i = 0; i < 6; i++) {
++                await seed.addEventToIndex(
++                    msg(`$n${i}`, `zzfiller ${i}`, { room_id: ROOM, origin_server_ts: 2000 + i }),
++                    {},
++                );
++            }
++            await seed.commitLiveEvents();
++            await seed.closeEventIndex();
++            setEventIndexBoundsOverrideForTesting({ hotWindowBytes: oneEvents(4) });
++            const m = track(new BrowserEventIndexManager());
++            await m.initEventIndex(userId, DEVICE);
++            await m.waitForHydration();
++            expect(residentIds(m).has("$hit")).toBe(false);
++            expect(residentIds(m).has("$near")).toBe(false);
++            return m;
++        }
++
++        it("a redacted neighbour whose disk delete is still pending is not shown", async () => {
++            const m = await reopenedWithNeighbour();
++            // Control: before the redaction the neighbour IS part of the hit's context.
++            expect(contextBodies(await m.searchEventIndex(withContext("zzhitword")))).toContain("zzneighbourbody");
++
++            let release!: () => void;
++            const gate = new Promise<void>((resolve) => (release = resolve));
++            priv(m).persistChain = priv(m).persistChain.then(() => gate); // the chunk rewrite cannot start
++            expect(await m.deleteEvent("$near")).toBe(true);
++
++            const hit = await m.searchEventIndex(withContext("zzhitword"));
++            expect(resultIds(hit)).toEqual(["$hit"]);
++            expect(contextBodies(hit)).not.toContain("zzneighbourbody");
++            expect(JSON.stringify(hit)).not.toContain("zzneighbourbody");
++            release();
++            await priv(m).persistChain;
++        });
++
++        it("a neighbour whose delete committed after the chunk was read is not shown either", async () => {
++            const m = await reopenedWithNeighbour();
++            const hitChunk = priv(m).manifest.get("$hit")!.chunkId;
++            // The snapshot a scan would be holding: decrypted before the redaction.
++            const snapshot = await priv(m).decryptChunkOnce(priv(m).userId, priv(m).dek, hitChunk);
++            const bodiesAround = (): string[] => {
++                const context = priv(m).coldContextFor(snapshot, snapshot.get("$hit"), 3, 3);
++                return [...context.events_before, ...context.events_after].map((e: any) => e.content?.body);
++            };
++            expect(bodiesAround()).toContain("zzneighbourbody"); // control: the snapshot does hold the neighbour
++
++            expect(await m.deleteEvent("$near")).toBe(true);
++            await priv(m).persistChain; // committed: pendingDiskDeletes is empty again, the manifest has lost it
++            expect(bodiesAround()).not.toContain("zzneighbourbody");
++            expect(bodiesAround()).toContain("zzfiller 0"); // the rest of the context is intact
++        });
++
++        it("an edited neighbour is shown as it is now, not as the chunk remembers it", async () => {
++            const m = await reopenedWithNeighbour();
++            // $near is pulled in by its edit and rewritten in memory only; the chunk still says "zzneighbourbody".
++            await m.addEventToIndex({ ...edit("$edit", "$near", "zzneighbournew"), room_id: ROOM }, {});
++
++            const hit = await m.searchEventIndex(withContext("zzhitword"));
++            expect(resultIds(hit)).toEqual(["$hit"]);
++            expect(contextBodies(hit)).toContain("zzneighbournew");
++            expect(contextBodies(hit)).not.toContain("zzneighbourbody");
++        });
++    });
++
++    // Fifth carry, N2. A redaction naming an EDIT's event id is resolved through the edited message's record
++    // (editTargets); when that record is not resident it was parked in memory and dropped at the end of hydration,
++    // while the cold tier went on serving the redacted edit's body, and a reload brought it back everywhere. The
++    // parked redaction is now durable (one encrypted meta row), honoured by the cold scan, which also removes the
++    // record from disk the first time it meets it, and bounded.
++    describe("N2: a parked redaction of an edit stays in force until its record is met", () => {
++        type Priv = {
++            events: Map<string, unknown>;
++            manifest: Map<string, unknown>;
++            persistChain: Promise<void>;
++            pendingRedactions: Set<string>;
++            readChunkEntries: (...args: unknown[]) => Promise<unknown>;
++            decryptChunkOnce: (...args: unknown[]) => Promise<unknown>;
++            pendingRedactionsWriteQueued: boolean;
++        };
++        const priv = (m: BrowserEventIndexManager): Priv => m as unknown as Priv;
++        const oneEvents = (n: number): number => RESIDENT_BYTES_PER_EVENT_ESTIMATE * n;
++        const EDIT = "$redacted-edit-id";
++        const parkedKey = (): string => `${userId}|pendingRedactions`;
++
++        /** `$old` (oldest) edited by `EDIT`, then six newer records; all committed, then closed. */
++        async function seedEdited(): Promise<void> {
++            const seed = track(new BrowserEventIndexManager());
++            await seed.initEventIndex(userId, DEVICE);
++            await seed.waitForHydration();
++            await seed.addEventToIndex(msg("$old", "zzoriginalbody", { room_id: ROOM, origin_server_ts: 1000 }), {});
++            await seed.addEventToIndex({ ...edit(EDIT, "$old", "zzeditedsecret", 1500), room_id: ROOM }, {});
++            for (let i = 0; i < 6; i++) {
++                await seed.addEventToIndex(
++                    msg(`$n${i}`, `zzfiller ${i}`, { room_id: ROOM, origin_server_ts: 2000 + i }),
++                    {},
++                );
++            }
++            await seed.commitLiveEvents();
++            await seed.closeEventIndex();
++        }
++
++        /** Reopen under a four-record resident budget: `$old` stays on disk. */
++        async function reopenSmall(): Promise<BrowserEventIndexManager> {
++            setEventIndexBoundsOverrideForTesting({ hotWindowBytes: oneEvents(4) });
++            const m = track(new BrowserEventIndexManager());
++            await m.initEventIndex(userId, DEVICE);
++            await m.waitForHydration();
++            return m;
++        }
++
++        const diskHas = async (id: string): Promise<boolean> =>
++            (await decryptAllChunkEvents(pickleKey, DEVICE)).some((r) => r.eventId === id);
++
++        /**
++         * What a crash at this very moment would leave on disk: whether `id` is still in a chunk, and the ids the
++         * parked-redactions row holds (null when there is no row).
++         */
++        async function diskState(id: string): Promise<{ recordOnDisk: boolean; parked: string[] | null }> {
++            const recordOnDisk = await diskHas(id);
++            return withRawDb(async (db) => {
++                const meta = (await idbPromise(db.transaction("meta", "readonly").objectStore("meta").get(userId))) as {
++                    salt: string;
++                };
++                const dek = await deriveDek(
++                    pickleKey,
++                    decodeBase64(meta.salt) as Uint8Array<ArrayBuffer>,
++                    userId,
++                    DEVICE,
++                );
++                const row = (await idbPromise(
++                    db.transaction("meta", "readonly").objectStore("meta").get(parkedKey()),
++                )) as { blob: { iv: string; ct: string } } | undefined;
++                return { recordOnDisk, parked: row ? await decryptJson<string[]>(dek, row.blob, parkedKey()) : null };
++            });
++        }
++
++        it("the cold tier stops serving the redacted edit's body, and the record is removed from disk when first met", async () => {
++            await seedEdited();
++            const m = await reopenSmall();
++            expect(priv(m).events.has("$old")).toBe(false);
++            // Control: the edited body is findable through the cold tier before the redaction.
++            expect(resultIds(await m.searchEventIndex(search("zzeditedsecret")))).toEqual(["$old"]);
++
++            expect(await m.deleteEvent(EDIT)).toBe(false); // parked: $old is not resident, nothing resolves the id
++            expect(priv(m).pendingRedactions.has(EDIT)).toBe(true);
++
++            await priv(m).persistChain; // the parking itself is written; what follows is the application of it
++            const writes: string[] = [];
++            const realTransaction = IDBDatabase.prototype.transaction;
++            vi.spyOn(IDBDatabase.prototype, "transaction").mockImplementation(function (
++                this: IDBDatabase,
++                names,
++                mode,
++                ...rest
++            ) {
++                if (mode === "readwrite") writes.push(typeof names === "string" ? names : Array.from(names).join("+"));
++                return realTransaction.call(this, names, mode, ...rest);
++            });
++
++            const after = await m.searchEventIndex(search("zzeditedsecret"));
++            expect(resultIds(after)).toEqual([]);
++            expect(after.count).toBe(0);
++            expect(resultIds(await m.searchEventIndex(search("zzoriginalbody")))).toEqual([]); // dropped, not reverted
++
++            await priv(m).persistChain;
++            // The record leaves its chunk BEFORE the parked id leaves the row: a crash in between must not leave the
++            // record on disk with nothing left to hide it.
++            expect(writes).toEqual(["chunks+meta", "meta"]);
++            expect(priv(m).pendingRedactions.size).toBe(0); // applied to the record: no longer depends on the set
++            expect(priv(m).manifest.has("$old")).toBe(false);
++            expect(await diskHas("$old")).toBe(false);
++            expect(await dumpRawKeys("meta")).not.toContain(parkedKey()); // an empty set leaves no row
++            // The unrelated records are untouched.
++            expect(resultIds(await m.searchEventIndex(search("zzfiller", { limit: 20 }))).length).toBe(6);
++        });
++
++        it("a parking write still queued when the record is met cannot drop the id before the record has left its chunk", async () => {
++            await seedEdited();
++            const m = await reopenSmall();
++            expect(priv(m).events.has("$old")).toBe(false);
++
++            // Hold the persist chain, so the parking write is queued but has not started when the cold scan meets
++            // the record. The order the writes then run in is the whole property: parking write, chunk rewrite,
++            // row write.
++            let release!: () => void;
++            const gate = new Promise<void>((resolve) => (release = resolve));
++            priv(m).persistChain = priv(m).persistChain.then(() => gate);
++            expect(await m.deleteEvent(EDIT)).toBe(false); // parked; its row write is queued behind the gate
++            expect(resultIds(await m.searchEventIndex(search("zzeditedsecret")))).toEqual([]); // applied: rewrite queued
++
++            // The disk as a crash would find it once the parking write has committed and the chunk rewrite has not
++            // started: captured when the rewrite first reads its chunk.
++            let atCrashPoint: { recordOnDisk: boolean; parked: string[] | null } | undefined;
++            const realRead = priv(m).readChunkEntries.bind(m);
++            const readSpy = vi.spyOn(priv(m), "readChunkEntries").mockImplementation(async (...args: unknown[]) => {
++                atCrashPoint ??= await diskState("$old");
++                return realRead(...args);
++            });
++            release();
++            await priv(m).persistChain;
++            readSpy.mockRestore();
++
++            // Record still on disk, so the id that hides it must still be on disk too.
++            expect(atCrashPoint).toEqual({ recordOnDisk: true, parked: [EDIT] });
++            // Once the rewrite has committed, the id and its row go.
++            expect(await diskState("$old")).toEqual({ recordOnDisk: false, parked: null });
++        });
++
++        it("a failed chunk rewrite keeps the id parked: the record is still hidden after a reload", async () => {
++            await seedEdited();
++            const m = await reopenSmall();
++            expect(await m.deleteEvent(EDIT)).toBe(false);
++            await priv(m).persistChain; // the parking write
++
++            // Queue the apply behind a gate, so the failure can be installed after the cold scan has read its chunk.
++            let release!: () => void;
++            const gate = new Promise<void>((resolve) => (release = resolve));
++            priv(m).persistChain = priv(m).persistChain.then(() => gate);
++            expect(resultIds(await m.searchEventIndex(search("zzeditedsecret")))).toEqual([]);
++            const readSpy = vi
++                .spyOn(priv(m), "readChunkEntries")
++                .mockRejectedValue(new Error("simulated rewrite failure"));
++            release();
++            await priv(m).persistChain;
++            readSpy.mockRestore();
++
++            // The rewrite did not happen, so the record is still on disk and the id that hides it must be too.
++            expect(priv(m).pendingRedactions.has(EDIT)).toBe(true);
++            expect(await diskState("$old")).toEqual({ recordOnDisk: true, parked: [EDIT] });
++            await m.closeEventIndex();
++
++            const next = await reopenSmall();
++            expect(priv(next).pendingRedactions.has(EDIT)).toBe(true);
++            expect(resultIds(await next.searchEventIndex(search("zzeditedsecret")))).toEqual([]);
++            // This time the rewrite goes through, and only then does the id leave the row.
++            await priv(next).persistChain;
++            expect(await diskState("$old")).toEqual({ recordOnDisk: false, parked: null });
++        });
++
++        /**
++         * The redaction names the message itself, but its row cannot be pulled in (the chunk read fails once), so
++         * nothing resolves the id and it is parked under the record's OWN id rather than an edit's.
++         */
++        async function parkRedactionOfOriginal(m: BrowserEventIndexManager): Promise<void> {
++            const decryptSpy = vi.spyOn(priv(m), "decryptChunkOnce").mockRejectedValueOnce(new Error("handle closed"));
++            expect(await m.deleteEvent("$old")).toBe(false);
++            decryptSpy.mockRestore();
++            expect(priv(m).pendingRedactions.has("$old")).toBe(true);
++        }
++
++        it("a redaction parked under the record's own id is applied by the cold scan", async () => {
++            await seedEdited();
++            const m = await reopenSmall();
++            expect(priv(m).events.has("$old")).toBe(false);
++            await parkRedactionOfOriginal(m);
++
++            expect(resultIds(await m.searchEventIndex(search("zzeditedsecret")))).toEqual([]);
++            await priv(m).persistChain;
++            expect(priv(m).pendingRedactions.size).toBe(0); // applied to the record: no longer depends on the set
++            expect(await diskState("$old")).toEqual({ recordOnDisk: false, parked: null });
++            expect(resultIds(await m.searchEventIndex(search("zzfiller", { limit: 20 }))).length).toBe(6);
++        });
++
++        it("a redaction parked under the record's own id is applied by a hydration that reads its row later", async () => {
++            await seedEdited();
++            const m = await reopenSmall();
++            await parkRedactionOfOriginal(m);
++            await priv(m).persistChain;
++            expect(await diskState("$old")).toEqual({ recordOnDisk: true, parked: ["$old"] });
++            await m.closeEventIndex();
++
++            setEventIndexBoundsOverrideForTesting(null); // everything fits: hydration reads every row
++            const next = track(new BrowserEventIndexManager());
++            await next.initEventIndex(userId, DEVICE);
++            await next.waitForHydration();
++            expect(priv(next).events.has("$old")).toBe(false); // dropped on arrival, never resident
++            expect(resultIds(await next.searchEventIndex(search("zzeditedsecret")))).toEqual([]);
++            await priv(next).persistChain;
++            expect(await diskState("$old")).toEqual({ recordOnDisk: false, parked: null });
++        });
++
++        it("a re-initialisation without a close does not lose the new session's parked row write", async () => {
++            await seedEdited();
++            const m = await reopenSmall();
++            const hold = (): { gate: Promise<void>; release: () => void } => {
++                let release!: () => void;
++                return { gate: new Promise<void>((resolve) => (release = resolve)), release };
++            };
++            const oldSession = hold();
++            const newSession = hold();
++            try {
++                // The old session parks an id; its row write is queued behind a gate, so it has not started.
++                priv(m).persistChain = priv(m).persistChain.then(() => oldSession.gate);
++                const oldChain = priv(m).persistChain;
++                await m.deleteEvent("$junk-a");
++                expect(priv(m).pendingRedactionsWriteQueued).toBe(true);
++
++                // The settings panel re-initialises without closing first. The new session parks the redaction we
++                // care about, behind a gate of its own.
++                await m.initEventIndex(userId, DEVICE);
++                await m.waitForHydration();
++                priv(m).persistChain = priv(m).persistChain.then(() => newSession.gate);
++                expect(await m.deleteEvent(EDIT)).toBe(false);
++                expect(priv(m).pendingRedactions.has(EDIT)).toBe(true);
++                expect(priv(m).pendingRedactionsWriteQueued).toBe(true); // this session's write, queued
++
++                // The old session's write finally runs, finds itself stale and writes nothing. It must not take the
++                // new session's "write queued" mark with it.
++                oldSession.release();
++                await oldChain;
++                expect(priv(m).pendingRedactionsWriteQueued).toBe(true);
++
++                newSession.release();
++                await priv(m).persistChain;
++                expect(priv(m).pendingRedactionsWriteQueued).toBe(false);
++                expect(await diskState("$old")).toEqual({ recordOnDisk: true, parked: [EDIT] });
++            } finally {
++                oldSession.release(); // a failed assertion must not leave the chain gated for the teardown
++                newSession.release();
++            }
++        });
++
++        it("a parked-redaction row that cannot be read is left alone for the rest of the session", async () => {
++            await seedEdited();
++            const first = await reopenSmall();
++            await first.deleteEvent(EDIT);
++            await first.closeEventIndex();
++            expect(await diskState("$old")).toEqual({ recordOnDisk: true, parked: [EDIT] });
++
++            // This session cannot READ the row (a read error, not a failure to decrypt, which wipes the index).
++            const realGet = IDBObjectStore.prototype.get;
++            const getSpy = vi.spyOn(IDBObjectStore.prototype, "get").mockImplementation(function (
++                this: IDBObjectStore,
++                query: IDBValidKey | IDBKeyRange,
++            ) {
++                if (query === parkedKey()) throw new Error("simulated read failure");
++                return realGet.call(this, query);
++            });
++            let m: BrowserEventIndexManager;
++            try {
++                m = await reopenSmall();
++            } finally {
++                getSpy.mockRestore();
++            }
++            expect(priv(m).pendingRedactions.size).toBe(0); // nothing was read
++
++            // A redaction parked now must not overwrite the ids this session never saw.
++            await m.deleteEvent("$another-redacted-id");
++            expect(priv(m).pendingRedactions.has("$another-redacted-id")).toBe(true);
++            await priv(m).persistChain;
++            expect(await diskState("$old")).toEqual({ recordOnDisk: true, parked: [EDIT] });
++            await m.closeEventIndex();
++
++            // The next session can read the row again: the redaction is still in force.
++            const next = await reopenSmall();
++            expect(priv(next).pendingRedactions.has(EDIT)).toBe(true);
++            expect(resultIds(await next.searchEventIndex(search("zzeditedsecret")))).toEqual([]);
++        });
++
++        it("survives a reload before anything read the record: still hidden, and removed once met", async () => {
++            await seedEdited();
++            const m = await reopenSmall();
++            await m.deleteEvent(EDIT);
++            await priv(m).persistChain;
++            expect(await dumpRawKeys("meta")).toContain(parkedKey());
++            await m.closeEventIndex();
++
++            // Nothing has read $old's record since: the redaction lives only in the persisted row.
++            const next = await reopenSmall();
++            expect(priv(next).pendingRedactions.has(EDIT)).toBe(true);
++            expect(priv(next).events.has("$old")).toBe(false);
++            expect(resultIds(await next.searchEventIndex(search("zzeditedsecret")))).toEqual([]);
++            await priv(next).persistChain;
++            expect(await diskHas("$old")).toBe(false);
++            expect(await dumpRawKeys("meta")).not.toContain(parkedKey());
++        });
++
++        it("survives a reload into full hydration: the record is dropped on arrival, and ids nothing holds are forgotten", async () => {
++            await seedEdited();
++            const m = await reopenSmall();
++            await m.deleteEvent(EDIT);
++            await m.deleteEvent("$never-indexed-reaction");
++            await priv(m).persistChain;
++            await m.closeEventIndex();
++
++            setEventIndexBoundsOverrideForTesting(null); // everything fits: hydration reads every row
++            const next = track(new BrowserEventIndexManager());
++            await next.initEventIndex(userId, DEVICE);
++            await next.waitForHydration();
++            expect(priv(next).events.has("$old")).toBe(false);
++            expect(resultIds(await next.searchEventIndex(search("zzeditedsecret")))).toEqual([]);
++            // A complete walk that never had to evict anything has met every row: what is still parked names nothing.
++            expect(priv(next).pendingRedactions.size).toBe(0);
++            await priv(next).persistChain;
++            expect(await diskHas("$old")).toBe(false);
++            expect(await dumpRawKeys("meta")).not.toContain(parkedKey());
++        });
++
++        it("a redaction parked while hydration runs is still parked when a budget-limited hydration ends", async () => {
++            await seedEdited();
++            const restore = slowDownDecrypt(15);
++            try {
++                setEventIndexBoundsOverrideForTesting({ hotWindowBytes: oneEvents(4) });
++                const m = track(new BrowserEventIndexManager());
++                await m.initEventIndex(userId, DEVICE);
++                expect(await m.deleteEvent(EDIT)).toBe(false); // parked mid-hydration
++                await m.waitForHydration();
++                // Hydration stopped at the budget, so it has NOT met every row: the redaction must outlive it.
++                expect(priv(m).events.has("$old")).toBe(false);
++                expect(priv(m).pendingRedactions.has(EDIT)).toBe(true);
++                expect(resultIds(await m.searchEventIndex(search("zzeditedsecret")))).toEqual([]);
++            } finally {
++                restore();
++            }
++        });
++
++        it("the persisted row holds no cleartext", async () => {
++            await seedEdited();
++            const m = await reopenSmall();
++            await m.deleteEvent(EDIT);
++            await m.deleteEvent("$some-other-redacted-event");
++            await priv(m).persistChain;
++            expect(await dumpRawKeys("meta")).toContain(parkedKey());
++            const whole = await dumpWholeDb();
++            expect(whole).not.toContain(EDIT);
++            expect(whole).not.toContain("$some-other-redacted-event");
++            expect(whole).not.toContain("zzeditedsecret");
++            expect(whole).not.toContain("zzoriginalbody");
++            expect(whole).not.toContain(ROOM);
++        });
++
++        it("an unreadable parked-redaction row is treated like any unreadable row: this user's index is wiped", async () => {
++            await seedEdited();
++            const m = await reopenSmall();
++            await m.deleteEvent(EDIT);
++            await priv(m).persistChain;
++            await m.closeEventIndex();
++            await withRawDb(async (db) => {
++                const tx = db.transaction("meta", "readwrite");
++                tx.objectStore("meta").put({ userId: parkedKey(), blob: { iv: "AAAAAAAAAAAAAAAA", ct: "AAAA" } });
++                await new Promise<void>((resolve, reject) => {
++                    tx.oncomplete = (): void => resolve();
++                    tx.onerror = (): void => reject(tx.error);
++                });
++            });
++
++            const next = await reopenSmall();
++            expect((await next.getStats()).eventCount).toBe(0);
++            expect(resultIds(await next.searchEventIndex(search("zzfiller")))).toEqual([]);
++            expect(await dumpRawKeys("meta")).toEqual([userId]);
++            expect(await diskHas("$old")).toBe(false);
++        });
++
++        it("deleting the index leaves no parked-redaction row behind", async () => {
++            await seedEdited();
++            const m = await reopenSmall();
++            await m.deleteEvent(EDIT);
++            await priv(m).persistChain;
++            expect(await dumpRawKeys("meta")).toContain(parkedKey());
++            await m.deleteEventIndex();
++            expect(await dumpRawKeys("meta")).not.toContain(parkedKey());
++        });
++
++        it("is bounded: past the cap the oldest parked redaction is forgotten, in memory and on disk", async () => {
++            await seedEdited();
++            const m = await reopenSmall();
++            for (let i = 0; i < PENDING_REDACTIONS_MAX + 10; i++) await m.deleteEvent(`$junk${i}`);
++            expect(priv(m).pendingRedactions.size).toBe(PENDING_REDACTIONS_MAX);
++            expect(priv(m).pendingRedactions.has("$junk0")).toBe(false);
++            expect(priv(m).pendingRedactions.has("$junk9")).toBe(false);
++            expect(priv(m).pendingRedactions.has("$junk10")).toBe(true);
++            expect(priv(m).pendingRedactions.has(`$junk${PENDING_REDACTIONS_MAX + 9}`)).toBe(true);
++            // Ids nothing holds change nothing for anyone else: the unredacted edit is still found.
++            expect(resultIds(await m.searchEventIndex(search("zzeditedsecret")))).toEqual(["$old"]);
++
++            await priv(m).persistChain;
++            await m.closeEventIndex();
++            const next = await reopenSmall();
++            expect(priv(next).pendingRedactions.size).toBe(PENDING_REDACTIONS_MAX);
++            expect(priv(next).pendingRedactions.has("$junk0")).toBe(false);
++        });
++
++        it("a neighbour carrying a parked redaction is not shown in a hit's context", async () => {
++            const seed = track(new BrowserEventIndexManager());
++            await seed.initEventIndex(userId, DEVICE);
++            await seed.waitForHydration();
++            // $near is OLDER than $hit, so the cold walk (newest first) meets $hit before $near.
++            await seed.addEventToIndex(msg("$near", "zzneighbourbody", { room_id: ROOM, origin_server_ts: 999 }), {});
++            await seed.addEventToIndex({ ...edit(EDIT, "$near", "zzneighbouredit", 1001), room_id: ROOM }, {});
++            await seed.addEventToIndex(msg("$hit", "zzhitword", { room_id: ROOM, origin_server_ts: 1000 }), {});
++            for (let i = 0; i < 6; i++) {
++                await seed.addEventToIndex(
++                    msg(`$n${i}`, `zzfiller ${i}`, { room_id: ROOM, origin_server_ts: 2000 + i }),
++                    {},
++                );
++            }
++            await seed.commitLiveEvents();
++            await seed.closeEventIndex();
++
++            const m = await reopenSmall();
++            const context = (r: any): string[] =>
++                [...(r.results[0].context?.events_before ?? []), ...(r.results[0].context?.events_after ?? [])].map(
++                    (e: any) => e.content?.body,
++                );
++            const ask = (): Promise<any> =>
++                m.searchEventIndex(search("zzhitword", { before_limit: 3, after_limit: 3 }));
++            expect(context(await ask())).toContain("zzneighbouredit"); // control: shown before the redaction
++
++            await m.deleteEvent(EDIT);
++            const hit = await ask();
++            expect(resultIds(hit)).toEqual(["$hit"]);
++            expect(context(hit)).not.toContain("zzneighbouredit");
++            expect(JSON.stringify(hit)).not.toContain("zzneighbouredit");
++        });
++    });
++
++    // Fifth carry, S4: the two review gaps that the UX3 tests above only half cover.
++    describe("S4: the UX3 cold-scan fix, paged one hit at a time and scoped to a room", () => {
++        it("a resident record edited into a match between pages is served exactly once, with its new body", async () => {
++            const m = track(new BrowserEventIndexManager());
++            await m.initEventIndex(userId, DEVICE);
++            await m.waitForHydration();
++            await m.addEventToIndex(msg("$x1", "ewsearchbeta one", { room_id: ROOM, origin_server_ts: 1000 }), {});
++            await m.addEventToIndex(msg("$x2", "ewsearchbeta two", { room_id: ROOM, origin_server_ts: 1001 }), {});
++            await m.addEventToIndex(msg("$y", "unrelated text", { room_id: ROOM, origin_server_ts: 1002 }), {});
++            await m.commitLiveEvents();
++
++            const first = await m.searchEventIndex(search("ewsearchbeta", { limit: 1 }));
++            expect(resultIds(first)).toEqual(["$x2"]);
++            await m.addEventToIndex({ ...edit("$edit", "$y", "ewsearchbeta three"), room_id: ROOM }, {});
++            const second = await m.searchEventIndex(search("ewsearchbeta", { limit: 1, next_batch: first.next_batch }));
++            expect(resultIds(second)).toEqual(["$x1"]);
++            const third = await m.searchEventIndex(search("ewsearchbeta", { limit: 1, next_batch: second.next_batch }));
++            expect(resultIds(third)).toEqual(["$y"]);
++            expect(third.results![0].result.content.body).toBe("ewsearchbeta three");
++            // The page that filled its limit leaves the walk where it stood; the next one finds the session empty.
++            const fourth = await m.searchEventIndex(search("ewsearchbeta", { limit: 1, next_batch: third.next_batch }));
++            expect(resultIds(fourth)).toEqual([]);
++            expect(fourth.next_batch).toBeUndefined();
++            // Exactly once over the whole session, and nothing left to serve it a second time.
++            expect([...resultIds(first), ...resultIds(second), ...resultIds(third), ...resultIds(fourth)]).toEqual([
++                "$x2",
++                "$x1",
++                "$y",
++            ]);
++            expect(fourth.count).toBe(3);
++            const stale = await m.searchEventIndex(search("ewsearchbeta", { limit: 1, next_batch: first.next_batch }));
++            expect(resultIds(stale)).toEqual([]); // the exhausted session's token resolves to an empty page
++        });
++
++        it("room scope, term path: the stale chunk copy is not served to its own room while a same-room record matches", async () => {
++            const m = track(new BrowserEventIndexManager());
++            await m.initEventIndex(userId, DEVICE);
++            await m.waitForHydration();
++            await m.addEventToIndex(msg("$orig", "ewsearch-123-alpha", { room_id: ROOM, origin_server_ts: 1000 }), {});
++            await m.addEventToIndex(msg("$other", "alpha other", { room_id: ROOM, origin_server_ts: 500 }), {});
++            await m.addEventToIndex(msg("$twin", "alpha twin", { room_id: ROOM2, origin_server_ts: 900 }), {});
++            await m.commitLiveEvents();
++            await m.addEventToIndex({ ...edit("$edit", "$orig", "ewsearch-123-beta"), room_id: ROOM }, {});
++            // No commitLiveEvents(): the chunk still holds $orig's pre-edit body.
++
++            // `alpha` still has resident matches in both rooms, so every query below takes the TERM path (not the
++            // substring fallback) and reaches the cold step with a non-empty hot snapshot.
++            const own = await m.searchEventIndex(search("alpha", { room_id: ROOM }));
++            expect(resultIds(own)).toEqual(["$other"]);
++            expect(own.count).toBe(1);
++            const twin = await m.searchEventIndex(search("alpha", { room_id: ROOM2 }));
++            expect(resultIds(twin)).toEqual(["$twin"]);
++            expect(twin.count).toBe(1);
++            expect(resultIds(await m.searchEventIndex(search("beta", { room_id: ROOM })))).toEqual(["$orig"]);
++            expect(resultIds(await m.searchEventIndex(search("beta", { room_id: ROOM2 })))).toEqual([]);
++        });
++    });
 +});
 diff --git a/apps/web/src/vector/platform/BrowserEventIndexManager.ts b/apps/web/src/vector/platform/BrowserEventIndexManager.ts
 new file mode 100644
-index 0000000..db41737
+index 0000000..5601770
 --- /dev/null
 +++ b/apps/web/src/vector/platform/BrowserEventIndexManager.ts
-@@ -0,0 +1,5512 @@
+@@ -0,0 +1,5894 @@
 +/*
 +Copyright 2026 inblock.io
 +
@@ -7718,21 +8643,26 @@ index 0000000..db41737
 + *   confirmed offline by hashing it. What it does disclose is **equality and count**.
 + * - `meta`: `userId`, the HKDF `salt`, `userVersion` and the small scalar bookkeeping fields on {@link MetaRecord}
 + *   (chunk/page counts, the currently-open chunk id) -- all counts or ids, nothing content-shaped. Manifest pages
-+ *   ({@link ManifestPageRecord}) and the persisted {@link BrowserEventIndexManager.oldestIndexedTs} row live in this
-+ *   same store, keyed by a string that embeds `userId` and a page/purpose tag, never a room or event id. The salt is
-+ *   not secret by construction.
++ *   ({@link ManifestPageRecord}), the persisted {@link BrowserEventIndexManager.oldestIndexedTs} row and, only while
++ *   some redaction is still waiting for its record, the parked-redactions row ({@link pendingRedactionsKey}) live in
++ *   this same store, keyed by a string that embeds `userId` and a page/purpose tag, never a room or event id. The
++ *   salt is not secret by construction. The parked-redactions row's ids are inside its ciphertext; what it adds to
++ *   the disclosure is that such a row exists and, from its length, roughly how many (at most {@link
++ *   PENDING_REDACTIONS_MAX}) -- the same equality-and-count residue the checkpoints have. On a large account the row
++ *   is always there and near that cap, for the reason given at {@link PENDING_REDACTIONS_MAX}.
 + * - Shape: the number of chunk records approximates (events / events-per-chunk), not the event count directly, and
 + *   each ciphertext length the size of the events it packs -- coarser than schema v2's one-length-per-event shape.
 + *
-+ * **The complete cleartext key set, across every store, is: `userId`, `chunkId`, the manifest page keys and the HKDF
-+ * salt** -- `eventId` has left it entirely, on every database this class opens. A v2 (or v1) database is never
-+ * converted in place: {@link openDb}'s `onupgradeneeded` resets it, dropping the legacy `events` store outright
-+ * (schema v2's cleartext `[userId, eventId]` primary key and its `byUser` index go with it) rather than reading it
-+ * to repack its rows into chunks -- see {@link openDb}'s own docstring, "Migration v2 -> v3: reset, not convert"
-+ * (`research/SYNTHESIS.md` §3.2, decision #5). There is therefore no window, of any length, in which this class
-+ * holds an open connection to a database with a live `events` store: the reset happens inside the same
-+ * `versionchange` transaction that bumps {@link EVENTINDEX_DB_VERSION}, before any application code -- this class's
-+ * own included -- ever gets to read from it. See the exact-key-set test in the test file, which pins this.
++ * **The complete cleartext key set, across every store, is: `userId`, `chunkId`, the purpose-tagged `meta` keys listed
++ * above (manifest pages, `oldestIndexedTs`, parked redactions) and the HKDF salt** -- `eventId` has left it entirely,
++ * on every database this class opens. A v2 (or v1) database is never converted in place: {@link openDb}'s
++ * `onupgradeneeded` resets it, dropping the legacy `events` store outright (schema v2's cleartext `[userId, eventId]`
++ * primary key and its `byUser` index go with it) rather than reading it to repack its rows into chunks -- see {@link
++ * openDb}'s own docstring, "Migration v2 -> v3: reset, not convert" (`research/SYNTHESIS.md` §3.2, decision #5). There
++ * is therefore no window, of any length, in which this class holds an open connection to a database with a live
++ * `events` store: the reset happens inside the same `versionchange` transaction that bumps {@link
++ * EVENTINDEX_DB_VERSION}, before any application code -- this class's own included -- ever gets to read from it. See
++ * the exact-key-set test in the test file, which pins this.
 + *
 + * Every record is additionally bound by AAD to its own key, so an attacker with write access cannot re-file a record
 + * under another user or chunk id and have it decrypt -- though that is no defence against deleting records or rolling
@@ -7756,6 +8686,18 @@ index 0000000..db41737
 + * timeline is, unaffected by any of this), and because the crawler -- resuming from its last surviving checkpoint --
 + * will walk back over exactly the gap a crash left and re-index it with no user-visible difference from having
 + * written it the first time.
++ *
++ * **That repair does not cover redactions.** A redaction arrives once, live, and the crawler walks only history it has
++ * not covered yet, so it never brings one back. A redaction that was applied in memory but whose write had not
++ * committed when the crash hit is lost for good: after the reload the message it removed is searchable again, with its
++ * text as it was last written, until something redacts it again. Two writes can be in that state. The chunk rewrite
++ * that removes a redacted record ({@link BrowserEventIndexManager.enqueueDeleteRecord}) is queued on the persist chain
++ * like every other write. And a redaction of an edit whose original is not resident, so that there is nothing to remove
++ * yet, is parked ({@link BrowserEventIndexManager.pendingRedactions}), and the write of the parked-redactions row is
++ * queued the same way. Neither waits for the 5s timer; each waits behind whatever the chain already holds, so the
++ * window is however long that queue is, not a fixed few seconds. Once a parked redaction's row write has committed it
++ * survives a crash: the record is removed from its chunk first and the id leaves the row only after that rewrite has
++ * committed, so a crash between the two still finds the record hidden, and a rewrite that fails leaves the id parked.
 + */
 +
 +import { logger } from "matrix-js-sdk/src/logger";
@@ -8762,6 +9704,38 @@ index 0000000..db41737
 +}
 +
 +/**
++ * The primary key -- and AAD -- of the one encrypted row holding {@link
++ * BrowserEventIndexManager.pendingRedactions}: ids a redaction named that no record could be found for yet. Same
++ * `{userId, blob}` shape and same "purpose tag, never a room or event id" key discipline as {@link
++ * oldestIndexedTsKey}; the row exists only while the set is non-empty. The ids themselves are inside the ciphertext.
++ */
++function pendingRedactionsKey(userId: string): string {
++    return `${userId}|pendingRedactions`;
++}
++
++/**
++ * The most redactions {@link BrowserEventIndexManager.pendingRedactions} keeps waiting for their record (memory and
++ * the encrypted row alike). Most of what lands there is not an edit at all -- a redacted reaction, an event this index
++ * never held, a redaction delivered twice -- and nothing can tell those apart from a real edit's id without
++ * decrypting the chunk that would hold it, so the set is bounded instead: past this many, the OLDEST is forgotten
++ * (named degradation: a redacted edit whose original is still unread on disk, and which was parked this long ago and
++ * this many redactions back, is no longer hidden from the cold tier). About 4096 x 50 B = 200 KiB on disk.
++ *
++ * **Known limitation: on a large account the set lives at this cap.** A redaction is parked only while hydration runs
++ * or once the resident budget has been exceeded and rows were left on disk ({@link
++ * BrowserEventIndexManager.deleteEvent}), which for an index larger than the hot window is always. And the crawler
++ * calls `deleteEvent` for every historic redaction it meets (redacted reactions and events this index never held
++ * included) before it adds the events of the same batch, so the first crawl fills the set with ids that name nothing
++ * the index holds. Past the cap the oldest id goes first, so a parked redaction of an edit lasts about this many later
++ * redactions that name nothing the index can resolve; after that the redacted edit's text is searchable again. The
++ * remedy, planned for the next increment, is a background sweep: when the set passes half the cap, walk the chunks
++ * once, apply the ids that name a record and drop the rest (one complete walk proves that an id names nothing, the way
++ * a complete hydration does).
++ * @knipignore - exported for tests.
++ */
++export const PENDING_REDACTIONS_MAX = 4096;
++
++/**
 + * One candidate for eviction/deletion by age: an id (an event id for {@link
 + * BrowserEventIndexManager.residentHeap}, or `String(chunkId)` for {@link
 + * BrowserEventIndexManager.diskChunkHeap}) and the `originServerTs` it was pushed onto a heap with.
@@ -9140,8 +10114,9 @@ index 0000000..db41737
 +     * eviction pops first. The result was effectively quadratic in event count, and a 200k-event
 +     * ingest did not finish inside a 15-minute harness timeout. Granting candidacy only at the
 +     * write-commit site removes the "not yet durable" case from {@link enforceResidentBudget}
-+     * entirely -- every entry popped from this heap either evicts or is stale, never deferred for
-+     * durability -- at the cost of eviction lagging insertion by up to one flush's worth (a live
++     * entirely -- every entry popped from this heap either evicts or is stale, never deferred because its
++     * FIRST write is not durable yet (a record whose later REWRITE is pending is deferred, see {@link
++     * enforceResidentBudget}) -- at the cost of eviction lagging insertion by up to one flush's worth (a live
 +     * buffer: {@link LIVE_WRITE_BUFFER_MAX} events or {@link LIVE_WRITE_FLUSH_INTERVAL_MS}; a crawler
 +     * batch: ~100 events), never unboundedly.
 +     */
@@ -9431,6 +10406,21 @@ index 0000000..db41737
 +     */
 +    private readonly liveWriteBuffer = new Set<string>();
 +    /**
++     * Record id -> how many writes that name it have been promised to disk but have not committed yet and are no
++     * longer (or not yet) in {@link liveWriteBuffer}: a batch queued on {@link persistChain} ({@link
++     * enqueueBatchedWrite}) whose {@link flushLiveWrites} has not finished, or a crawler batch still being assembled
++     * by {@link addHistoricEvents}. Together with {@link liveWriteBuffer} this is "the record in memory is ahead of
++     * its disk copy", which {@link enforceResidentBudget} must not evict: eviction deletes the in-memory record, and
++     * {@link flushLiveWrites} skips an id it cannot find in {@link events}, so evicting here silently turned an edit
++     * into a write that never happens and left the pre-edit body findable from disk for good. See {@link
++     * hasPendingWrite}, {@link holdPendingWrites}.
++     *
++     * Never cleared by {@link clearIndexMaps}: every hold is paired with exactly one release (a `finally` around the
++     * queued operation), so the counts stay exact across a reset, and clearing it would let an old session's release
++     * decrement a new session's hold for the same id.
++     */
++    private readonly pendingWriteIds = new Map<string, number>();
++    /**
 +     * The pending {@link LIVE_WRITE_FLUSH_INTERVAL_MS} timer that will call {@link flushLiveWriteBufferNow}, or null
 +     * when {@link liveWriteBuffer} is empty or a flush has already been triggered by size. Armed once, by the first
 +     * write into an empty buffer, and not rearmed by later writes before it fires -- see {@link schedulePersistEvent}
@@ -9495,9 +10485,32 @@ index 0000000..db41737
 +     * all to look up -- only the original's row carries it, in that row's own `editIds` -- and {@link
 +     * editTargets} for that original cannot exist until the row that would populate it has been
 +     * decrypted. Parked here by {@link deleteEvent}, and drained by {@link materializeRow} as each
-+     * row's own `editIds` is checked against this set while it streams in from disk.
++     * row's own `editIds` is checked against this set while it streams in from disk. A redaction of
++     * the message itself is parked too when its row could not be pulled in (the chunk read failed),
++     * and is matched against the row's own id.
++     *
++     * **Durable, bounded, and checked by every reader of disk rows.** Hydration is bounded by the resident budget, so
++     * "hydration ended" does not mean "every row was visited"; a redaction parked here used to be dropped at that
++     * point, and in any case lived in memory only, so the redacted edit's body came back from the cold tier (and,
++     * after a reload, from everywhere). Now the set is mirrored to one encrypted `meta` row ({@link
++     * pendingRedactionsKey}, {@link schedulePendingRedactionsPersist}), reloaded by {@link loadManifest}, and
++     * applied by whichever path decrypts the record first: {@link materializeRow} (hydration, an on-demand pull) or
++     * {@link coldScanSessionStep}, which drops the record from disk too ({@link applyParkedRedaction}) and never
++     * serves it, nor shows it as context ({@link coldContextFor}). It is emptied only when that is certain to be
++     * safe: when a hydration run that never hit the resident budget has visited every row ({@link hydrate}); or by
++     * the {@link PENDING_REDACTIONS_MAX} cap, which forgets the oldest (on a large account the set sits at that cap;
++     * see there for what it costs and the planned remedy).
 +     */
 +    private readonly pendingRedactions = new Set<string>();
++    /** True while a {@link schedulePendingRedactionsPersist} write is queued and has not started; see there. */
++    private pendingRedactionsWriteQueued = false;
++    /**
++     * True when {@link loadPendingRedactions} could not READ the persisted row this session (a read error, not a
++     * failure to decrypt). The set in memory then knows nothing of what the row holds, so {@link
++     * writePendingRedactions} leaves the row alone for the rest of the session instead of replacing it with a set
++     * that is missing those ids; the next session reads it again.
++     */
++    private pendingRedactionsRowUnreadable = false;
 +
 +    /**
 +     * ids removed from the resident set ({@link removeFromIndex}) by a genuine deletion -- {@link
@@ -9797,8 +10810,9 @@ index 0000000..db41737
 +     * materializeIfPending}, which pulls it in if there is one) so there is something here to remove rather than
 +     * treating "not decrypted yet" as "does not exist". And one that resolves to neither -- which, in either of
 +     * those states, can mean "this is an edit's id, and its original is a disk row not hydrated yet, so {@link
-+     * editTargets} cannot know about it" -- is parked in {@link pendingRedactions} for {@link materializeRow} to
-+     * drain as rows stream in, rather than being dropped as a no-op.
++     * editTargets} cannot know about it" -- is parked in {@link pendingRedactions} for {@link materializeRow} (or the
++     * cold scan) to apply as soon as it meets the record, rather than being dropped as a no-op. Parked redactions are
++     * persisted, so they survive a reload; see {@link pendingRedactions}.
 +     *
 +     * `!this.hydrating` alone used to be reason enough to skip {@link materializeIfPending} outright (as an
 +     * optimisation -- that method's own guard makes the skip correct either way): once hydration is bounded, that
@@ -9819,7 +10833,7 @@ index 0000000..db41737
 +            targetId = this.events.has(eventId) ? eventId : this.editTargets.get(eventId);
 +        }
 +        if (targetId === undefined) {
-+            if (this.hydrating || this.residentBudgetExceeded) this.pendingRedactions.add(eventId);
++            if (this.hydrating || this.residentBudgetExceeded) this.parkRedaction(eventId);
 +            return false;
 +        }
 +        const existed = this.events.has(targetId);
@@ -10027,7 +11041,9 @@ index 0000000..db41737
 +     * Never needs to flush {@link liveWriteBuffer} first: every structure this reads -- {@link events}, {@link
 +     * inverted}, {@link roomOrder} -- is updated synchronously by {@link upsertEvent} the moment a live event is
 +     * indexed, before {@link schedulePersistEvent} ever buffers anything for disk. A live event is therefore
-+     * searchable immediately, seconds before its encrypted copy exists anywhere.
++     * searchable immediately, seconds before its encrypted copy exists anywhere. The cold tier does read disk, which
++     * lags such a buffered write, so it prefers the resident record for any id that has one ({@link
++     * coldScanSessionStep}); that, not a flush, is what keeps an edit's pre-edit body out of the results.
 +     *
 +     * @param searchArgs - `search_term` is the raw user input; `room_id` scopes the search (and, once a session
 +     *     reaches the cold tier, restricts the chunk walk itself to chunks holding at least one of that room's
@@ -10364,8 +11380,18 @@ index 0000000..db41737
 +        beforeLimit: number,
 +        afterLimit: number,
 +    ): ColdContext {
-+        const roomList = Array.from(chunkEntries.values())
-+            .filter((e) => e.roomId === hit.roomId)
++        // `chunkEntries` is a decrypted snapshot that can be behind the index: a neighbour the user has redacted since
++        // (its disk rewrite pending, or already committed after this chunk was read) must not appear, and one edited
++        // since is shown as it is now, from its resident record, not as the chunk remembers it. A neighbour that is
++        // merely not resident any more is still shown from the chunk.
++        const roomList = Array.from(chunkEntries.values(), (e) => this.events.get(e.eventId) ?? e)
++            .filter(
++                (e) =>
++                    e.roomId === hit.roomId &&
++                    !this.pendingDiskDeletes.has(e.eventId) &&
++                    this.manifest.has(e.eventId) &&
++                    !this.carriesParkedRedaction(e),
++            )
 +            .sort((a, b) => a.originServerTs - b.originServerTs);
 +        const idx = roomList.findIndex((e) => e.eventId === hit.eventId);
 +        const beforeEvents = idx >= 0 ? roomList.slice(Math.max(0, idx - beforeLimit), idx) : [];
@@ -10386,8 +11412,12 @@ index 0000000..db41737
 +     * with any concurrent {@link hydrate}/{@link materializeIfPending} call decrypting the same chunk, so a scan
 +     * racing hydration's own admission neither double-decrypts nor double-returns an event hydration just made
 +     * resident -- evaluating `useSubstring ? folded-substring : token-AND-with-prefix` ({@link
-+     * coldRecordMatchesTokens}) against every member not already resident, already tombstoned, or already returned
-+     * by this session, newest-member-first within the chunk to match {@link hydrate}'s own admission order.
++     * coldRecordMatchesTokens}) against every member not in the session's hot snapshot, already tombstoned, or already
++     * returned by this session, newest-member-first within the chunk to match {@link hydrate}'s own admission order.
++     * A member that is resident is evaluated (and served) from its resident record, never from the decrypted chunk,
++     * whose copy can lag a buffered rewrite such as an edit's. A member whose folded-in edit a parked redaction names
++     * ({@link pendingRedactions}) is redacted: it is never served, and is removed from disk on the spot ({@link
++     * applyParkedRedaction}).
 +     *
 +     * **Resuming needs no cursor at all, only `session.returned` (re-scoped from the previous `(originServerTs,
 +     * eventId)` boundary shape, which review-pr-e.md's second round -- E2-F1, E2-F4 -- found still unstable).**
@@ -10494,7 +11524,24 @@ index 0000000..db41737
 +                ) {
 +                    continue;
 +                }
-+                const stored = entries.get(id)!;
++                // The resident record, when there is one, is the authoritative copy: every write reaches it
++                // synchronously, while the decrypted `entries` copy lags any rewrite still waiting in {@link
++                // liveWriteBuffer}. Matching that disk copy instead served an edited message under its pre-edit
++                // body (siwx-oidc e2e UX3): the hot tier had correctly rejected the resident record, and
++                // session.hotIds names only hot *matches*, so the stale copy got a second, wrong evaluation here.
++                // A member that is not resident (the cold case proper, or one that became resident after the
++                // snapshot, E3-F1) is evaluated exactly as before, from whichever copy is current.
++                const onDisk = entries.get(id)!;
++                const resident = this.events.get(id);
++                const stored = resident ?? onDisk;
++                // A redaction named an edit folded into this record before the record could be found (see
++                // pendingRedactions): the record is redacted. Checked for every member of every chunk this walk
++                // decrypts, not only for matches, so the first read of the chunk also removes the record from disk
++                // and the redaction stops depending on the parked set.
++                if (this.carriesParkedRedaction(onDisk) || (resident && this.carriesParkedRedaction(resident))) {
++                    this.applyParkedRedaction(userId, onDisk, resident);
++                    continue;
++                }
 +                if (session.roomId && stored.roomId !== session.roomId) continue;
 +                const isMatch = session.useSubstring
 +                    ? flattenCopy(foldText(stored.searchText)).includes(foldedQuery)
@@ -10568,51 +11615,65 @@ index 0000000..db41737
 +        if (this.closed || !this.featureEnabled()) return false;
 +        let allAlready = events.length > 0;
 +        const dirty = new Set<string>();
-+        // Three cases per event, which is why this is not just a call to upsertEvent:
-+        //
-+        // 1. An unedited record for this id and a non-edit incoming event: the ordinary "seen it already" case. Text
-+        //    and file flag are recomputed rather than trusted, because the crawler can hand back a better copy than the
-+        //    live timeline gave us. Only a real difference re-indexes or clears the "nothing new here" flag.
-+        // 2. A record already edited, and this is the original arriving late: the edit's content must survive, only the
-+        //    envelope is taken.
-+        // 3. Anything else -- a new event, or an edit for a record we hold -- is a plain upsert.
-+        for (const { event, profile } of events) {
-+            const id = this.targetId(event);
-+            await this.materializeIfPending(id);
-+            if (this.closed) return false;
-+            const existing = this.events.get(id);
-+            const isReplace = replacedEventId(event) !== null;
-+            if (existing && !isReplace && existing.edited === false) {
-+                const incoming = effectiveEventForIndex(event);
-+                const nextText = extractSearchText(incoming);
-+                const nextFile = eventHasFile(incoming);
-+                if (nextText !== existing.searchText || nextFile !== existing.hasFile) {
-+                    this.unindexTokens(existing.eventId, existing.searchText);
-+                    this.plainTextByteEstimate += nextText.length - existing.searchText.length;
-+                    existing.searchText = nextText;
-+                    existing.hasFile = nextFile;
-+                    existing.event = incoming;
-+                    this.indexTokens(existing.eventId, nextText);
-+                    dirty.add(id);
-+                    allAlready = false;
-+                }
-+                continue;
-+            }
-+            if (existing && !isReplace && existing.edited) {
-+                // Original arriving after an edit: keep the new body, take the envelope. That rewrites the record and
-+                // schedules a persist, so it must clear the flag -- a batch made only of these would otherwise report
-+                // "all already added" and end the back-fill.
-+                this.upsertEvent(event, profile);
-+                dirty.add(id);
-+                allAlready = false;
-+                continue;
-+            }
-+            if (!existing) allAlready = false;
-+            else if (isReplace) allAlready = false;
-+            this.upsertEvent(event, profile);
++        // A record changed in place stays un-evictable until its write has committed (see pendingWriteIds), and that
++        // has to start at the mutation, not at enqueueBatchedWrite: this loop awaits (materializeIfPending reads a
++        // chunk from disk) between one event and the next, and an earlier batch committing in that window runs the
++        // eviction pass. enqueueBatchedWrite takes over with a hold of its own before these are given back.
++        const markDirty = (id: string): void => {
++            if (dirty.has(id)) return;
 +            dirty.add(id);
++            this.holdPendingWrite(id);
++        };
++        try {
++            // Three cases per event, which is why this is not just a call to upsertEvent:
++            //
++            // 1. An unedited record for this id and a non-edit incoming event: the ordinary "seen it already" case.
++            //    Text and file flag are recomputed rather than trusted, because the crawler can hand back a better
++            //    copy than the live timeline gave us. Only a real difference re-indexes or clears the "nothing new
++            //    here" flag.
++            // 2. A record already edited, and this is the original arriving late: the edit's content must survive,
++            //    only the envelope is taken.
++            // 3. Anything else -- a new event, or an edit for a record we hold -- is a plain upsert.
++            for (const { event, profile } of events) {
++                const id = this.targetId(event);
++                await this.materializeIfPending(id);
++                if (this.closed) return false;
++                const existing = this.events.get(id);
++                const isReplace = replacedEventId(event) !== null;
++                if (existing && !isReplace && existing.edited === false) {
++                    const incoming = effectiveEventForIndex(event);
++                    const nextText = extractSearchText(incoming);
++                    const nextFile = eventHasFile(incoming);
++                    if (nextText !== existing.searchText || nextFile !== existing.hasFile) {
++                        this.unindexTokens(existing.eventId, existing.searchText);
++                        this.plainTextByteEstimate += nextText.length - existing.searchText.length;
++                        existing.searchText = nextText;
++                        existing.hasFile = nextFile;
++                        existing.event = incoming;
++                        this.indexTokens(existing.eventId, nextText);
++                        markDirty(id);
++                        allAlready = false;
++                    }
++                    continue;
++                }
++                if (existing && !isReplace && existing.edited) {
++                    // Original arriving after an edit: keep the new body, take the envelope. That rewrites the record
++                    // and schedules a persist, so it must clear the flag -- a batch made only of these would
++                    // otherwise report "all already added" and end the back-fill.
++                    this.upsertEvent(event, profile);
++                    markDirty(id);
++                    allAlready = false;
++                    continue;
++                }
++                if (!existing) allAlready = false;
++                else if (isReplace) allAlready = false;
++                this.upsertEvent(event, profile);
++                markDirty(id);
++            }
++            this.enqueueBatchedWrite(Array.from(dirty));
++        } finally {
++            for (const id of dirty) this.releasePendingWrite(id);
 +        }
-+        this.enqueueBatchedWrite(Array.from(dirty));
 +        if (oldCheckpoint) await this.removeCrawlerCheckpoint(oldCheckpoint);
 +        if (checkpoint) await this.addCrawlerCheckpoint(checkpoint);
 +        return allAlready;
@@ -11151,6 +12212,11 @@ index 0000000..db41737
 +     * any that are no longer there -- but dropping it here also keeps a redacted id from counting towards {@link
 +     * LIVE_WRITE_BUFFER_MAX} for no reason.
 +     *
++     * That is the contract for a **deletion** (a redaction, or a disk-budget drop that removes the row too). It is
++     * exactly why this must never be the eviction path for a record whose write is still pending: {@link
++     * enforceResidentBudget} checks {@link hasPendingWrite} first, because evicting through here would discard an
++     * edit instead of persisting it.
++     *
 +     * @param eventId - A record id, not an edit's id; resolve that through {@link editTargets} first. Unknown ids are a
 +     *     no-op, and nothing here touches the database.
 +     */
@@ -11498,12 +12564,19 @@ index 0000000..db41737
 +     * **A no-op only if `targetId` never reached disk at all** (no manifest entry -- still
 +     * buffered): every id that has one always names a real chunk (see {@link ManifestEntry}'s own
 +     * docstring), so there is always exactly one chunk to rewrite.
++     *
++     * @param parkedIds - Parked redactions ({@link pendingRedactions}) that this removal answers. They are forgotten,
++     *     and the parked row rewritten, by this same operation, but only once the rewrite's transaction has completed
++     *     ({@link forgetParkedRedactions}): a rewrite that fails leaves the record on disk, and the ids that hide it
++     *     must outlive that.
 +     */
-+    private enqueueDeleteRecord(userId: string, targetId: string): void {
++    private enqueueDeleteRecord(userId: string, targetId: string, parkedIds: readonly string[] = []): void {
 +        // Synchronous, same moment the record leaves the resident set -- see pendingDiskDeletes's
 +        // own docstring for the window this closes.
 +        this.pendingDiskDeletes.add(targetId);
++        const epoch = this.hydrationEpoch;
 +        this.enqueuePersist(async () => {
++            let committed = false;
 +            try {
 +                const dek = this.dek;
 +                const entry = this.manifest.get(targetId);
@@ -11551,6 +12624,7 @@ index 0000000..db41737
 +                    });
 +                }
 +                await txDone(tx);
++                committed = true;
 +
 +                this.ciphertextBytes = newTotal;
 +                if (newInfo) {
@@ -11570,7 +12644,45 @@ index 0000000..db41737
 +                // reflects the deletion, or nothing here ever depended on it doing so.
 +                this.pendingDiskDeletes.delete(targetId);
 +            }
++            if (committed) await this.forgetParkedRedactions(userId, epoch, parkedIds);
 +        });
++    }
++
++    /**
++     * True while `eventId`'s in-memory record may be ahead of its disk copy: it is waiting in {@link
++     * liveWriteBuffer}, or in a queued/in-flight batch or one still being assembled ({@link pendingWriteIds}).
++     * {@link enforceResidentBudget} defers such a record instead of evicting it.
++     */
++    private hasPendingWrite(eventId: string): boolean {
++        return this.liveWriteBuffer.has(eventId) || this.pendingWriteIds.has(eventId);
++    }
++
++    /** Add one hold on `eventId` in {@link pendingWriteIds}; undone by exactly one {@link releasePendingWrite}. */
++    private holdPendingWrite(eventId: string): void {
++        this.pendingWriteIds.set(eventId, (this.pendingWriteIds.get(eventId) ?? 0) + 1);
++    }
++
++    /** Undo one {@link holdPendingWrite}; the entry goes away with its last hold. */
++    private releasePendingWrite(eventId: string): void {
++        const n = this.pendingWriteIds.get(eventId);
++        if (n === undefined) return;
++        if (n <= 1) this.pendingWriteIds.delete(eventId);
++        else this.pendingWriteIds.set(eventId, n - 1);
++    }
++
++    /**
++     * Hold every id in `ids` (see {@link hasPendingWrite}) and return the function that gives the holds back. The
++     * returned function is idempotent, so the commit path can call it as early as the write is durable (before the
++     * eviction pass that follows it) and a `finally` can call it again on every other way out.
++     */
++    private holdPendingWrites(ids: readonly string[]): () => void {
++        for (const id of ids) this.holdPendingWrite(id);
++        let released = false;
++        return () => {
++            if (released) return;
++            released = true;
++            for (const id of ids) this.releasePendingWrite(id);
++        };
 +    }
 +
 +    /**
@@ -11882,7 +12994,17 @@ index 0000000..db41737
 +        if (!this.persistEnabled || !this.dek || !this.db || !this.userId) return;
 +        const userId = this.userId;
 +        const dek = this.dek;
-+        this.enqueuePersist(() => this.flushLiveWrites(userId, dek, ids));
++        // The records in `ids` stay un-evictable from here until their write has committed (or failed): see
++        // pendingWriteIds. Taken synchronously, before the op is queued, so there is no gap between the caller's
++        // own hold (liveWriteBuffer, or addHistoricEvents' assembly hold) ending and this one starting.
++        const release = this.holdPendingWrites(ids);
++        this.enqueuePersist(async () => {
++            try {
++                await this.flushLiveWrites(userId, dek, ids, release);
++            } finally {
++                release();
++            }
++        });
 +    }
 +
 +    /**
@@ -11914,7 +13036,12 @@ index 0000000..db41737
 +     * @param userId - Captured by {@link enqueueBatchedWrite} at schedule time, not read from `this.userId`.
 +     * @param dek - Captured by {@link enqueueBatchedWrite} at schedule time, not read from `this.dek`.
 +     */
-+    private async flushLiveWrites(userId: string, dek: CryptoKey, ids: string[]): Promise<void> {
++    private async flushLiveWrites(
++        userId: string,
++        dek: CryptoKey,
++        ids: string[],
++        releasePendingWrites: () => void,
++    ): Promise<void> {
 +        // this.closed is re-checked here, not only at schedule time, to close one specific race: a flush queued by
 +        // the live-write timer can still be sitting on the persist chain when closeEventIndex/deleteEventIndex begin
 +        // tearing the session down. Both set `closed` before doing anything else, so a flush that reaches this point
@@ -12021,6 +13148,11 @@ index 0000000..db41737
 +            this.chunkInfo.set(u.chunkId, { bytes: u.bytes, minTs: u.minTs, maxTs: u.maxTs });
 +            heapPushTs(this.diskChunkHeap, { ts: u.maxTs, id: String(u.chunkId) }); // D4: order by maxTs, not minTs.
 +        }
++        // This batch is durable: its records stop being protected from eviction *before* the pass below, so the
++        // oldest of them (an old record whose edit this batch just wrote) can leave memory in this very commit
++        // rather than lingering until the next one. A record that was edited again meanwhile is still protected
++        // by liveWriteBuffer / a later batch's own hold.
++        releasePendingWrites();
 +        for (const { id, stored } of live) {
 +            // Only now, once the write has actually committed, does this id become an eviction
 +            // candidate -- see residentHeap's own docstring for why granting candidacy any earlier
@@ -12240,9 +13372,12 @@ index 0000000..db41737
 +        // on a brand-new index -- not an error; see loadOldestIndexedTs's own docstring.
 +        try {
 +            this.oldestIndexedTs = await this.loadOldestIndexedTs(userId, dek);
++            // Redactions that were still waiting for their record when the last session ended; see
++            // pendingRedactions. Loaded before hydrate() reads its first chunk (it awaits this method).
++            await this.loadPendingRedactions(userId, dek, epoch);
 +        } catch {
 +            log.warn(
-+                "EventIndex: the persisted oldestIndexedTs row could not be decrypted; wiping leftover for this user",
++                "EventIndex: a persisted oldestIndexedTs or parked-redaction row could not be decrypted; wiping leftover",
 +            );
 +            this.clearIndexMaps();
 +            await this.deleteUserRecords(userId);
@@ -12362,6 +13497,9 @@ index 0000000..db41737
 +        const bounds = getEventIndexBounds();
 +
 +        this.hydrating = true;
++        // True only when the walk below ran to its end: every chunk read and every row of it admitted or
++        // skipped for a stated reason, never cut short by the resident budget, a teardown or an error.
++        let walkComplete = false;
 +
 +        try {
 +            await this.manifestReadyPromise;
@@ -12553,6 +13691,7 @@ index 0000000..db41737
 +                if (this.persistEnabled) await this.enforceDiskBudget(userId);
 +                if (this.closed || epoch !== this.hydrationEpoch) return;
 +            }
++            walkComplete = true;
 +        } catch (e) {
 +            // Anything not already handled inside the loop above -- most realistically db.transaction()/idbReq()/
 +            // txDone() throwing because another tab's onversionchange closed this connection out from underneath an
@@ -12567,13 +13706,16 @@ index 0000000..db41737
 +        } finally {
 +            if (epoch === this.hydrationEpoch) {
 +                this.hydrating = false;
-+                // Any redaction still parked here named an edit whose original this run never reached (the row
-+                // does not exist, or decrypting it failed independently of this run's own error path above).
-+                // clearIndexMaps() would silently absorb these on the next reset regardless, but logging first
-+                // makes a redaction that this run could not act on visible rather than incidental.
-+                if (this.pendingRedactions.size > 0) {
++                // Any redaction still parked here named an edit whose record this run never met -- but only a run
++                // that read EVERY row, and never had to evict one to stay in budget, can conclude from that that
++                // there is no such record (an id nothing holds: a redacted reaction, a redaction delivered twice).
++                // A run cut short at the resident budget has not: the record may be one of the rows it left on
++                // disk, so the redaction stays parked, and durable, for whatever reads that row next (the cold
++                // scan, an on-demand pull, the next session's hydration). See pendingRedactions.
++                if (this.pendingRedactions.size > 0 && walkComplete && !this.residentBudgetExceeded) {
 +                    log.debug(`EventIndex: ${this.pendingRedactions.size} redaction(s) never found their original`);
 +                    this.pendingRedactions.clear();
++                    this.schedulePendingRedactionsPersist();
 +                }
 +            }
 +        }
@@ -12583,6 +13725,146 @@ index 0000000..db41737
 +                `EventIndex: hydration finished in ${(now() - started).toFixed(1)}ms, ${hydratedCount} events, ` +
 +                    `longest slice ${longestSliceMs.toFixed(1)}ms, order manifest-ts-desc`,
 +            );
++        }
++    }
++
++    /**
++     * Park a redaction that named an id nothing could resolve yet; see {@link pendingRedactions}. Forgets the oldest
++     * parked id(s) beyond {@link PENDING_REDACTIONS_MAX}.
++     */
++    private parkRedaction(eventId: string): void {
++        if (this.pendingRedactions.has(eventId)) return;
++        this.pendingRedactions.add(eventId);
++        let dropped = 0;
++        while (this.pendingRedactions.size > PENDING_REDACTIONS_MAX) {
++            const oldest = this.pendingRedactions.values().next().value;
++            if (oldest === undefined) break;
++            this.pendingRedactions.delete(oldest);
++            dropped++;
++        }
++        if (dropped > 0) log.debug(`EventIndex: ${dropped} oldest parked redaction(s) forgotten at the cap`);
++        this.schedulePendingRedactionsPersist();
++    }
++
++    /** Forget parked redactions that have just been applied to their record. */
++    private unparkRedactions(ids: readonly string[]): void {
++        let changed = false;
++        for (const id of ids) changed = this.pendingRedactions.delete(id) || changed;
++        if (changed) this.schedulePendingRedactionsPersist();
++    }
++
++    /**
++     * Whether a redaction is parked against `stored` itself (its row could not be pulled in when the redaction
++     * arrived, see {@link deleteEvent}) or against an edit that was folded into it; such a record is redacted.
++     */
++    private carriesParkedRedaction(stored: StoredEvent): boolean {
++        if (this.pendingRedactions.size === 0) return false;
++        return (
++            this.pendingRedactions.has(stored.eventId) ||
++            (stored.editIds ?? []).some((id) => this.pendingRedactions.has(id))
++        );
++    }
++
++    /**
++     * Apply a parked redaction to the record it turned out to name: the record leaves memory and is queued for removal
++     * from its chunk on disk -- the same whole-record removal {@link deleteEvent} does, the pre-edit body having been
++     * overwritten in place -- so the redaction no longer depends on the parked set. The parked ids are forgotten when
++     * that rewrite has committed, not before ({@link enqueueDeleteRecord}). Shared by the paths that meet the record
++     * on disk: {@link coldScanSessionStep}, and {@link materializeRow} for one that is about to become resident.
++     */
++    private applyParkedRedaction(userId: string, onDisk: StoredEvent, resident: StoredEvent | undefined): void {
++        if (resident) this.removeFromIndex(onDisk.eventId);
++        const parkedIds = [onDisk.eventId, ...(onDisk.editIds ?? []), ...(resident?.editIds ?? [])];
++        if (this.persistEnabled && this.db) this.enqueueDeleteRecord(userId, onDisk.eventId, parkedIds);
++        else this.unparkRedactions(parkedIds); // nothing on disk to rewrite
++    }
++
++    /**
++     * Mirror {@link pendingRedactions} to its encrypted `meta` row, coalesced: any number of changes before the queued
++     * write starts cost one write, which reads the set as it is THEN (an empty set deletes the row, so an index with
++     * nothing parked has no such row at all). Queued on {@link persistChain} like every write, so it commits in order
++     * with the chunk rewrites a parked redaction produces. The epoch check keeps a write left over from a previous
++     * session from encrypting the next session's set under the previous one's key.
++     */
++    private schedulePendingRedactionsPersist(): void {
++        if (this.pendingRedactionsWriteQueued) return;
++        if (!this.persistEnabled || !this.dek || !this.db || !this.userId) return;
++        this.pendingRedactionsWriteQueued = true;
++        const userId = this.userId;
++        const dek = this.dek;
++        const epoch = this.hydrationEpoch;
++        this.enqueuePersist(async () => {
++            // A write left over from a previous session writes nothing and leaves the flag alone: it now belongs to
++            // the session that reset it ({@link resetMemory}), whose own write may be queued.
++            if (this.closed || epoch !== this.hydrationEpoch || !this.db) return;
++            this.pendingRedactionsWriteQueued = false;
++            await this.writePendingRedactions(userId, dek);
++        });
++    }
++
++    /**
++     * Write {@link pendingRedactions} as it is now to its row, or delete the row when it is empty. Does nothing when
++     * the row could not be read this session ({@link pendingRedactionsRowUnreadable}).
++     */
++    private async writePendingRedactions(userId: string, dek: CryptoKey): Promise<void> {
++        if (!this.db || this.pendingRedactionsRowUnreadable) return;
++        const key = pendingRedactionsKey(userId);
++        const ids = Array.from(this.pendingRedactions);
++        // Encrypted before the transaction opens, like every other write in this file.
++        const blob = ids.length > 0 ? await encryptJson(dek, ids, key) : null;
++        const tx = this.db.transaction("meta", "readwrite");
++        if (blob) tx.objectStore("meta").put({ userId: key, blob } satisfies ManifestPageRecord);
++        else tx.objectStore("meta").delete(key);
++        await txDone(tx);
++    }
++
++    /**
++     * Forget parked redactions once the chunk rewrite that removes their record has committed, and rewrite the row
++     * without them. Runs inside {@link enqueueDeleteRecord}'s own operation, after its transaction has completed and
++     * not otherwise: forgetting them any earlier would let a crash between the two writes leave the record on disk
++     * with nothing left to hide it, and a rewrite that fails never gets here, so its ids stay parked, in memory and
++     * in the row, for the next session to apply. The epoch check keeps an operation left over from a previous
++     * session from touching the next session's set.
++     */
++    private async forgetParkedRedactions(userId: string, epoch: number, ids: readonly string[]): Promise<void> {
++        const dek = this.dek;
++        if (ids.length === 0 || !dek || this.closed || epoch !== this.hydrationEpoch) return;
++        let changed = false;
++        for (const id of ids) changed = this.pendingRedactions.delete(id) || changed;
++        if (changed) await this.writePendingRedactions(userId, dek);
++    }
++
++    /**
++     * Read and decrypt the persisted {@link pendingRedactions} row, if any, into the set (a union: a redaction can be
++     * parked before this runs). An absent row is the normal case. A row that fails to **decrypt** throws, and {@link
++     * loadManifest} answers it like any other unreadable row: wipe this user's index. A row that cannot be **read**
++     * is not treated as absent: it is left alone for the rest of the session ({@link pendingRedactionsRowUnreadable}).
++     */
++    private async loadPendingRedactions(userId: string, dek: CryptoKey, epoch: number): Promise<void> {
++        if (!this.db) return;
++        const key = pendingRedactionsKey(userId);
++        let row: ManifestPageRecord | undefined;
++        try {
++            const tx = this.db.transaction("meta", "readonly");
++            row = (await idbReq(tx.objectStore("meta").get(key))) as ManifestPageRecord | undefined;
++            await txDone(tx);
++        } catch (e) {
++            log.warn("EventIndex: could not read the parked-redaction row; leaving it alone for this session", e);
++            if (!this.closed && epoch === this.hydrationEpoch) this.pendingRedactionsRowUnreadable = true;
++            return;
++        }
++        if (!row) return;
++        const ids = await decryptJson<string[]>(dek, row.blob, key);
++        if (this.closed || epoch !== this.hydrationEpoch) return;
++        // Parked before this ran (a redaction can land while initEventIndex is still deriving keys): the row on disk
++        // does not know about it yet.
++        const parkedBefore = this.pendingRedactions.size > 0;
++        for (const id of ids) this.pendingRedactions.add(id);
++        if (parkedBefore) this.schedulePendingRedactionsPersist();
++        while (this.pendingRedactions.size > PENDING_REDACTIONS_MAX) {
++            const oldest = this.pendingRedactions.values().next().value;
++            if (oldest === undefined) break;
++            this.pendingRedactions.delete(oldest);
 +        }
 +    }
 +
@@ -12611,10 +13893,8 @@ index 0000000..db41737
 +    private materializeRow(userId: string, stored: StoredEvent): void {
 +        if (this.events.has(stored.eventId)) return;
 +
-+        const redactedByPendingEdit = (stored.editIds ?? []).some((id) => this.pendingRedactions.has(id));
-+        if (redactedByPendingEdit) {
-+            for (const id of stored.editIds ?? []) this.pendingRedactions.delete(id);
-+            this.enqueueDeleteRecord(userId, stored.eventId);
++        if (this.carriesParkedRedaction(stored)) {
++            this.applyParkedRedaction(userId, stored, undefined);
 +            return;
 +        }
 +
@@ -12757,13 +14037,31 @@ index 0000000..db41737
 +     * the record's disk row, which is the whole point (rows beyond the resident budget stay
 +     * findable later, via the streamed cold scan increment E adds).
 +     *
-+     * Every candidate this pops from {@link residentHeap} is durable by construction -- see that
++     * Every candidate this pops from {@link residentHeap} was durable when it was pushed -- see that
 +     * field's own docstring for why entries are pushed only from {@link flushLiveWrites} and {@link
-+     * materializeRow}, never at the moment a record becomes resident -- so, unlike an earlier
-+     * version of this method, there is no "not yet durable, defer it" case to handle here at all;
-+     * the only thing skipped (and re-pushed, so a later call can reconsider it) is a **stale**
-+     * entry, whose id is no longer resident or has been re-timed since (see {@link heapPushTs}'s
-+     * docstring), and `protectedId` (see below).
++     * materializeRow}, never at the moment a record becomes resident -- but "was durable" is not "is
++     * durable": a record that was committed long ago and has since been **edited or refreshed** in place
++     * is ahead of its disk copy until its new write commits. Such a record is deferred, never evicted
++     * ({@link hasPendingWrite}: in {@link liveWriteBuffer}, in a queued or in-flight batch, or in a crawler
++     * batch still being assembled), and is pushed back so the pass after its write commits evicts it. The
++     * other things skipped (and re-pushed, so a later call can reconsider them) are a **stale** entry,
++     * whose id is no longer resident or has been re-timed since (see {@link heapPushTs}'s docstring), and
++     * `protectedId` (see below). Only a deletion may drop a pending write: a redaction ({@link deleteEvent}), a parked
++     * redaction applied to its resident record ({@link applyParkedRedaction}), or a disk-budget drop ({@link
++     * deleteRecordsForDiskBudget}). Each goes through {@link removeFromIndex}, which also drops the record from {@link
++     * liveWriteBuffer}.
++     *
++     * **Deferral cannot make the resident set unbounded.** The deferred set is exactly the records with an
++     * uncommitted write, which is the same population that is already outside the budget by design: a
++     * record becomes an eviction candidate only when its first write commits, so everything still waiting
++     * on {@link persistChain} (a whole crawler backlog, for a fast ingest) is resident and un-evictable
++     * regardless of this check. Deferral adds only previously-committed records that are re-written while
++     * resident, each held by one uncommitted write: at most {@link LIVE_WRITE_BUFFER_MAX} in the buffer plus
++     * whatever the chain has not yet committed, and every commit releases its own batch and then runs this
++     * method again. The holds cannot leak either: they are released in a `finally` around the queued write
++     * (success, failure, closed session), so the worst case is a stalled chain, in which nothing new is
++     * evicted by this method anyway. A write that *fails* is not retried (see {@link enqueuePersist}); its
++     * record becomes evictable again once the hold is released.
 +     *
 +     * @param protectedId - An id to never evict during *this* call, however old, because the caller
 +     *     just on-demand-materialized it ({@link materializeIfPending}) and is about to act on it
@@ -12788,7 +14086,11 @@ index 0000000..db41737
 +            const top = heapPopMinTs(this.residentHeap)!;
 +            const stored = this.events.get(top.id);
 +            if (!stored || stored.originServerTs !== top.ts) continue; // Stale: gone, or re-timed.
-+            if (top.id === protectedId) {
++            // protectedId: the caller is about to act on this record. hasPendingWrite: the record in memory is ahead
++            // of its disk copy (an edit, a refreshed body), and evicting it would drop the only copy of that change:
++            // flushLiveWrites skips an id it can no longer find in `events`. Deferred, not evicted, and pushed back
++            // below, so the pass that follows the write's own commit sees it again and evicts it then.
++            if (top.id === protectedId || this.hasPendingWrite(top.id)) {
 +                deferred.push(top);
 +                continue;
 +            }
@@ -12994,6 +14296,7 @@ index 0000000..db41737
 +        );
 +        for (const key of manifestKeys) metaStore.delete(key);
 +        metaStore.delete(oldestIndexedTsKey(userId)); // review-pr-c.md C2-F4's own encrypted row
++        metaStore.delete(pendingRedactionsKey(userId)); // the parked redactions, see pendingRedactions
 +        await txDone(metaTx);
 +    }
 +
@@ -13104,6 +14407,7 @@ index 0000000..db41737
 +        this.openChunkPlainBytes = 0;
 +        this.nextChunkId = 0;
 +        this.pendingRedactions.clear();
++        this.pendingRedactionsRowUnreadable = false; // every row of this user is wiped or discarded with the set
 +        this.pendingDiskDeletes.clear();
 +        this.hydrationFailure = undefined;
 +        this.plainTextByteEstimate = 0;
@@ -13136,6 +14440,9 @@ index 0000000..db41737
 +     */
 +    private async resetMemory(): Promise<void> {
 +        this.clearIndexMaps();
++        // A parked-row write queued by the session being discarded is skipped when it runs (epoch check), so it
++        // must not leave the next session believing one is still on its way.
++        this.pendingRedactionsWriteQueued = false;
 +        this.checkpoints = [];
 +        this.userVersion = 0;
 +        this.persistChain = Promise.resolve();
