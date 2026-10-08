@@ -1,5 +1,5 @@
 diff --git a/apps/web/src/components/views/settings/devices/DeviceVerificationStatusCard.tsx b/apps/web/src/components/views/settings/devices/DeviceVerificationStatusCard.tsx
-index 87cb911..21cb9cd 100644
+index 87cb911..e5877e9 100644
 --- a/apps/web/src/components/views/settings/devices/DeviceVerificationStatusCard.tsx
 +++ b/apps/web/src/components/views/settings/devices/DeviceVerificationStatusCard.tsx
 @@ -7,6 +7,7 @@ Please see LICENSE files in the repository root for full details.
@@ -26,10 +26,24 @@ index 87cb911..21cb9cd 100644
          return {
              variation: DeviceSecurityVariation.Unverified,
              heading: _t("settings|sessions|unverified_session"),
-@@ -78,10 +86,28 @@ export const DeviceVerificationStatusCard: React.FC<DeviceVerificationStatusCard
+@@ -78,18 +86,48 @@ export const DeviceVerificationStatusCard: React.FC<DeviceVerificationStatusCard
  }) => {
      const securityCardProps = getCardProps(device, isCurrentDevice);
  
+-    return (
+-        <DeviceSecurityCard {...securityCardProps}>
+-            {/* check for explicit false to exclude unverifiable devices */}
+-            {device.isVerified === false && !!onVerifyDevice && (
+-                <AccessibleButton
+-                    kind="primary"
+-                    onClick={onVerifyDevice}
+-                    data-testid={`verification-status-button-${device.device_id}`}
+-                >
+-                    {_t("settings|sessions|verify_session")}
+-                </AccessibleButton>
+-            )}
+-        </DeviceSecurityCard>
+-    );
 +    // For another session, only an explicit `false` may offer verification - `null` means the
 +    // device published no encryption keys and genuinely cannot be verified.
 +    //
@@ -49,25 +63,31 @@ index 87cb911..21cb9cd 100644
 +    // action, one section up.
 +    const blockedByCurrentSession = !isCurrentDevice && device.isVerified === false && !onVerifyDevice;
 +
-     return (
-         <DeviceSecurityCard {...securityCardProps}>
--            {/* check for explicit false to exclude unverifiable devices */}
--            {device.isVerified === false && !!onVerifyDevice && (
-+            {canOfferVerify && !!onVerifyDevice && (
-                 <AccessibleButton
-                     kind="primary"
-                     onClick={onVerifyDevice}
-@@ -90,6 +116,11 @@ export const DeviceVerificationStatusCard: React.FC<DeviceVerificationStatusCard
-                     {_t("settings|sessions|verify_session")}
-                 </AccessibleButton>
-             )}
-+            {blockedByCurrentSession && (
-+                <Text size="sm" data-testid={`verification-blocked-reason-${device.device_id}`}>
-+                    {_t("settings|sessions|verify_blocked_current_session_unverified")}
-+                </Text>
-+            )}
-         </DeviceSecurityCard>
-     );
++    // ONE child, null when there is nothing to offer: `DeviceSecurityCard` renders its actions
++    // container for any truthy `children`, and two `{cond && ...}` expressions make `children`
++    // the array `[false, false]`, which is truthy, so every card without an action would carry an
++    // empty actions div that stock Element does not render. The two cases are exclusive (one
++    // needs `onVerifyDevice`, the other its absence).
++    let actions: JSX.Element | null = null;
++    if (canOfferVerify && !!onVerifyDevice) {
++        actions = (
++            <AccessibleButton
++                kind="primary"
++                onClick={onVerifyDevice}
++                data-testid={`verification-status-button-${device.device_id}`}
++            >
++                {_t("settings|sessions|verify_session")}
++            </AccessibleButton>
++        );
++    } else if (blockedByCurrentSession) {
++        actions = (
++            <Text size="sm" data-testid={`verification-blocked-reason-${device.device_id}`}>
++                {_t("settings|sessions|verify_blocked_current_session_unverified")}
++            </Text>
++        );
++    }
++
++    return <DeviceSecurityCard {...securityCardProps}>{actions}</DeviceSecurityCard>;
  };
 diff --git a/apps/web/src/i18n/strings/en_EN.json b/apps/web/src/i18n/strings/en_EN.json
 index 3397af7..494582a 100644

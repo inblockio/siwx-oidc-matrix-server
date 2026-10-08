@@ -332,14 +332,20 @@ A tag bump must try every patch in this file's order.
   `src/components/views/settings/devices/DeviceVerificationStatusCard.test.tsx` (#34848),
   and the hunk now targets that file. Added/removed lines are identical to the v1.12.26
   patch.
-- **Known red upstream tests, PRE-EXISTING (not caused by the port):** this patch renders
-  `{blockedByCurrentSession && ...}` beside the button, so `DeviceSecurityCard` receives
-  a children array and renders an **empty** `mx_DeviceSecurityCard_actions` div where it
-  used to render none. Four upstream snapshots fail on that (2 in
-  `DeviceVerificationStatusCard.test.tsx`, 2 in `SessionManagerTab.test.tsx`). Reproduced
-  identically on v1.12.26 with the live patch set (jest, 2026-09-25), so prod has shipped
-  the empty div since this patch landed. Cosmetic; fix or re-snapshot when this is filed
-  upstream. Patches 1 and 5 carry the same kind of pre-existing red: `MatrixChat.test.tsx`
+- **Empty actions div, FIXED 2026-10-08.** Until then the patch rendered
+  `{blockedByCurrentSession && ...}` beside the button, so `DeviceSecurityCard` received
+  the children array `[false, false]`, which is truthy, and rendered an **empty**
+  `mx_DeviceSecurityCard_actions` div on every card with no action, where stock renders
+  none. Four upstream snapshots failed on it (2 in `DeviceVerificationStatusCard.test.tsx`,
+  2 in `SessionManagerTab.test.tsx`); this entry used to call them "known red upstream",
+  but all four were caused by this patch, and prod has served the empty div since the
+  patch landed. The patch now passes ONE child (`actions`, `null` when there is nothing to
+  offer; the button and the reason are exclusive), so the DOM matches stock and the
+  upstream snapshots pass unchanged: 62/62 across both files on v1.12.29 with all eleven
+  patches applied (before: 2 failed in each file). Found by the `patch-tests` CI job, the
+  first time the tests this patch carries ran anywhere. Patches 1 and 5 carry red tests
+  of a different kind, in files no patch carries (so `patch-tests` does not run them):
+  `MatrixChat.test.tsx`
   "unskippable verification" x2 (forced 4S recovery replaces the Complete Security screen)
   and `LoginWithQR.test.tsx` "reciprocate" x2 (check-code auto-approve changes the props).
 - **Retirement:** upstream accepts the PR or fixes the null-handling equivalently.
