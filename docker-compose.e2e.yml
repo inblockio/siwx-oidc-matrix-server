@@ -8,7 +8,7 @@
 #
 # Distinct host ports vs siwx-real-* (8081/8448/8450) and the mock (8080/8090):
 #   caddy edge 18080, siwx-oidc 18081 (via caddy), synapse 18448,
-#   livekit 7880 + 7881/tcp + 20100-20200/udp.
+#   livekit 7880 + 7881/tcp + 20100-20200/udp, Element Call 18082 (via caddy).
 #
 # Run (where a compose engine exists):
 #   scripts/gen-e2e-env.sh
@@ -82,6 +82,8 @@ services:
       SIWEOIDC_PUBLIC_ISSUER: "${SIWEOIDC_PUBLIC_ISSUER}"  # http://localhost:18081/
       SIWEOIDC_INTERNAL_URL: "${SIWEOIDC_INTERNAL_URL}"    # http://siwx-e2eh-oidc:8081
       MAS_SHARED_SECRET: "${MAS_SHARED_SECRET}"
+      # MSC4143 rtc/transports; unset in deployments (default https://${MATRIX_HOST}/livekit/jwt).
+      MATRIX_RTC_LIVEKIT_SERVICE_URL: "${MATRIX_BASE_URL}/livekit/jwt"   # http://localhost:18080/livekit/jwt
     healthcheck:
       test: ["CMD-SHELL", "curl -fSs http://localhost:8008/health || exit 1"]
       interval: 15s
@@ -182,6 +184,17 @@ services:
       - ./e2e-harness/certs/fed.crt:/certs/fed.crt:ro
       - ./e2e-harness/certs/fed.key:/certs/fed.key:ro
 
+  # Element Call standalone SPA (H14). up.sh additionally runs
+  # e2e-harness/element-call-check.sh against it (served entry chunk + config).
+  siwx-e2eh-element-call:
+    image: ghcr.io/element-hq/element-call:v0.24.0@sha256:e5ffed2141f4807a7437f4bf55da131fb6ac180f8d058d4ad3a32a581d991316
+    container_name: siwx-e2eh-element-call
+    restart: unless-stopped
+    volumes:
+      - ./config/element-call.e2e.json:/app/config.json:ro
+    networks:
+      - siwx-e2eh-net
+
   siwx-e2eh-caddy:
     image: docker.io/library/caddy:2.11.4-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
     container_name: siwx-e2eh-caddy
@@ -191,9 +204,11 @@ services:
       - siwx-e2eh-synapse
       - siwx-e2eh-lk-jwt
       - siwx-e2eh-livekit
+      - siwx-e2eh-element-call
     ports:
       - "18080:18080"
       - "18081:18081"
+      - "18082:18082"
     volumes:
       - ./Caddyfile.e2e:/etc/caddy/Caddyfile:ro
     networks:

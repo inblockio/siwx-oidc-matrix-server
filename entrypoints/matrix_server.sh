@@ -415,8 +415,20 @@ apply_matrixrtc_config() {
   # appservice registration, never on its own. 1.161 also starts validating
   # every transport entry (strict strings, and a livekit transport needs `url`
   # or `livekit_service_url`), which the two keys below satisfy.
+  #
+  # MATRIX_RTC_LIVEKIT_SERVICE_URL overrides the advertised URL. Unset (every
+  # deployment) keeps the default https://${MATRIX_HOST}/livekit/jwt byte for
+  # byte. The hermetic e2e harness sets it to its plain-http edge
+  # (http://localhost:18080/livekit/jwt): Element Call 0.24.0 discovers its
+  # focus from this MSC4143 rtc/transports answer first and no longer reads the
+  # .well-known rtc_foci (element-call PR #4153), so the default would point a
+  # harness browser at https://localhost/livekit/jwt, where nothing listens.
+  # strenv() hands the value to yq as data, never as expression text.
+  MATRIX_RTC_LIVEKIT_SERVICE_URL="${MATRIX_RTC_LIVEKIT_SERVICE_URL:-https://${MATRIX_HOST}/livekit/jwt}"
+  export MATRIX_RTC_LIVEKIT_SERVICE_URL
   yq -i ".matrix_rtc.transports[0].type = \"livekit\"" /data/homeserver.yaml
-  yq -i ".matrix_rtc.transports[0].livekit_service_url = \"https://${MATRIX_HOST}/livekit/jwt\"" /data/homeserver.yaml
+  yq -i '.matrix_rtc.transports[0].livekit_service_url = strenv(MATRIX_RTC_LIVEKIT_SERVICE_URL)' /data/homeserver.yaml
+  echo "[matrix_server] MatrixRTC transport livekit_service_url=${MATRIX_RTC_LIVEKIT_SERVICE_URL}"
 }
 
 if [ -f /data/homeserver.yaml ]; then
