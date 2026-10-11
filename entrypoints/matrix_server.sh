@@ -499,10 +499,136 @@ LKJWT_AS_EOF
   yq -i ".app_service_config_files += [\"${reg}\"]" /data/homeserver.yaml
 }
 
+# -----------------------------------------------------------------------------
+# Guest policy module (synapse-guest-policy) — OPTIONAL, ENV-GATED, ALWAYS
+# RE-ASSERTED, EVERY BOOT.
+#
+# WHY IT IS A MOUNT AND NOT IN THE IMAGE. This repository and its GHCR images
+# are public; the module repository (inblockio/synapse-guest-policy) is private.
+# So the published Synapse image does not contain the module. An operator who
+# wants guest confinement mounts a checkout read-only (docker-compose.yml, README
+# "Guest policy module (optional)") and sets GUEST_POLICY_ENABLED=true.
+#
+# FAIL CLOSED. If the flag is on but the module cannot be imported, this REFUSES
+# TO START. Confinement must never be silently off when the operator asked for it
+# (the same stance as the DID-field gate below). A bad value for any
+# GUEST_POLICY_* setting is refused the same way, and Synapse itself stops with a
+# ConfigError on a key the module rejects.
+#
+# FLAG OFF (unset, empty, anything but "true"): Synapse starts exactly as before.
+# One info line, no change to homeserver.yaml, except that a module entry this
+# function wrote on an earlier boot is removed again (otherwise the next boot
+# would fail to import a module nobody mounts). `user_types` is left alone: a
+# registered but unused user type is harmless.
+#
+# Env (all optional except the flag; unset = the module's own default):
+#   GUEST_POLICY_ENABLED              true/1/yes/on turns it on; empty/false/0/no/off
+#                                     leaves it off; any other value refuses to start
+#   GUEST_POLICY_MODULE_PATH          where the checkout is mounted in the
+#                                     container (default /modules/synapse-guest-policy;
+#                                     the directory that CONTAINS the synapse_guest_policy package)
+#   GUEST_POLICY_USER_TYPE            guest_user_type, default io.inblock.guest. Also the
+#                                     value added to user_types.extra_user_types.
+#   GUEST_POLICY_ROOM_STATE_TYPE      guest_room_state_type, default io.inblock.guest_room
+#   GUEST_POLICY_ALLOWED_EVENT_TYPES  guest_allowed_event_types, comma separated.
+#                                     Module default m.room.encrypted (guests post in the
+#                                     encrypted call chat). "none" = guests read only.
+#   GUEST_POLICY_KNOCK_CAP            knock_cap, default 3
+#   GUEST_POLICY_KNOCK_WINDOW_SECS    knock_window_secs, default 600
+#   GUEST_POLICY_NAME_SUFFIX          name_suffix, default " (Guest)"
+# -----------------------------------------------------------------------------
+GUEST_POLICY_MODULE_CLASS="synapse_guest_policy.GuestPolicy"
+
+guest_policy_refuse() {
+  echo "REFUSING TO START: $*" >&2
+  exit 1
+}
+
+guest_policy_value_ok() { # $1 name, $2 value, $3 extended regex
+  [[ "$2" =~ $3 ]] || guest_policy_refuse "${1}='${2}' is not an accepted value (must match ${3})."
+}
+
+# The flag is a security switch, so it never fails open: the usual true
+# spellings turn it on, empty and the usual false spellings leave it off, and
+# anything else refuses to start (audit F3: "True" or "1" used to mean off).
+guest_policy_flag() {
+  case "${GUEST_POLICY_ENABLED:-}" in
+    [Tt][Rr][Uu][Ee]|1|[Yy][Ee][Ss]|[Oo][Nn]) echo on ;;
+    ""|[Ff][Aa][Ll][Ss][Ee]|0|[Nn][Oo]|[Oo][Ff][Ff]) echo off ;;
+    *) echo invalid ;;
+  esac
+}
+
+apply_guest_policy() {
+  local hs=/data/homeserver.yaml
+  local flag
+  flag="$(guest_policy_flag)"
+  [ "$flag" != invalid ] || guest_policy_refuse "GUEST_POLICY_ENABLED='${GUEST_POLICY_ENABLED}' is neither true (true, 1, yes, on) nor false (empty, false, 0, no, off)."
+
+  if [ "$flag" != on ]; then
+    # Drop only our own entry, leave every other module alone.
+    if [ "$(yq "[(.modules // [])[] | select(.module == \"${GUEST_POLICY_MODULE_CLASS}\")] | length" "$hs" 2>/dev/null)" -gt 0 ] 2>/dev/null; then
+      yq -i "del(.modules[] | select(.module == \"${GUEST_POLICY_MODULE_CLASS}\")) | del(.modules | select(length == 0))" "$hs"
+      echo "Guest policy: GUEST_POLICY_ENABLED is not true; removed the module entry from an earlier boot."
+    else
+      echo "Guest policy: disabled (GUEST_POLICY_ENABLED is not true)."
+    fi
+    return 0
+  fi
+
+  local path="${GUEST_POLICY_MODULE_PATH:-/modules/synapse-guest-policy}"
+  local utype="${GUEST_POLICY_USER_TYPE:-io.inblock.guest}"
+  local rstate="${GUEST_POLICY_ROOM_STATE_TYPE:-}"
+  local events="${GUEST_POLICY_ALLOWED_EVENT_TYPES:-}"
+  local cap="${GUEST_POLICY_KNOCK_CAP:-}"
+  local win="${GUEST_POLICY_KNOCK_WINDOW_SECS:-}"
+  local suffix="${GUEST_POLICY_NAME_SUFFIX:-}"
+
+  # Values end up in YAML and in a PYTHONPATH: strict charsets, no interpolation.
+  guest_policy_value_ok GUEST_POLICY_MODULE_PATH "$path" '^/[A-Za-z0-9._/-]+$'
+  guest_policy_value_ok GUEST_POLICY_USER_TYPE "$utype" '^[A-Za-z0-9._-]+$'
+  [ -z "$rstate" ] || guest_policy_value_ok GUEST_POLICY_ROOM_STATE_TYPE "$rstate" '^[A-Za-z0-9._-]+$'
+  [ -z "$events" ] || guest_policy_value_ok GUEST_POLICY_ALLOWED_EVENT_TYPES "$events" '^(none|[A-Za-z0-9._-]+(,[A-Za-z0-9._-]+)*)$'
+  [ -z "$cap" ] || guest_policy_value_ok GUEST_POLICY_KNOCK_CAP "$cap" '^[1-9][0-9]{0,5}$'
+  [ -z "$win" ] || guest_policy_value_ok GUEST_POLICY_KNOCK_WINDOW_SECS "$win" '^[1-9][0-9]{0,6}$'
+  [ -z "$suffix" ] || guest_policy_value_ok GUEST_POLICY_NAME_SUFFIX "$suffix" '^[][ A-Za-z0-9._()-]+$'
+
+  # The module must be importable BEFORE anything is written.
+  if ! PYTHONPATH="${path}${PYTHONPATH:+:${PYTHONPATH}}" python3 -c 'from synapse_guest_policy import GuestPolicy' 2>/dev/null; then
+    guest_policy_refuse "GUEST_POLICY_ENABLED=true but the module 'synapse_guest_policy' cannot be imported from ${path}. Mount a checkout of inblockio/synapse-guest-policy there read-only (docker-compose.yml, README 'Guest policy module (optional)'), or unset GUEST_POLICY_ENABLED. Guest confinement is never silently off when requested."
+  fi
+  export PYTHONPATH="${path}${PYTHONPATH:+:${PYTHONPATH}}"
+
+  # Synapse refuses to store a user_type it does not know. Merge, never replace.
+  GP_UTYPE="$utype" yq -i '.user_types.extra_user_types = (((.user_types.extra_user_types // []) + [strenv(GP_UTYPE)]) | unique)' "$hs" \
+    || guest_policy_refuse "could not write user_types.extra_user_types to ${hs}."
+
+  # Our entry is always removed first and re-added, so it is never there twice and
+  # another module in the list is left alone. Only keys that are set are written.
+  GP_CLASS="$GUEST_POLICY_MODULE_CLASS" GP_UTYPE="$utype" GP_RSTATE="$rstate" GP_EVENTS="$events" \
+  GP_CAP="$cap" GP_WIN="$win" GP_SUFFIX="$suffix" yq -i '
+    (.modules // []) as $m
+    | .modules = ($m | map(select(.module != strenv(GP_CLASS))))
+    | .modules += [{"module": strenv(GP_CLASS), "config": ({"guest_user_type": strenv(GP_UTYPE)}
+        + (strenv(GP_RSTATE) | select(. != "") | {"guest_room_state_type": .})
+        + (strenv(GP_EVENTS) | select(. != "") | {"guest_allowed_event_types": (split(",") | map(select(. != "none")))})
+        + (strenv(GP_CAP) | select(. != "") | {"knock_cap": to_number})
+        + (strenv(GP_WIN) | select(. != "") | {"knock_window_secs": to_number})
+        + (strenv(GP_SUFFIX) | select(. != "") | {"name_suffix": .}))}]
+  ' "$hs" || guest_policy_refuse "could not write the modules entry to ${hs}."
+
+  # Re-read what is ON DISK, as the other gates do.
+  if [ "$(yq "[(.modules // [])[] | select(.module == \"${GUEST_POLICY_MODULE_CLASS}\")] | length" "$hs" 2>/dev/null)" != "1" ]; then
+    guest_policy_refuse "the ${GUEST_POLICY_MODULE_CLASS} entry is not in ${hs} after writing it."
+  fi
+  echo "Guest policy: ENABLED, module from ${path}, guest_user_type=${utype}, allowed event types=${events:-<module default>}."
+}
+
 if [ -f /data/homeserver.yaml ]; then
   apply_mas_config
   apply_matrixrtc_config
   apply_lk_jwt_membership
+  apply_guest_policy
   # KEEP LAST among the apply_* functions. apply_mas_config deletes
   # .experimental_features.msc3861 and apply_matrixrtc_config writes four
   # .experimental_features.* keys (apply_lk_jwt_membership one more); running the denylist write after both means a

@@ -383,6 +383,41 @@ first boot of a fresh data volume only; see `entrypoints/matrix_server.sh`.
 A flag without a value: passing it turns Matrix server usage statistics reporting
 on (`yes`). Default: `no`.
 
+### Guest policy module (optional)
+
+The Synapse module [synapse-guest-policy](https://github.com/inblockio/synapse-guest-policy)
+confines guest accounts on the server: no room, alias or directory creation, only the event
+types you allow, a knock cap and a canonical `(Guest)` display name. It is **off by default**,
+and when it is off Synapse starts exactly as it always has.
+
+The module repository is private and the module is **not** in the published Synapse image. You
+mount a checkout read-only, pinned by commit:
+
+```sh
+mkdir -p /opt/synapse-guest-policy-<sha>
+git -C /path/to/synapse-guest-policy archive <sha> | tar -x -C /opt/synapse-guest-policy-<sha>
+```
+
+Then, in `.env`: `GUEST_POLICY_ENABLED=true` and `GUEST_POLICY_SRC=/opt/synapse-guest-policy-<sha>`,
+and uncomment the `GUEST_POLICY_SRC` volume of `matrix_synapse` in `docker-compose.yml`. On start
+`entrypoints/matrix_server.sh` adds the module to `modules:` and `io.inblock.guest` to
+`user_types.extra_user_types` (merged with what is there), on every boot.
+
+- **Fail closed.** With the flag on and the module not importable from the mount (default path
+  `/modules/synapse-guest-policy`, override `GUEST_POLICY_MODULE_PATH`), the container refuses to
+  start with a message and a non-zero exit. A malformed `GUEST_POLICY_*` value is refused the same
+  way. Confinement is never silently off when you asked for it.
+- **Settings**, all optional, unset means the module's own default: `GUEST_POLICY_USER_TYPE`,
+  `GUEST_POLICY_ROOM_STATE_TYPE`, `GUEST_POLICY_ALLOWED_EVENT_TYPES` (comma separated; default
+  `m.room.encrypted`, so guests can post in the encrypted call chat; `none` makes guests read only),
+  `GUEST_POLICY_KNOCK_CAP`, `GUEST_POLICY_KNOCK_WINDOW_SECS`, `GUEST_POLICY_NAME_SUFFIX`.
+  `.env.example` has them with comments.
+- **Switching it off** (unset the flag) removes the module entry on the next boot; `user_types` is
+  left alone.
+- **Licence.** The module is AGPL-3.0-or-later. It is not part of this repository or of the images
+  published from it, so it needs no entry in `NOTICE`. If you build your own image that contains
+  it, that image falls under the module's licence and needs one.
+
 ### Element Web Client
 
 #### --CLIENT_HOST **Required**
