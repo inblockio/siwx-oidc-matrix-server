@@ -270,6 +270,16 @@ with `git apply`; the order is load-bearing. Registry:
     conformance vectors in [docs/copy-markdown](docs/copy-markdown/README.md)). FEATURE,
     upstreamable, not filed.
 
+**lk-jwt-service: 1 patch, built but not shipped yet.** Registry:
+[`patches/lk-jwt/README.md`](patches/lk-jwt/README.md). Applied by
+`dockerfiles/Dockerfile.lk-jwt` with `git apply`. The image is not published and no
+compose file uses it yet (follow-up #40).
+
+1. [`require-membership.patch`](patches/lk-jwt/require-membership.patch): opt-in
+   `LIVEKIT_REQUIRE_MEMBERSHIP`. `/sfu/get`, `/get_token` and `/delegate_delayed_leave`
+   refuse an SFU token to a user who is not joined to the room (MSC4502 `is_joined`).
+   UPSTREAM-TRACKED (element-hq/lk-jwt-service#250).
+
 Element Web also carries runtime deltas that are not `.patch` files: nginx caching
 and security headers, the service-worker boot shim, a per-build `sw.js` stamp, the
 inblock.io branding overlay, entrypoint templating, and a bind-mounted config. They
