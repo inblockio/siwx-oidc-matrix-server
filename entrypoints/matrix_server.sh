@@ -496,23 +496,27 @@ apply_lk_jwt_membership() {
   # main auto-deploys to dev-staging). Only the lk-jwt membership check is lost,
   # and the patched lk-jwt-service itself refuses to start without a registration.
   # A half-set or malformed pair is treated the same way, never as a crash.
-  local ok=1 t sn_re
+  local ok=1 t sn sn_re why
   for t in "${LK_JWT_AS_TOKEN:-}" "${LK_JWT_HS_TOKEN:-}"; do
     # Strict charset, because the value is written into YAML.
     [[ "$t" =~ ^[A-Za-z0-9_-]{32,}$ ]] || ok=0
   done
   [ "${LK_JWT_AS_TOKEN:-}" != "${LK_JWT_HS_TOKEN:-}" ] || ok=0
-  # The users namespace is built from the server_name on disk; its charset is
-  # checked too, because it is written into YAML and into a regex.
-  local sn
-  sn=$(yq '.server_name' /data/homeserver.yaml 2>/dev/null)
-  if ! [[ "$sn" =~ ^[A-Za-z0-9.:-]+$ ]]; then
-    echo "lk-jwt AS registration: the server_name in /data/homeserver.yaml is missing or has characters outside [A-Za-z0-9.:-]" >&2
-    ok=0
+  why="LK_JWT_AS_TOKEN and LK_JWT_HS_TOKEN must be two different values of 32+ characters [A-Za-z0-9_-], see env.example"
+  if [ "$ok" = 1 ]; then
+    # The users namespace is built from the server_name on disk; its charset is
+    # checked too, because it is written into YAML and into a regex. A missing
+    # key reads as empty, never as the string "null". An IPv6 literal server_name
+    # is outside the charset and leaves the registration unconfigured.
+    sn=$(yq '.server_name // ""' /data/homeserver.yaml 2>/dev/null)
+    if ! [[ "$sn" =~ ^[A-Za-z0-9.:-]+$ ]] || [ "$sn" = null ]; then
+      ok=0
+      why="the server_name in /data/homeserver.yaml is missing or has characters outside [A-Za-z0-9.:-]"
+    fi
   fi
   if [ "$ok" != 1 ]; then
     rm -f "$reg"
-    echo "lk-jwt AS registration not configured; MSC4502 membership checks unavailable (LK_JWT_AS_TOKEN and LK_JWT_HS_TOKEN must be two different values of 32+ characters [A-Za-z0-9_-], see env.example)" >&2
+    echo "lk-jwt AS registration not configured; MSC4502 membership checks unavailable (${why})" >&2
     return 0
   fi
 
