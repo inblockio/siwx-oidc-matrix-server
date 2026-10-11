@@ -412,19 +412,100 @@ apply_matrixrtc_config() {
   # lk-jwt-service is registered as an application service. Ours is not (it
   # runs as a plain HTTP service behind /livekit/jwt), so adding `url` would
   # break calls for exactly the newer clients. Adopt `url` together with the
-  # appservice registration, never on its own. 1.161 also starts validating
+  # appservice registration, never on its own. (apply_lk_jwt_membership now
+  # writes a registration, but only for the MSC4502 membership look-up; it has
+  # `url: null`, and /livekit/jwt is still the route clients use, so `url`
+  # stays unadopted.) 1.161 also starts validating
   # every transport entry (strict strings, and a livekit transport needs `url`
   # or `livekit_service_url`), which the two keys below satisfy.
   yq -i ".matrix_rtc.transports[0].type = \"livekit\"" /data/homeserver.yaml
   yq -i ".matrix_rtc.transports[0].livekit_service_url = \"https://${MATRIX_HOST}/livekit/jwt\"" /data/homeserver.yaml
 }
 
+# ---------------------------------------------------------------------------
+# lk-jwt-service membership look-up (MSC4502) and its application-service
+# registration. Always-run, like the other apply_* functions, so a deployment
+# whose /data/homeserver.yaml predates this block converges on its next boot.
+#
+# WHY. The patched lk-jwt-service (patches/lk-jwt/README.md entry 1,
+# LIVEKIT_REQUIRE_MEMBERSHIP=true) asks Synapse "is this user joined to this
+# room?" through MSC4502, authenticated with an application-service token,
+# before it hands out an SFU token. Synapse ships MSC4502 from v1.162.0 behind
+# experimental_features.msc4502_enabled. Older Synapse ignores an unknown
+# experimental_features key, so the image pin (dockerfiles/Dockerfile) is what
+# makes this work, not this line.
+#
+# THE REGISTRATION is rendered from two secrets in the environment, never
+# committed: LK_JWT_AS_TOKEN (lk-jwt -> Synapse) and LK_JWT_HS_TOKEN
+# (Synapse -> lk-jwt, unused while `url` is null but required by Synapse).
+# lk-jwt-service gets the same two values as LIVEKIT_AS_TOKEN/LIVEKIT_HS_TOKEN
+# (docker-compose.yml), so the file never has to be shared with it. Generate with
+# `openssl rand -hex 32`, one value each, different from each other.
+#
+# SCOPE. `io.element.msc4502.scopes` is what the membership look-up needs, and
+# it is a list of strings: Synapse REFUSES TO START on an unknown scope, so a
+# typo here crashes the container rather than silently granting nothing.
+#
+# USERS NAMESPACE. lk-jwt's delayed-event handling (upstream PR #240) restarts
+# and sends a user's delayed leave event as that user, which an application
+# service may only do for users in its `users` namespace. The namespace is
+# `.*` and non-exclusive, so it covers every local user without reserving any
+# name. Consequence to know about: the AS token is therefore a credential that
+# can act as ANY local user. Treat LK_JWT_AS_TOKEN like an admin secret; do not
+# log it and rotate it by changing both values and restarting both services.
+apply_lk_jwt_membership() {
+  local reg=/data/lk-jwt-as.yaml
+
+  yq -i ".experimental_features.msc4502_enabled = true" /data/homeserver.yaml
+  # Our entry is always removed first and re-added when configured, so the list
+  # never holds it twice and another registration in it is left alone.
+  yq -i "(.app_service_config_files // []) as \$l | .app_service_config_files = (\$l - [\"${reg}\"])" /data/homeserver.yaml
+
+  # Not configured is a supported state, not an error: a deployment whose env
+  # predates these variables must keep starting exactly as before (a merge to
+  # main auto-deploys to dev-staging). Only the lk-jwt membership check is lost,
+  # and the patched lk-jwt-service itself refuses to start without a registration.
+  # A half-set or malformed pair is treated the same way, never as a crash.
+  local ok=1 t
+  for t in "${LK_JWT_AS_TOKEN:-}" "${LK_JWT_HS_TOKEN:-}"; do
+    # Strict charset, because the value is written into YAML.
+    [[ "$t" =~ ^[A-Za-z0-9_-]{32,}$ ]] || ok=0
+  done
+  [ "${LK_JWT_AS_TOKEN:-}" != "${LK_JWT_HS_TOKEN:-}" ] || ok=0
+  if [ "$ok" != 1 ]; then
+    rm -f "$reg"
+    echo "lk-jwt AS registration not configured; MSC4502 membership checks unavailable (LK_JWT_AS_TOKEN and LK_JWT_HS_TOKEN must be two different values of 32+ characters [A-Za-z0-9_-], see env.example)" >&2
+    return 0
+  fi
+
+  # Written next to homeserver.yaml, same owner, mode 600: the tokens are
+  # secrets, and the process that reads this file is Synapse.
+  ( umask 077
+    cat > "$reg" <<LKJWT_AS_EOF
+id: lk-jwt-service
+as_token: "${LK_JWT_AS_TOKEN}"
+hs_token: "${LK_JWT_HS_TOKEN}"
+sender_localpart: _lk_jwt_service
+url: null
+namespaces:
+  users:
+    - exclusive: false
+      regex: ".*"
+io.element.msc4502.scopes:
+  - "urn:matrix:client:io.element.msc4502:rooms:is_joined"
+LKJWT_AS_EOF
+  )
+  chown --reference=/data/homeserver.yaml "$reg" 2>/dev/null || true
+  yq -i ".app_service_config_files += [\"${reg}\"]" /data/homeserver.yaml
+}
+
 if [ -f /data/homeserver.yaml ]; then
   apply_mas_config
   apply_matrixrtc_config
+  apply_lk_jwt_membership
   # KEEP LAST among the apply_* functions. apply_mas_config deletes
   # .experimental_features.msc3861 and apply_matrixrtc_config writes four
-  # .experimental_features.* keys; running the denylist write after both means a
+  # .experimental_features.* keys (apply_lk_jwt_membership one more); running the denylist write after both means a
   # clobber by either is impossible by construction. This is belt; the braces are
   # the final on-disk re-read immediately before /start.py, which makes the
   # guarantee independent of this ordering if a future apply_* is appended here.
