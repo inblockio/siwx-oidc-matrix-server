@@ -453,6 +453,25 @@ apply_matrixrtc_config() {
 # name. Consequence to know about: the AS token is therefore a credential that
 # can act as ANY local user. Treat LK_JWT_AS_TOKEN like an admin secret; do not
 # log it and rotate it by changing both values and restarting both services.
+# The uid:gid Synapse's /start.py runs as, mirroring its main(): a numeric UID
+# in the container env, with GID defaulting to 991; without one, 991:991 when
+# root, else the current user (start.py then changes no ids, and prints
+# nothing here). Read from the process's initial environment, which is what
+# /start.py inherits.
+synapse_runtime_ids() {
+  local u g
+  u=$(tr '\0' '\n' </proc/$$/environ | sed -n 's/^UID=//p' | head -n1)
+  g=$(tr '\0' '\n' </proc/$$/environ | sed -n 's/^GID=//p' | head -n1)
+  if [[ "$u" =~ ^[0-9]+$ ]]; then
+    [[ "$g" =~ ^[0-9]+$ ]] || g=991
+  elif [ "$(id -u)" = 0 ]; then
+    u=991; g=991
+  else
+    return 0
+  fi
+  echo "${u}:${g}"
+}
+
 apply_lk_jwt_membership() {
   local reg=/data/lk-jwt-as.yaml
 
@@ -478,8 +497,8 @@ apply_lk_jwt_membership() {
     return 0
   fi
 
-  # Written next to homeserver.yaml, same owner, mode 600: the tokens are
-  # secrets, and the process that reads this file is Synapse.
+  # Written next to homeserver.yaml, mode 600: the tokens are secrets, and the
+  # process that reads this file is Synapse.
   ( umask 077
     cat > "$reg" <<LKJWT_AS_EOF
 id: lk-jwt-service
@@ -495,7 +514,18 @@ io.element.msc4502.scopes:
   - "urn:matrix:client:io.element.msc4502:rooms:is_joined"
 LKJWT_AS_EOF
   )
-  chown --reference=/data/homeserver.yaml "$reg" 2>/dev/null || true
+  # Owned by the ids /start.py drops to ($UID:$GID, default 991:991), never by
+  # homeserver.yaml's owner: that file is 0644, so Synapse reads it whoever owns
+  # it, and on dev-staging it was uid 1000, which left this 0600 file unreadable
+  # and Synapse crash-looping (PermissionError on /data/lk-jwt-as.yaml). The ids
+  # are the ones synapse_runtime_ids derives; a non-root container without UID
+  # already wrote the file as the user Synapse runs as.
+  local ids
+  ids=$(synapse_runtime_ids)
+  if [ -n "$ids" ]; then
+    chown "$ids" "$reg" 2>/dev/null \
+      || echo "ERROR: could not chown ${reg} to ${ids}; Synapse will not be able to read it" >&2
+  fi
   yq -i ".app_service_config_files += [\"${reg}\"]" /data/homeserver.yaml
 }
 
