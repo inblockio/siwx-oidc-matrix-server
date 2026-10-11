@@ -20,9 +20,8 @@ NET="siwx-e2eh-net"
 # this repository publishes (upstream v0.8.0 + patches/lk-jwt/). The harness
 # registers no application service with its Synapse, so it leaves
 # LIVEKIT_REQUIRE_MEMBERSHIP off and the image behaves like upstream here.
-# TODO(pin): `:main` until the first CI publish; then a
-# `:sha-<commit>@sha256:<digest>` ref.
-LK_JWT_IMAGE_REF="${LK_JWT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service:main}"
+# Pinned to the CI build of main at 70b897e, as in docker-compose.yml.
+LK_JWT_IMAGE_REF="${LK_JWT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service:sha-70b897e@sha256:ce73f33824dcea711a82811653cedba6979a99d8901d22269d1f3367f4471173}"
 
 # siwx-oidc + Synapse image refs. Both are DERIVED from source and built on
 # demand by e2e-harness/images.sh (see its header for the scheme and why the

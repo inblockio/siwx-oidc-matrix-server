@@ -11,7 +11,8 @@ services:
     # sufficient. Every image below follows the same pattern.
     #
     # The defaults are IMMUTABLE (2026-09-29): tag plus digest of the images CI
-    # published from main at 33a0c95, which carry exactly the Synapse version,
+    # published from main (Synapse and lk-jwt-service at 70b897e, 2026-10-11,
+    # Element Web at 33a0c95), which carry exactly the Synapse version,
     # Element tag and patch set the README's Dependencies table lists. They used
     # to be `:main`, so a checkout with no overrides silently ran whatever main
     # was at pull time, and start-matrix.sh pulls on every start. A required
@@ -21,7 +22,7 @@ services:
     # default in real-stack/Dockerfile.synapse: take the digest a later main
     # build published under its `sha-<commit>` tag. A default can only name a
     # build of an EARLIER commit: no commit can hold its own build's digest.
-    image: ${SYNAPSE_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/synapse:sha-33a0c95@sha256:32abd6fa5e312796926eb33a2aeebecfe2ec705768828d3f570004c8ba44d775}
+    image: ${SYNAPSE_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/synapse:sha-70b897e@sha256:986294c6147b9d0b0a519051b9fa9b7afc22f63d5975df220205c332719e3fb5}
     restart: unless-stopped
     expose:
       - "${MATRIX_PORT}"
@@ -198,12 +199,11 @@ services:
     # REDIS_IMAGE_REF above. Default (2026-10-11) = the lk-jwt-service image
     # built here by dockerfiles/Dockerfile.lk-jwt (upstream v0.8.0 plus
     # patches/lk-jwt/require-membership.patch, element-hq/lk-jwt-service#250),
-    # published by CI next to the synapse and element-web images (issue #40).
-    # TODO(pin): the default stays upstream 0.7.0 until the first CI publish of
-    # this image gives a digest. Then ONE commit moves this default to
-    # `:sha-<commit>@sha256:<digest>` TOGETHER with SYNAPSE_IMAGE_REF's default
-    # (the 1.162.0 build with msc4502_enabled): the P1 image against a Synapse
-    # without MSC4502 refuses every call token.
+    # published by CI next to the synapse and element-web images (issue #40),
+    # pinned to the build of main at 70b897e. It moved in ONE commit together
+    # with SYNAPSE_IMAGE_REF's default (the 1.162.0 build of the same commit,
+    # which can enable MSC4502): the P1 image against a Synapse without MSC4502
+    # refuses every call token, so bump the two together.
     # A deployment whose .env pins LK_JWT_IMAGE_REF to an upstream image (the
     # maintainers' dev/prod do) keeps running that image until it changes the
     # pin; upstream images ignore LIVEKIT_REQUIRE_MEMBERSHIP, so the setting
@@ -211,7 +211,7 @@ services:
     # Behaviour change since 0.7.0 (#222) still applies: only
     # LIVEKIT_FULL_ACCESS_HOMESERVERS users and local users may publish;
     # federated users get subscribe-only tokens.
-    image: ${LK_JWT_IMAGE_REF:-ghcr.io/element-hq/lk-jwt-service:0.7.0@sha256:e0c7cecfa74e2342a3e79d47e1d4ab4bd228fe05b1a4dc4ba7f807686b0c214b}
+    image: ${LK_JWT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service:sha-70b897e@sha256:ce73f33824dcea711a82811653cedba6979a99d8901d22269d1f3367f4471173}
     restart: unless-stopped
     environment:
       # MUST stay the PUBLIC wss:// URL — do not "fix" it to http://livekit:7880.

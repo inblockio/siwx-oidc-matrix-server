@@ -118,10 +118,10 @@ services:
     # The lk-jwt-service image this repository publishes (upstream v0.8.0 plus
     # patches/lk-jwt/), as in docker-compose.yml. The harness registers no
     # application service with its Synapse, so LIVEKIT_REQUIRE_MEMBERSHIP stays
-    # off here and the image behaves like upstream. TODO(pin): `:main` until the
-    # first CI publish, then `:sha-<commit>@sha256:<digest>`. The healthcheck
+    # off here and the image behaves like upstream. Pinned to the CI build of
+    # main at 70b897e, the same default as docker-compose.yml. The healthcheck
     # note below is from 0.6.0 and is kept until the harness is re-verified.
-    image: ${LK_JWT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service:main}
+    image: ${LK_JWT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service:sha-70b897e@sha256:ce73f33824dcea711a82811653cedba6979a99d8901d22269d1f3367f4471173}
     container_name: siwx-e2eh-lk-jwt
     restart: unless-stopped
     environment:
