@@ -453,14 +453,22 @@ apply_matrixrtc_config() {
 # name. Consequence to know about: the AS token is therefore a credential that
 # can act as ANY local user. Treat LK_JWT_AS_TOKEN like an admin secret; do not
 # log it and rotate it by changing both values and restarting both services.
-# The uid:gid Synapse's /start.py runs as: the container env's UID and GID,
-# default 991 each, numeric only.
+# The uid:gid Synapse's /start.py runs as, mirroring its main(): a numeric UID
+# in the container env, with GID defaulting to 991; without one, 991:991 when
+# root, else the current user (start.py then changes no ids, and prints
+# nothing here). Read from the process's initial environment, which is what
+# /start.py inherits.
 synapse_runtime_ids() {
   local u g
   u=$(tr '\0' '\n' </proc/$$/environ | sed -n 's/^UID=//p' | head -n1)
   g=$(tr '\0' '\n' </proc/$$/environ | sed -n 's/^GID=//p' | head -n1)
-  [[ "$u" =~ ^[0-9]+$ ]] || u=991
-  [[ "$g" =~ ^[0-9]+$ ]] || g=991
+  if [[ "$u" =~ ^[0-9]+$ ]]; then
+    [[ "$g" =~ ^[0-9]+$ ]] || g=991
+  elif [ "$(id -u)" = 0 ]; then
+    u=991; g=991
+  else
+    return 0
+  fi
   echo "${u}:${g}"
 }
 
@@ -510,12 +518,14 @@ LKJWT_AS_EOF
   # homeserver.yaml's owner: that file is 0644, so Synapse reads it whoever owns
   # it, and on dev-staging it was uid 1000, which left this 0600 file unreadable
   # and Synapse crash-looping (PermissionError on /data/lk-jwt-as.yaml). The ids
-  # are read from the process's initial environment, because bash keeps its own
-  # UID variable.
+  # are the ones synapse_runtime_ids derives; a non-root container without UID
+  # already wrote the file as the user Synapse runs as.
   local ids
   ids=$(synapse_runtime_ids)
-  chown "$ids" "$reg" 2>/dev/null \
-    || echo "WARNING: could not chown ${reg} to ${ids}; Synapse may fail to read it" >&2
+  if [ -n "$ids" ]; then
+    chown "$ids" "$reg" 2>/dev/null \
+      || echo "ERROR: could not chown ${reg} to ${ids}; Synapse will not be able to read it" >&2
+  fi
   yq -i ".app_service_config_files += [\"${reg}\"]" /data/homeserver.yaml
 }
 
