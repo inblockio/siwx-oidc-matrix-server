@@ -23,5 +23,5 @@
 # NOT a stock image any more. scripts/did-field-guard-accept.sh needs an
 # UNPATCHED Synapse with yq for its case 4; do not hand it an image built from
 # this file.
-ARG SYNAPSE_IMAGE=ghcr.io/inblockio/siwx-oidc-matrix-server/synapse:sha-33a0c95@sha256:32abd6fa5e312796926eb33a2aeebecfe2ec705768828d3f570004c8ba44d775
+ARG SYNAPSE_IMAGE=ghcr.io/inblockio/siwx-oidc-matrix-server/synapse:sha-70b897e@sha256:986294c6147b9d0b0a519051b9fa9b7afc22f63d5975df220205c332719e3fb5
 FROM ${SYNAPSE_IMAGE}

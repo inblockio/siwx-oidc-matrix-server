@@ -79,7 +79,7 @@ livekit:
     - ./config/livekit.yaml:/etc/livekit.yaml:ro
 
 lk-jwt-service:
-  image: ${LK_JWT_IMAGE_REF:-ghcr.io/element-hq/lk-jwt-service:0.7.0@sha256:…}   # pinned
+  image: ${LK_JWT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service:sha-70b897e@sha256:…}   # pinned (v0.8.0 + membership patch)
   environment:
     LIVEKIT_URL: "wss://${MATRIX_HOST}/livekit/sfu"    # the PUBLIC URL; see below
     LIVEKIT_KEY: "${LIVEKIT_KEY}"
@@ -266,7 +266,8 @@ These are in addition to 80 and 443 for the reverse proxy.
 ### Synapse version
 
 Synapse v1.140.0+ is required for `matrix_rtc` config and `/rtc/transports`.
-The stack pins `matrixdotorg/synapse:v1.161.0` (`dockerfiles/Dockerfile`).
+The stack pins `matrixdotorg/synapse:v1.162.0` (`dockerfiles/Dockerfile`); 1.162.0 is also
+the minimum for the lk-jwt membership check (MSC4502).
 
 ## Verification checklist
 

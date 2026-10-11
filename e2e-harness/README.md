@@ -42,7 +42,7 @@ when missing**. `e2e-harness/images.sh` is the single place that decides them.
   commit them (new HEAD, new tag, rebuild). An uncached build takes about
   7 minutes.
 - **Synapse** uses the same Dockerfile the deployed image does: the version
-  pinned in its `FROM` line (v1.161.0, what prod and dev run), the MSC4133
+  pinned in its `FROM` line (v1.162.0), the MSC4133
   write-policy patch from `patches/synapse/`, and `entrypoints/matrix_server.sh`.
   The tag suffix hashes the Dockerfile and every file it COPYs, so editing the
   entrypoint or a patch rebuilds it and an unchanged tree reuses it. It is
