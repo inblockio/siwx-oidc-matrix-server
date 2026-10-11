@@ -44,6 +44,12 @@ services:
       start_period: 30s
     volumes:
       - matrix_data:/data
+      # Optional guest policy module (private repo, so not in the image): mount a
+      # checkout PINNED BY COMMIT read-only, then set GUEST_POLICY_ENABLED=true in
+      # .env. The GUEST_POLICY_* settings reach the container through env_file
+      # above. With the flag on and no mount, Synapse REFUSES TO START.
+      # See README "Guest policy module (optional)".
+      # - ${GUEST_POLICY_SRC:?set GUEST_POLICY_SRC to the module checkout}:/modules/synapse-guest-policy:ro
     networks:
       - portal-net
       - default
