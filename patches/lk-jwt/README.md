@@ -45,6 +45,25 @@ stops Synapse from starting. A deployment that pins
 `LK_JWT_IMAGE_REF` to an upstream image keeps running unpatched upstream until it changes
 that pin.
 
+`scripts/lk-jwt-membership-accept.sh` is the acceptance test for `apply_lk_jwt_membership`
+(CI job `lk-jwt-membership-accept`; locally `scripts/lk-jwt-membership-accept.sh --image <synapse image>`
+if no mikefarah yq v4 is on the PATH). It extracts the function from the entrypoint and
+checks idempotency, the users-namespace regex (matched with `re.match`, as Synapse does),
+the unconfigured path and each refusal path. Run it when you touch the function.
+
+**Operator note: watch `application_services_txns`.** The registration has `url: null`, so
+Synapse has nowhere to deliver events and the service should accumulate no transactions.
+Read-only check against Synapse's database (SQLite: `sqlite3 -readonly /data/homeserver.db`):
+
+```sql
+SELECT as_id, count(*) FROM application_services_txns GROUP BY as_id;
+```
+
+(columns `as_id`, `txn_id`, `event_ids`, schema unchanged in Synapse 1.162). Expect no row
+for `lk-jwt-service`. A count that grows means Synapse is queueing events for it and never
+delivering them, because the registration gained a `url` or something else changed its
+delivery; the table, and the disk it sits on, grow without bound until that is fixed.
+
 ## 1. `require-membership.patch` — UPSTREAM-TRACKED
 
 - **What:** a new opt-in environment variable `LIVEKIT_REQUIRE_MEMBERSHIP` (default off,
