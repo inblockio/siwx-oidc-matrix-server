@@ -522,7 +522,8 @@ LKJWT_AS_EOF
 # registered but unused user type is harmless.
 #
 # Env (all optional except the flag; unset = the module's own default):
-#   GUEST_POLICY_ENABLED              "true" turns it on
+#   GUEST_POLICY_ENABLED              true/1/yes/on turns it on; empty/false/0/no/off
+#                                     leaves it off; any other value refuses to start
 #   GUEST_POLICY_MODULE_PATH          where the checkout is mounted in the
 #                                     container (default /modules/synapse-guest-policy;
 #                                     the directory that CONTAINS the synapse_guest_policy package)
@@ -547,10 +548,24 @@ guest_policy_value_ok() { # $1 name, $2 value, $3 extended regex
   [[ "$2" =~ $3 ]] || guest_policy_refuse "${1}='${2}' is not an accepted value (must match ${3})."
 }
 
+# The flag is a security switch, so it never fails open: the usual true
+# spellings turn it on, empty and the usual false spellings leave it off, and
+# anything else refuses to start (audit F3: "True" or "1" used to mean off).
+guest_policy_flag() {
+  case "${GUEST_POLICY_ENABLED:-}" in
+    [Tt][Rr][Uu][Ee]|1|[Yy][Ee][Ss]|[Oo][Nn]) echo on ;;
+    ""|[Ff][Aa][Ll][Ss][Ee]|0|[Nn][Oo]|[Oo][Ff][Ff]) echo off ;;
+    *) echo invalid ;;
+  esac
+}
+
 apply_guest_policy() {
   local hs=/data/homeserver.yaml
+  local flag
+  flag="$(guest_policy_flag)"
+  [ "$flag" != invalid ] || guest_policy_refuse "GUEST_POLICY_ENABLED='${GUEST_POLICY_ENABLED}' is neither true (true, 1, yes, on) nor false (empty, false, 0, no, off)."
 
-  if [ "${GUEST_POLICY_ENABLED:-}" != "true" ]; then
+  if [ "$flag" != on ]; then
     # Drop only our own entry, leave every other module alone.
     if [ "$(yq "[(.modules // [])[] | select(.module == \"${GUEST_POLICY_MODULE_CLASS}\")] | length" "$hs" 2>/dev/null)" -gt 0 ] 2>/dev/null; then
       yq -i "del(.modules[] | select(.module == \"${GUEST_POLICY_MODULE_CLASS}\")) | del(.modules | select(length == 0))" "$hs"
