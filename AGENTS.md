@@ -31,13 +31,14 @@ stores; nothing here can patch it.
 | Path | Role |
 |---|---|
 | `start-matrix.sh` | First start: writes `.env` (mode 600) with generated secrets, then `docker compose up --pull always`. `--stop`, `--reset` (destroys all data). |
-| `docker-compose.yml` | The deployable stack: `matrix_synapse`, `siwx-oidc`, `redis`, `element-web`, `livekit`, `lk-jwt-service`. No reverse proxy; it joins the external `portal-net` network, where the proxy runs. |
+| `docker-compose.yml` | The deployable stack: `matrix_synapse`, `siwx-oidc`, `redis`, `element-web`, `livekit`, `lk-jwt-service` (the patched image from `dockerfiles/Dockerfile.lk-jwt`). No reverse proxy; it joins the external `portal-net` network, where the proxy runs. |
 | `docker-compose.local.yml`, `Caddyfile.local` | Local HTTP-only stack that builds the images from source and includes a stock Caddy. `Caddyfile.local` is the public reference for every route a proxy must provide. |
 | `docker-compose.qualify.yml` | Overlay for `docker-compose.local.yml`: every image by explicit reference (`*_IMAGE_REF`, refused when unset), no builds, the siwx-oidc environment of a production deployment. The lab for upgrade rehearsals; see the README's "Qualification lab". |
 | `docker-compose.e2e.yml`, `Caddyfile.e2e`, `e2e-harness/` | Hermetic local end-to-end stack (podman). See [e2e-harness/README.md](e2e-harness/README.md). |
 | `docker-compose.override.yml.example` | Template that binds Synapse's `/data` to a dedicated volume. |
 | `dockerfiles/Dockerfile` | The Synapse image: pinned upstream base, pinned `yq`, the Synapse patches, `entrypoints/matrix_server.sh`. |
 | `dockerfiles/Dockerfile.element` | The Element Web image: clones a pinned tag, applies the Element Web patches in order, builds, serves with unprivileged nginx and the runtime overlay. |
+| `dockerfiles/Dockerfile.lk-jwt` | The lk-jwt-service image: upstream at a pinned commit, `patches/lk-jwt/` applied with `git apply`, built `FROM scratch`, runs as 65532. |
 | `dockerfiles/Dockerfile.caddy-l4` | Caddy built with the `layer4` and `rate_limit` modules, for an edge that splits TURN-TLS by SNI and rate-limits `GET /resolve`. |
 | `real-stack/Dockerfile.synapse` | Builds `FROM` the published Synapse image, for siwx-oidc's hand-run real-stack tests. |
 | `entrypoints/matrix_server.sh` | Synapse entrypoint: writes `homeserver.yaml` (see [What runs on every boot](#what-runs-on-every-boot)). Baked into the image, not bind-mounted. |
@@ -229,8 +230,14 @@ Guides and scripts here must not contradict it:
 - **`LIVEKIT_FULL_ACCESS_HOMESERVERS` names the homeserver explicitly**, never `*`, which
   would let users of any federated server create rooms on the SFU.
 - **Keep `matrix_rtc.transports[0].livekit_service_url` and do not write `url`.** Synapse
-  1.161 deprecates the first, but a client that sees `url` expects lk-jwt-service to be
-  registered as an application service, which it is not here.
+  1.161 deprecates the first, but a client that sees `url` expects the LiveKit
+  authorization service to be reached through the C-S API. lk-jwt-service's registration
+  (`apply_lk_jwt_membership`) exists only for the MSC4502 membership look-up and has
+  `url: null`.
+- **lk-jwt-service fails closed.** `LIVEKIT_REQUIRE_MEMBERSHIP=true` with no
+  `LK_JWT_AS_TOKEN`/`LK_JWT_HS_TOKEN` makes it refuse to start; Synapse still starts
+  without them (it logs `lk-jwt AS registration not configured`). The tokens come from
+  `.env`, never from a committed file, and `LK_JWT_AS_TOKEN` can act as any local user.
 - **Embedded TURN needs the `caddy-l4` edge.** `config/livekit.yaml` ships with TURN off
   and an example domain. It is built for TLS terminated at an edge that splits `:443` by
   SNI; port 5349 is never published on the host. Enable it (`turn.enabled: true`, a real

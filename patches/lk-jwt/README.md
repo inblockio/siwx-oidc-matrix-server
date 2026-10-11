@@ -29,11 +29,19 @@ diff <(gh api repos/element-hq/lk-jwt-service/pulls/250 -H 'Accept: application/
      <(pm < patches/lk-jwt/require-membership.patch) && echo "entry 1: no drift"
 ```
 
-**Open gap.** The image is built by `dockerfiles/Dockerfile.lk-jwt` but **not shipped**:
-it is not in the CI build-and-push matrix, no compose file uses it, and Synapse does not
-yet enable MSC4502 or carry lk-jwt's appservice registration. Until that lands, every
-stack runs unpatched upstream lk-jwt-service. Tracked as follow-up
-[inblockio/siwx-oidc-matrix-server#40](https://github.com/inblockio/siwx-oidc-matrix-server/issues/40).
+**Shipping** (issue [#40](https://github.com/inblockio/siwx-oidc-matrix-server/issues/40)).
+The image is built by `dockerfiles/Dockerfile.lk-jwt` and published by the CI
+build-and-push matrix as `ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service`, so a
+patch that stops applying fails CI. It runs as the non-root user 65532. `docker-compose.yml`
+uses it with `LIVEKIT_REQUIRE_MEMBERSHIP=true` and the application-service tokens
+`LK_JWT_AS_TOKEN`/`LK_JWT_HS_TOKEN` (`env.example`). Synapse (v1.162.0 or later) enables
+`experimental_features.msc4502_enabled` and renders the registration from the same two
+variables (`entrypoints/matrix_server.sh`, `apply_lk_jwt_membership`). The registration
+carries the scope `urn:matrix:client:io.element.msc4502:rooms:is_joined` and a non-exclusive
+`users` namespace `.*`, which lk-jwt's delayed-event handling needs; that namespace makes the
+AS token a credential that can act as any local user. A deployment that pins
+`LK_JWT_IMAGE_REF` to an upstream image keeps running unpatched upstream until it changes
+that pin.
 
 ## 1. `require-membership.patch` — UPSTREAM-TRACKED
 
@@ -48,6 +56,11 @@ stack runs unpatched upstream lk-jwt-service. Tracked as follow-up
   - The service refuses to start with the flag on and no appservice configuration.
   - The README documents the flag, Synapse's `msc4502_enabled` and the AS registration
     scope.
+- **Upstream observation (not part of this patch, not yet raised upstream):** upstream's
+  `is_joined` response parser (`src/helper.rs`, from upstream #214, untouched by this
+  patch) treats a response without a `joined` field as not joined (403) instead of as a
+  malformed response (502). It fails closed, so it is not a bypass; it is an
+  error-classification issue to raise upstream.
 - **Why:** upstream checks membership only on the AS-proxied `/_matrix/…/rtc/livekit/*`
   routes. The standalone endpoints that Element Call uses check only the OpenID token, so
   any user who can mint an OpenID token gets an SFU token for **any** room, including

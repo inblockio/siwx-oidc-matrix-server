@@ -40,7 +40,7 @@ The Synapse and Element Web images built here are **not stock**: see
 
 ## What is and is not supported
 
-- **Homeserver: Synapse only.** The bundle runs Synapse `v1.161.0`, patched (see below).
+- **Homeserver: Synapse only.** The bundle runs Synapse `v1.162.0`, patched (see below).
   Other homeservers (Tuwunel, Dendrite, Conduit) are untested and unsupported.
 - **Delegated auth through Synapse's stable `matrix_authentication_service`
   integration.** Synapse's side of it, `/_synapse/mas/*`, is an internal API designed for
@@ -138,7 +138,7 @@ the `/siwx-matrix-setup` skill has the steps.
 | `redis` | `redis:8.10.2` | Session and token store for siwx-oidc |
 | `element-web` | `ghcr.io/inblockio/siwx-oidc-matrix-server/element-web`, built from source by `dockerfiles/Dockerfile.element` (Element Web + 11 patches) | Web client |
 | `livekit` | `livekit/livekit-server` | MatrixRTC SFU for Element Call; embedded TURN is off by default |
-| `lk-jwt-service` | `ghcr.io/element-hq/lk-jwt-service` | Issues LiveKit access tokens to Matrix users |
+| `lk-jwt-service` | `ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service`, built by `dockerfiles/Dockerfile.lk-jwt` (upstream v0.8.0 + 1 patch) | Issues LiveKit access tokens to Matrix users, only to members of the room (MSC4502 check) |
 
 The reverse proxy is not a service in `docker-compose.yml`. The maintainers' deployments
 use Caddy, custom-built with the `layer4` and `rate_limit` modules
@@ -156,7 +156,7 @@ deployment is known to run a different version.
 
 | Component | Version / pin | Pinned in | Stock / patched / built |
 |---|---|---|---|
-| Synapse | `v1.161.0` (`matrixdotorg/synapse:v1.161.0@sha256:6b95dd129e35…`, index digest) | `dockerfiles/Dockerfile` (`FROM`) | **Patched**: 1 source patch, plus config written by `entrypoints/matrix_server.sh`. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/synapse` |
+| Synapse | `v1.162.0` (`matrixdotorg/synapse:v1.162.0@sha256:6b84a7bbac36…`, index digest) | `dockerfiles/Dockerfile` (`FROM`) | **Patched**: 1 source patch, plus config written by `entrypoints/matrix_server.sh`. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/synapse` |
 | Synapse image the stack runs | default `…/synapse:sha-33a0c95@sha256:32abd6fa5e31…` (CI build of main at 33a0c95) | `docker-compose.yml` (`SYNAPSE_IMAGE_REF`); `real-stack/Dockerfile.synapse` (`ARG SYNAPSE_IMAGE`, same default, for the local real stack) | Built here |
 | Element Web | `v1.12.29` (git tag of element-hq/element-web; the build fails unless it resolves to commit `2d90d6b7b601…`) | `dockerfiles/Dockerfile.element` (`ARG ELEMENT_WEB_TAG`, `ARG ELEMENT_WEB_COMMIT`) | **Built from source and patched**: 10 source patches, plus a runtime overlay |
 | Element Web image the stack runs | default `…/element-web:sha-33a0c95@sha256:1761832069bd…` (CI build of main at 33a0c95) | `docker-compose.yml` (`ELEMENT_IMAGE_REF`) | Built here |
@@ -167,7 +167,7 @@ deployment is known to run a different version.
 | siwx-oidc | default `ghcr.io/inblockio/siwx-oidc:sha-40efae9@sha256:54739f4813bf…` (CI build of siwx-oidc main at 40efae9) | `docker-compose.yml` (`SIWX_OIDC_IMAGE_REF`) | First-party, built in [inblockio/siwx-oidc](https://github.com/inblockio/siwx-oidc) |
 | Redis | `8.10.2` (`redis:8.10.2@sha256:d5ac52db24d4…`) | `docker-compose.yml` (`REDIS_IMAGE_REF`) | Stock, run with `--appendonly yes` |
 | LiveKit server | `v1.13.7` (`livekit/livekit-server:v1.13.7@sha256:6fd3b7088874…`) | `docker-compose.yml` (`LIVEKIT_IMAGE_REF`) | Stock, configured by `config/livekit.yaml` (embedded TURN, off by default) |
-| lk-jwt-service | `0.7.0` (`ghcr.io/element-hq/lk-jwt-service:0.7.0@sha256:e0c7cecfa74e…`) | `docker-compose.yml` (`LK_JWT_IMAGE_REF`) | Stock, configured |
+| lk-jwt-service | upstream `v0.8.0` (commit `32522b7da188…`) plus `patches/lk-jwt/require-membership.patch`; default image `…/lk-jwt-service:main` until the first CI publish is pinned by digest | `dockerfiles/Dockerfile.lk-jwt` (`ARG LK_JWT_TAG`, `ARG LK_JWT_COMMIT`); `docker-compose.yml` (`LK_JWT_IMAGE_REF`) | **Patched**: 1 source patch. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service`, non-root (65532). A deployment that pins `LK_JWT_IMAGE_REF` to an upstream image runs that instead |
 | Caddy | `v2.11.4` (`caddy:2.11.4-builder@sha256:369218c81ca6…`, `caddy:2.11.4@sha256:0c994536bddb…`) | `dockerfiles/Dockerfile.caddy-l4` (builder and final `FROM`) | **Custom build** with xcaddy and the two modules below. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/caddy-l4` |
 | Caddy module `layer4` (mholt/caddy-l4) | `v0.1.2` | `dockerfiles/Dockerfile.caddy-l4` (`xcaddy build`) | Stock module (TURN-TLS SNI split on :443) |
 | Caddy module `rate_limit` (mholt/caddy-ratelimit) | commit `5625512f24f6` (upstream has no tag after `v0.1.0`) | `dockerfiles/Dockerfile.caddy-l4` (`xcaddy build`) | Stock module at a commit (edge rate limit for siwx-oidc `GET /resolve`) |
@@ -270,10 +270,12 @@ with `git apply`; the order is load-bearing. Registry:
     conformance vectors in [docs/copy-markdown](docs/copy-markdown/README.md)). FEATURE,
     upstreamable, not filed.
 
-**lk-jwt-service: 1 patch, built but not shipped yet.** Registry:
+**lk-jwt-service: 1 patch.** Registry:
 [`patches/lk-jwt/README.md`](patches/lk-jwt/README.md). Applied by
-`dockerfiles/Dockerfile.lk-jwt` with `git apply`. The image is not published and no
-compose file uses it yet (follow-up #40).
+`dockerfiles/Dockerfile.lk-jwt` with `git apply`; the image is published by CI and
+`docker-compose.yml` runs it with `LIVEKIT_REQUIRE_MEMBERSHIP=true`. It needs Synapse
+v1.162.0 or later and the application-service tokens `LK_JWT_AS_TOKEN`/`LK_JWT_HS_TOKEN`
+(`env.example`); without them lk-jwt-service refuses to start, by design.
 
 1. [`require-membership.patch`](patches/lk-jwt/require-membership.patch): opt-in
    `LIVEKIT_REQUIRE_MEMBERSHIP`. `/sfu/get`, `/get_token` and `/delegate_delayed_leave`
