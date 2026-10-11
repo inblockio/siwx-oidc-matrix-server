@@ -21,13 +21,22 @@
 # updates (9408-9410); roll back only once they have finished, see
 # patches/synapse/README.md "Rollback".
 #
+# Bumped to v1.162.0 (2026-10-11). Why: v1.162.0 ships MSC4502 (the membership
+# look-up `is_joined`, behind experimental_features.msc4502_enabled), which the
+# patched lk-jwt-service (patches/lk-jwt/README.md entry 1, issue #40) needs to
+# check that a caller is joined to the room before it hands out an SFU token.
+# The MSC4133 patch applies unchanged (`scripts/check-patch-hunks.py` and the
+# image build). The patch header still names the version it was forward-ported
+# to; see patches/synapse/README.md. Rollback to v1.161.0 stays schema-compatible
+# only after 1.162's background updates have finished, see "Rollback" there.
+#
 # Pinned by tag AND by the multi-arch index digest: the tag says which release,
 # the digest fixes the bytes (a re-pushed tag cannot change what we build on),
 # and it also fixes the Debian release the apt step below resolves against. A
 # bump changes both; resolve the digest with
 #   skopeo inspect --raw docker://docker.io/matrixdotorg/synapse:vX.Y.Z | sha256sum
 # and run the bump procedure in patches/synapse/README.md first.
-FROM matrixdotorg/synapse:v1.161.0@sha256:6b95dd129e35e97e8032cb759e5db4a516a5f7ef6c98d34d716fea1ae239b62a
+FROM matrixdotorg/synapse:v1.162.0@sha256:6b84a7bbac36f080b2d2e51e0289cf1b08b349598ea44a558df38d558f2c2311
 # yq, pinned by version and SHA-256 (was `.../releases/latest/download/...`,
 # which re-resolved to whatever was newest on every rebuild). Bump deliberately:
 # the version, the binary's checksum and the LICENSE's (below) change together.

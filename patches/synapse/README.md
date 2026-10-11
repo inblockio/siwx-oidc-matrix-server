@@ -27,7 +27,7 @@ The rules are the same as `patches/element-web/README.md`, and for the same reas
 
    ```bash
    # Fetch the two files at the new tag and dry-run every patch against them.
-   TAG=v1.161.0
+   TAG=v1.162.0
    d=$(mktemp -d); mkdir -p "$d/synapse/config" "$d/synapse/handlers"
    for f in config/experimental handlers/profile; do
      curl -sSf "https://raw.githubusercontent.com/element-hq/synapse/$TAG/synapse/$f.py" \
@@ -265,6 +265,15 @@ image whose build applies the patch with `--fuzz=0`, so a build that loses the
 patch produces no image at all. An image carrying the guard necessarily carries
 the patched Synapse. The only way to pair the two is to bind-mount the entrypoint
 into a stock image, which is exactly what the acceptance script does on purpose.
+
+**Bump to v1.162.0 (2026-10-11).** Reason: MSC4502 (`is_joined`, behind
+`experimental_features.msc4502_enabled`) for the patched lk-jwt-service. The patch is
+unchanged and applies with `--fuzz=0` to `config/experimental.py` (2 hunks) and
+`handlers/profile.py` (3 hunks); the patch header still names v1.161.0, the version it
+was last forward-ported to. `SCHEMA_VERSION` 94 and `SCHEMA_COMPAT_VERSION` 84 are the same
+at 1.161.0 and 1.162.0, and the two tags' `schema/main/delta/94/` listings are identical,
+so 1.162 queues no background update of its own and a rollback to 1.161.0 is
+schema-compatible without a check.
 
 **Rollback (1.161.0 to 1.159.0).** Schema-compatible: `SCHEMA_VERSION` 94 and
 `SCHEMA_COMPAT_VERSION` 84 at both tags. But 1.161 queues three background updates
