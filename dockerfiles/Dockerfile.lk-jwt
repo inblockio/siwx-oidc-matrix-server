@@ -4,9 +4,9 @@
 # stops applying fails the build instead of shipping silently. The build and
 # runtime stages follow upstream's own Dockerfile at the same commit.
 #
-# Not published yet: the image is not in the build-and-push matrix of
-# .github/workflows/docker.yml and no compose file uses it. That open gap is
-# tracked in inblockio/siwx-oidc-matrix-server#40.
+# Published by the build-and-push matrix of .github/workflows/docker.yml as
+# ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service (issue #40), so a
+# patch that stops applying fails CI, not only a local build.
 FROM docker.io/library/rust:1.95-alpine@sha256:e98196986adced5602f6e21c54babdbf2a8700400c7a78868324a3630e0c5d15 AS builder
 
 ARG LK_JWT_TAG=v0.8.0
@@ -39,6 +39,12 @@ COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 # (NOTICE states the patch's licence), plus upstream's AGPL text.
 COPY --chmod=0644 LICENSE NOTICE /usr/share/licenses/siwx-oidc-matrix-server/
 COPY --from=builder /proj/LICENSE /usr/share/licenses/lk-jwt-service/LICENSE
+
+# Non-root, numeric (a scratch image has no /etc/passwd to resolve a name in).
+# 65532 is the conventional "nonroot" id of distroless images. The service only
+# listens on :8080 and reads its registration file read-only, so it needs no
+# write access anywhere and no capability to bind a port above 1023.
+USER 65532:65532
 
 EXPOSE 8080
 

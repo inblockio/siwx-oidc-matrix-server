@@ -241,12 +241,15 @@ Upstream pull requests that a patch backports or mirrors:
 Container images
 ----------------
 
-The images built from this repository (synapse, element-web and
-caddy-l4) contain the upstream programs above and other third-party
+The images built from this repository (synapse, element-web, caddy-l4 and
+lk-jwt-service) contain the upstream programs above and other third-party
 software, each under its own license. The Caddy and yq binaries are
 statically linked Go programs that include Go modules by other authors;
-`go version -m <binary>` lists them. Every image carries this NOTICE
-and LICENSE in /usr/share/licenses/siwx-oidc-matrix-server/, and:
+`go version -m <binary>` lists them. The lk-jwt-service binary is a
+statically linked Rust program that includes crates by other authors; the
+Cargo.lock of lk-jwt-service at the pinned tag names them. Every image
+carries this NOTICE and LICENSE in /usr/share/licenses/siwx-oidc-matrix-server/,
+and:
 
     synapse       /usr/share/licenses/yq/LICENSE. Its Debian base lists
                   its packages' licenses in /usr/share/doc/*/copyright.
@@ -254,6 +257,14 @@ and LICENSE in /usr/share/licenses/siwx-oidc-matrix-server/, and:
                   LICENSE-AGPL-3.0 and LICENSE-GPL-3.0, from the upstream
                   checkout) and /usr/share/licenses/alpine/.
     caddy-l4      /usr/share/licenses/alpine/.
+    lk-jwt-service  /usr/share/licenses/lk-jwt-service/LICENSE (upstream's
+                  AGPL-3.0 text). The image is built FROM scratch: besides
+                  the two binaries (lk-jwt-service and its healthcheck) it
+                  holds only the CA certificate bundle of the Alpine build
+                  stage (derived from the Mozilla CA list, MPL-2.0) and the
+                  files named here. The image label states AGPL-3.0-only
+                  (the program and our patch) and Apache-2.0 (our Dockerfile,
+                  LICENSE and NOTICE).
 
 Corresponding source. The source of an image is the upstream release its
 Dockerfile pins plus this repository's patches/, dockerfiles/ and the
