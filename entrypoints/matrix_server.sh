@@ -449,10 +449,12 @@ apply_matrixrtc_config() {
 # USERS NAMESPACE. lk-jwt's delayed-event handling (upstream PR #240) restarts
 # and sends a user's delayed leave event as that user, which an application
 # service may only do for users in its `users` namespace. The namespace is
-# `.*` and non-exclusive, so it covers every local user without reserving any
-# name. Consequence to know about: the AS token is therefore a credential that
-# can act as ANY local user. Treat LK_JWT_AS_TOKEN like an admin secret; do not
-# log it and rotate it by changing both values and restarting both services.
+# every LOCAL user (`^@[^:]+:<server_name>$`, the server_name read back from
+# homeserver.yaml) and non-exclusive, so it reserves no name and leaves remote
+# users' events out of the service's interest. Consequence to know about: the
+# AS token is therefore a credential that can act as ANY local user. Treat
+# LK_JWT_AS_TOKEN like an admin secret; do not log it and rotate it by changing
+# both values and restarting both services.
 # The uid:gid Synapse's /start.py runs as, mirroring its main(): a numeric UID
 # in the container env, with GID defaulting to 991; without one, 991:991 when
 # root, else the current user (start.py then changes no ids, and prints
@@ -472,31 +474,49 @@ synapse_runtime_ids() {
   echo "${u}:${g}"
 }
 
+lk_jwt_refuse() {
+  echo "ERROR: lk-jwt AS registration: $1 Refusing to start Synapse." >&2
+  exit 1
+}
+
 apply_lk_jwt_membership() {
   local reg=/data/lk-jwt-as.yaml
 
-  yq -i ".experimental_features.msc4502_enabled = true" /data/homeserver.yaml
+  # A failed write to homeserver.yaml stops the boot here, as the guest policy's
+  # writes do: the file is then in a state nobody checked.
+  yq -i ".experimental_features.msc4502_enabled = true" /data/homeserver.yaml \
+    || lk_jwt_refuse "could not set msc4502_enabled in /data/homeserver.yaml."
   # Our entry is always removed first and re-added when configured, so the list
   # never holds it twice and another registration in it is left alone.
-  yq -i "(.app_service_config_files // []) as \$l | .app_service_config_files = (\$l - [\"${reg}\"])" /data/homeserver.yaml
+  yq -i "(.app_service_config_files // []) as \$l | .app_service_config_files = (\$l - [\"${reg}\"])" /data/homeserver.yaml \
+    || lk_jwt_refuse "could not remove the old entry from app_service_config_files."
 
   # Not configured is a supported state, not an error: a deployment whose env
   # predates these variables must keep starting exactly as before (a merge to
   # main auto-deploys to dev-staging). Only the lk-jwt membership check is lost,
   # and the patched lk-jwt-service itself refuses to start without a registration.
   # A half-set or malformed pair is treated the same way, never as a crash.
-  local ok=1 t
+  local ok=1 t sn_re
   for t in "${LK_JWT_AS_TOKEN:-}" "${LK_JWT_HS_TOKEN:-}"; do
     # Strict charset, because the value is written into YAML.
     [[ "$t" =~ ^[A-Za-z0-9_-]{32,}$ ]] || ok=0
   done
   [ "${LK_JWT_AS_TOKEN:-}" != "${LK_JWT_HS_TOKEN:-}" ] || ok=0
+  # The users namespace is built from the server_name on disk; its charset is
+  # checked too, because it is written into YAML and into a regex.
+  local sn
+  sn=$(yq '.server_name' /data/homeserver.yaml 2>/dev/null)
+  if ! [[ "$sn" =~ ^[A-Za-z0-9.:-]+$ ]]; then
+    echo "lk-jwt AS registration: the server_name in /data/homeserver.yaml is missing or has characters outside [A-Za-z0-9.:-]" >&2
+    ok=0
+  fi
   if [ "$ok" != 1 ]; then
     rm -f "$reg"
     echo "lk-jwt AS registration not configured; MSC4502 membership checks unavailable (LK_JWT_AS_TOKEN and LK_JWT_HS_TOKEN must be two different values of 32+ characters [A-Za-z0-9_-], see env.example)" >&2
     return 0
   fi
 
+  sn_re=${sn//./\\.}
   # Written next to homeserver.yaml, mode 600: the tokens are secrets, and the
   # process that reads this file is Synapse.
   ( umask 077
@@ -509,11 +529,11 @@ url: null
 namespaces:
   users:
     - exclusive: false
-      regex: ".*"
+      regex: '^@[^:]+:${sn_re}$'
 io.element.msc4502.scopes:
   - "urn:matrix:client:io.element.msc4502:rooms:is_joined"
 LKJWT_AS_EOF
-  )
+  ) || lk_jwt_refuse "could not write ${reg}."
   # Owned by the ids /start.py drops to ($UID:$GID, default 991:991), never by
   # homeserver.yaml's owner: that file is 0644, so Synapse reads it whoever owns
   # it, and on dev-staging it was uid 1000, which left this 0600 file unreadable
@@ -526,7 +546,11 @@ LKJWT_AS_EOF
     chown "$ids" "$reg" 2>/dev/null \
       || echo "ERROR: could not chown ${reg} to ${ids}; Synapse will not be able to read it" >&2
   fi
-  yq -i ".app_service_config_files += [\"${reg}\"]" /data/homeserver.yaml
+  yq -i ".app_service_config_files += [\"${reg}\"]" /data/homeserver.yaml \
+    || lk_jwt_refuse "could not add ${reg} to app_service_config_files."
+  # Re-read what is ON DISK, as the other gates do.
+  [ "$(yq "[(.app_service_config_files // [])[] | select(. == \"${reg}\")] | length" /data/homeserver.yaml 2>/dev/null)" = "1" ] \
+    || lk_jwt_refuse "${reg} is not listed once in app_service_config_files after writing it."
 }
 
 # -----------------------------------------------------------------------------

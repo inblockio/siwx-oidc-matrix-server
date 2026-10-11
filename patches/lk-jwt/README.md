@@ -38,8 +38,10 @@ uses it with `LIVEKIT_REQUIRE_MEMBERSHIP=true` and the application-service token
 `experimental_features.msc4502_enabled` and renders the registration from the same two
 variables (`entrypoints/matrix_server.sh`, `apply_lk_jwt_membership`). The registration
 carries the scope `urn:matrix:client:io.element.msc4502:rooms:is_joined` and a non-exclusive
-`users` namespace `.*`, which lk-jwt's delayed-event handling needs; that namespace makes the
-AS token a credential that can act as any local user. A deployment that pins
+`users` namespace of every local user (`^@[^:]+:<server_name>$`), which lk-jwt's
+delayed-event handling needs; that namespace makes the AS token a credential that can act as
+any local user. A failed write of the registration or its `app_service_config_files` entry
+stops Synapse from starting. A deployment that pins
 `LK_JWT_IMAGE_REF` to an upstream image keeps running unpatched upstream until it changes
 that pin.
 
