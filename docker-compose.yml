@@ -273,7 +273,8 @@ services:
     # externally instead.
     # Still disabled HERE on purpose (2026-09-25): prod's .env pins 0.5.0, and
     # this file must not start health-gating an image it was never verified
-    # against. Re-enable together with the prod 0.7.0 promotion.
+    # against. Re-enable only after /healthz of the default image (v0.8.0 plus
+    # the membership patch) is verified on a deployment.
     healthcheck:
       disable: true
     depends_on:
