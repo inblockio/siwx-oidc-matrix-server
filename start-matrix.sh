@@ -257,11 +257,13 @@ else
   echo "LIVEKIT_SECRET=$LIVEKIT_SECRET" >> .env
 
   # lk-jwt-service application-service registration (membership check):
-  # matrix_server.sh renders it for Synapse, lk-jwt reads the same two values.
+  # matrix_server.sh renders it for Synapse, lk-jwt reads the same two values
+  # plus the server name (all three set, or none).
   echo "" >> .env
   echo "#LK-JWT-AS-CONFIG" >> .env
   echo "LK_JWT_AS_TOKEN=$(openssl rand -hex 32)" >> .env
   echo "LK_JWT_HS_TOKEN=$(openssl rand -hex 32)" >> .env
+  echo "LK_JWT_HS_SERVER_NAME=$MATRIX_HOST" >> .env
 
   startupServer
 

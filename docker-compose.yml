@@ -199,9 +199,11 @@ services:
     # built here by dockerfiles/Dockerfile.lk-jwt (upstream v0.8.0 plus
     # patches/lk-jwt/require-membership.patch, element-hq/lk-jwt-service#250),
     # published by CI next to the synapse and element-web images (issue #40).
-    # TODO(pin): the default is the moving `:main` tag only because the image
-    # has not been published yet, so no digest exists. After the first CI build
-    # replace it with `:sha-<commit>@sha256:<digest>`, like SYNAPSE_IMAGE_REF.
+    # TODO(pin): the default stays upstream 0.7.0 until the first CI publish of
+    # this image gives a digest. Then ONE commit moves this default to
+    # `:sha-<commit>@sha256:<digest>` TOGETHER with SYNAPSE_IMAGE_REF's default
+    # (the 1.162.0 build with msc4502_enabled): the P1 image against a Synapse
+    # without MSC4502 refuses every call token.
     # A deployment whose .env pins LK_JWT_IMAGE_REF to an upstream image (the
     # maintainers' dev/prod do) keeps running that image until it changes the
     # pin; upstream images ignore LIVEKIT_REQUIRE_MEMBERSHIP, so the setting
@@ -209,7 +211,7 @@ services:
     # Behaviour change since 0.7.0 (#222) still applies: only
     # LIVEKIT_FULL_ACCESS_HOMESERVERS users and local users may publish;
     # federated users get subscribe-only tokens.
-    image: ${LK_JWT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service:main}
+    image: ${LK_JWT_IMAGE_REF:-ghcr.io/element-hq/lk-jwt-service:0.7.0@sha256:e0c7cecfa74e2342a3e79d47e1d4ab4bd228fe05b1a4dc4ba7f807686b0c214b}
     restart: unless-stopped
     environment:
       # MUST stay the PUBLIC wss:// URL — do not "fix" it to http://livekit:7880.
@@ -240,15 +242,18 @@ services:
       # README.md entry 1): without it any OpenID holder gets a token for ANY
       # room. Fail closed: with the flag on and no application-service
       # configuration this container REFUSES TO START (one log line naming the
-      # missing variables), by design. Add LK_JWT_AS_TOKEN and LK_JWT_HS_TOKEN
+      # missing variables), by design. Add LK_JWT_AS_TOKEN, LK_JWT_HS_TOKEN and LK_JWT_HS_SERVER_NAME
       # to .env (env.example says how); the same two values reach Synapse
       # through env_file, where matrix_server.sh renders the registration.
       LIVEKIT_REQUIRE_MEMBERSHIP: "true"
       # Empty defaults only so the file still parses on an .env that predates
-      # them; lk-jwt then refuses to start, Synapse is unaffected.
+      # them; the patched image then refuses to start, Synapse is unaffected.
+      # All three are set together or left empty: lk-jwt (upstream too) exits
+      # at startup when only some are set, so the server name has its own
+      # variable instead of reusing MATRIX_HOST.
       LIVEKIT_AS_TOKEN: "${LK_JWT_AS_TOKEN:-}"
       LIVEKIT_HS_TOKEN: "${LK_JWT_HS_TOKEN:-}"
-      LIVEKIT_HS_SERVER_NAME: "${MATRIX_HOST}"
+      LIVEKIT_HS_SERVER_NAME: "${LK_JWT_HS_SERVER_NAME:-}"
       # The membership look-up carries the AS token, which can act as any local
       # user (see matrix_server.sh): send it to Synapse inside the compose
       # network, never out through the public edge.
