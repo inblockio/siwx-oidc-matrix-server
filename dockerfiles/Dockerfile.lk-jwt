@@ -35,6 +35,10 @@ FROM scratch
 COPY --from=builder /lk-jwt-service /lk-jwt-service
 COPY --from=builder /lk-jwt-service-healthcheck /lk-jwt-service-healthcheck
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+# Like the other images of this repository, it carries our LICENSE and NOTICE
+# (NOTICE states the patch's licence), plus upstream's AGPL text.
+COPY --chmod=0644 LICENSE NOTICE /usr/share/licenses/siwx-oidc-matrix-server/
+COPY --from=builder /proj/LICENSE /usr/share/licenses/lk-jwt-service/LICENSE
 
 EXPOSE 8080
 
