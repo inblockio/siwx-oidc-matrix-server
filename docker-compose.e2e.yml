@@ -115,10 +115,13 @@ services:
       - siwx-e2eh-net
 
   siwx-e2eh-lk-jwt:
-    # Digest-pinned 0.6.0, the version this harness was last verified with (it
-    # disables 0.6.0's broken healthcheck below). docker-compose.yml defaults to
-    # 0.7.0, so this is NOT that binary; moving it is a harness change of its own.
-    image: ${LK_JWT_IMAGE_REF:-ghcr.io/element-hq/lk-jwt-service:0.6.0@sha256:822f0c03a3bdd924da92afc2e8ec59de5dda17af42d32e71e11f269c3517abf7}
+    # The lk-jwt-service image this repository publishes (upstream v0.8.0 plus
+    # patches/lk-jwt/), as in docker-compose.yml. The harness registers no
+    # application service with its Synapse, so LIVEKIT_REQUIRE_MEMBERSHIP stays
+    # off here and the image behaves like upstream. TODO(pin): `:main` until the
+    # first CI publish, then `:sha-<commit>@sha256:<digest>`. The healthcheck
+    # note below is from 0.6.0 and is kept until the harness is re-verified.
+    image: ${LK_JWT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service:main}
     container_name: siwx-e2eh-lk-jwt
     restart: unless-stopped
     environment:

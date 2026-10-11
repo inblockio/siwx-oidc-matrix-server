@@ -16,9 +16,13 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${REPO_ROOT}/.env.e2e"
 NET="siwx-e2eh-net"
 
-# Same env-overridable digest pin as docker-compose.e2e.yml (0.6.0; see the
-# note there on why it is not docker-compose.yml's 0.7.0).
-LK_JWT_IMAGE_REF="${LK_JWT_IMAGE_REF:-ghcr.io/element-hq/lk-jwt-service:0.6.0@sha256:822f0c03a3bdd924da92afc2e8ec59de5dda17af42d32e71e11f269c3517abf7}"
+# Same env-overridable ref as docker-compose.e2e.yml: the lk-jwt-service image
+# this repository publishes (upstream v0.8.0 + patches/lk-jwt/). The harness
+# registers no application service with its Synapse, so it leaves
+# LIVEKIT_REQUIRE_MEMBERSHIP off and the image behaves like upstream here.
+# TODO(pin): `:main` until the first CI publish; then a
+# `:sha-<commit>@sha256:<digest>` ref.
+LK_JWT_IMAGE_REF="${LK_JWT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service:main}"
 
 # siwx-oidc + Synapse image refs. Both are DERIVED from source and built on
 # demand by e2e-harness/images.sh (see its header for the scheme and why the

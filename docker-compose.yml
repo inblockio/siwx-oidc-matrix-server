@@ -188,15 +188,22 @@ services:
       - default
 
   lk-jwt-service:
-    # LK_JWT_IMAGE_REF: env-overridable digest-pinned ref, same pattern as
-    # REDIS_IMAGE_REF above. Default (2026-09-25) = lk-jwt-service 0.7.0 (Rust
-    # rewrite; GHCR index digest), the version TESTED on dev-staging. PROD
-    # DOES NOT RUN THIS: it runs 0.5.0, pinned via LK_JWT_IMAGE_REF in its .env.
-    # 0.7.0 behaviour change (#222): only LIVEKIT_FULL_ACCESS_HOMESERVERS users
-    # and local users may publish; federated users get subscribe-only tokens.
-    # When prod is promoted to 0.7.0, re-enable the healthcheck below with
-    # test ["CMD", "/lk-jwt-service-healthcheck"] (0.7.0's helper works, #215).
-    image: ${LK_JWT_IMAGE_REF:-ghcr.io/element-hq/lk-jwt-service:0.7.0@sha256:e0c7cecfa74e2342a3e79d47e1d4ab4bd228fe05b1a4dc4ba7f807686b0c214b}
+    # LK_JWT_IMAGE_REF: env-overridable full image ref, same pattern as
+    # REDIS_IMAGE_REF above. Default (2026-10-11) = the lk-jwt-service image
+    # built here by dockerfiles/Dockerfile.lk-jwt (upstream v0.8.0 plus
+    # patches/lk-jwt/require-membership.patch, element-hq/lk-jwt-service#250),
+    # published by CI next to the synapse and element-web images (issue #40).
+    # TODO(pin): the default is the moving `:main` tag only because the image
+    # has not been published yet, so no digest exists. After the first CI build
+    # replace it with `:sha-<commit>@sha256:<digest>`, like SYNAPSE_IMAGE_REF.
+    # A deployment whose .env pins LK_JWT_IMAGE_REF to an upstream image (the
+    # maintainers' dev/prod do) keeps running that image until it changes the
+    # pin; upstream images ignore LIVEKIT_REQUIRE_MEMBERSHIP, so the setting
+    # below is inert there.
+    # Behaviour change since 0.7.0 (#222) still applies: only
+    # LIVEKIT_FULL_ACCESS_HOMESERVERS users and local users may publish;
+    # federated users get subscribe-only tokens.
+    image: ${LK_JWT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service:main}
     restart: unless-stopped
     environment:
       # MUST stay the PUBLIC wss:// URL — do not "fix" it to http://livekit:7880.
@@ -223,6 +230,23 @@ services:
       # ANY federated homeserver. Startup echoes the parsed value, so the
       # deployed setting is checkable in the logs.
       LIVEKIT_FULL_ACCESS_HOMESERVERS: "${MATRIX_HOST}"
+      # Membership is checked before an SFU token is issued (patches/lk-jwt/
+      # README.md entry 1): without it any OpenID holder gets a token for ANY
+      # room. Fail closed: with the flag on and no application-service
+      # configuration this container REFUSES TO START (one log line naming the
+      # missing variables), by design. Add LK_JWT_AS_TOKEN and LK_JWT_HS_TOKEN
+      # to .env (env.example says how); the same two values reach Synapse
+      # through env_file, where matrix_server.sh renders the registration.
+      LIVEKIT_REQUIRE_MEMBERSHIP: "true"
+      # Empty defaults only so the file still parses on an .env that predates
+      # them; lk-jwt then refuses to start, Synapse is unaffected.
+      LIVEKIT_AS_TOKEN: "${LK_JWT_AS_TOKEN:-}"
+      LIVEKIT_HS_TOKEN: "${LK_JWT_HS_TOKEN:-}"
+      LIVEKIT_HS_SERVER_NAME: "${MATRIX_HOST}"
+      # The membership look-up carries the AS token, which can act as any local
+      # user (see matrix_server.sh): send it to Synapse inside the compose
+      # network, never out through the public edge.
+      LIVEKIT_CS_API_URL_OVERRIDES: "${MATRIX_HOST}=http://matrix_synapse:${MATRIX_PORT}"
     # lk-jwt 0.6.0 ships an image-level HEALTHCHECK that is unconditionally
     # broken: /lk-jwt-service-healthcheck builds its URL as
     # "http://localhost:" + LIVEKIT_JWT_BIND, so our (and upstream's own)
