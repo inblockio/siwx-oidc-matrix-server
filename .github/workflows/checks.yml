@@ -12,6 +12,10 @@
 # Deliberately NO `paths-ignore: ['**.md']`: the patch registries are markdown,
 # and a registry-only edit is exactly what check-patch-registry.sh must see.
 #
+# `lk-jwt-membership-accept` needs network for one thing only: it downloads the
+# pinned mikefarah yq (the entrypoint's own yq), verified by SHA-256, the same
+# version and digest as dockerfiles/Dockerfile. No container runtime, no secrets.
+#
 # Not run here: scripts/check-did-localpart-vectors.sh. It compares against
 # siwx-oidc's fixture fetched over the network with `gh api`, so its result
 # depends on another repository's main, not on the pull request.
@@ -67,3 +71,31 @@ jobs:
 
       - name: Tests carried by the patches, on the patched tag tree
         run: docker build --progress=plain --target patch-tests -f dockerfiles/Dockerfile.element .
+
+  # scripts/lk-jwt-membership-accept.sh extracts apply_lk_jwt_membership from the
+  # entrypoint and runs it against fixture homeserver.yaml files: idempotency, the
+  # users-namespace regex, and every refusal path.
+  lk-jwt-membership-accept:
+    name: lk-jwt membership accept
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      # Pinned by commit, not by a movable tag; the comment names the release.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Same version and SHA-256 as the `yq` download in dockerfiles/Dockerfile;
+      # bump them together. The runner image's own yq is not mikefarah v4.
+      - name: Install pinned yq v4
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.53.3/yq_linux_amd64 -o "$RUNNER_TEMP/bin/yq"
+          echo "fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4  $RUNNER_TEMP/bin/yq" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/bin/yq"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: apply_lk_jwt_membership acceptance cases
+        env:
+          SIWX_ACCEPT_SCRATCH: ${{ runner.temp }}/lk-jwt-accept
+        run: scripts/lk-jwt-membership-accept.sh
