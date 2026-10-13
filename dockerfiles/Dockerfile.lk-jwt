@@ -9,8 +9,8 @@
 # patch that stops applying fails CI, not only a local build.
 FROM docker.io/library/rust:1.95-alpine@sha256:e98196986adced5602f6e21c54babdbf2a8700400c7a78868324a3630e0c5d15 AS builder
 
-ARG LK_JWT_TAG=v0.8.0
-ARG LK_JWT_COMMIT=32522b7da1889a3dafefeb1c527e86b76f19d2c3
+ARG LK_JWT_TAG=v0.9.0
+ARG LK_JWT_COMMIT=0e176b1eca44e67b11484d0bdf56999807bf2b8e
 
 # git for the fetch and the apply; musl-dev, cmake, make, gcc, g++, perl and
 # linux-headers for the vendored aws-lc-sys and ring C code (as upstream).
@@ -23,9 +23,8 @@ RUN git init -q . \
     && test "$(git rev-parse FETCH_HEAD^{commit})" = "${LK_JWT_COMMIT}" \
     && git checkout -q "${LK_JWT_COMMIT}"
 
-COPY patches/lk-jwt/require-membership.patch patches/lk-jwt/restrict-screen-share.patch /tmp/
-RUN git apply --verbose /tmp/require-membership.patch \
-    && git apply --verbose /tmp/restrict-screen-share.patch
+COPY patches/lk-jwt/restrict-screen-share.patch /tmp/
+RUN git apply --verbose /tmp/restrict-screen-share.patch
 
 RUN cargo build -p lk-jwt-service --release --locked \
     && cp target/release/lk-jwt-service /lk-jwt-service \

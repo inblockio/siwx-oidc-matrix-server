@@ -18,7 +18,7 @@ adds is licensed as stated below. The registries patches/synapse/README.md,
 patches/element-web/README.md and patches/lk-jwt/README.md are this
 project's own documentation
 and fall under the Apache License. The upstream licenses below were read
-from Synapse v1.162.0, Element Web v1.12.29 and lk-jwt-service v0.8.0.
+from Synapse v1.162.0, Element Web v1.12.29 and lk-jwt-service v0.9.0.
 
 patches/synapse/msc4133-profile-field-write-policy.patch
     AGPL-3.0-or-later. It changes synapse/config/experimental.py and
@@ -33,12 +33,11 @@ patches/synapse/tests/test_msc4133_write_policy.py
     whose notice (Copyright 2014-2016 OpenMarket Ltd, Copyright (C) 2023 New
     Vector, Ltd) its header reproduces.
 
-patches/lk-jwt/require-membership.patch
-    AGPL-3.0-only. The files it changes carry "SPDX-License-Identifier:
+patches/lk-jwt/restrict-screen-share.patch
+    AGPL-3.0-only. The files it changes or adds carry "SPDX-License-Identifier:
     AGPL-3.0-only OR LicenseRef-Element-Commercial" (the crate declares
     AGPL-3.0-only). The commercial option is Element's alone to grant, so
-    the changes are licensed AGPL-3.0-only. It mirrors
-    https://github.com/element-hq/lk-jwt-service/pull/250.
+    the changes are licensed AGPL-3.0-only.
 
 patches/element-web/*.patch
     Almost every existing file these patches change carries
@@ -234,8 +233,6 @@ Upstream pull requests that a patch backports or mirrors:
         https://github.com/element-hq/element-web/pull/34718
     patches/element-web/sw-versions-no-cache-on-error.patch
         https://github.com/element-hq/element-web/pull/35242
-    patches/lk-jwt/require-membership.patch
-        https://github.com/element-hq/lk-jwt-service/pull/250
 
 
 Container images
