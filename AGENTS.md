@@ -234,8 +234,8 @@ Guides and scripts here must not contradict it:
   authorization service to be reached through the C-S API. lk-jwt-service's registration
   (`apply_lk_jwt_membership`) exists only for the MSC4502 membership look-up and has
   `url: null`.
-- **lk-jwt-service fails closed.** `LIVEKIT_REQUIRE_MEMBERSHIP=true` with no
-  `LK_JWT_AS_TOKEN`/`LK_JWT_HS_TOKEN` makes it refuse to start; Synapse still starts
+- **lk-jwt-service fails closed.** Compose always sets `LIVEKIT_HS_SERVER_NAME` (from
+  `MATRIX_HOST`), so without `LK_JWT_AS_TOKEN`/`LK_JWT_HS_TOKEN` it refuses to start; Synapse still starts
   without them (it logs `lk-jwt AS registration not configured`). The tokens come from
   `.env`, never from a committed file, and `LK_JWT_AS_TOKEN` can act as any local user.
 - **Embedded TURN needs the `caddy-l4` edge.** `config/livekit.yaml` ships with TURN off

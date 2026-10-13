@@ -167,7 +167,7 @@ deployment is known to run a different version.
 | siwx-oidc | default `ghcr.io/inblockio/siwx-oidc:sha-40efae9@sha256:54739f4813bf…` (CI build of siwx-oidc main at 40efae9) | `docker-compose.yml` (`SIWX_OIDC_IMAGE_REF`) | First-party, built in [inblockio/siwx-oidc](https://github.com/inblockio/siwx-oidc) |
 | Redis | `8.10.2` (`redis:8.10.2@sha256:d5ac52db24d4…`) | `docker-compose.yml` (`REDIS_IMAGE_REF`) | Stock, run with `--appendonly yes` |
 | LiveKit server | `v1.13.7` (`livekit/livekit-server:v1.13.7@sha256:6fd3b7088874…`) | `docker-compose.yml` (`LIVEKIT_IMAGE_REF`) | Stock, configured by `config/livekit.yaml` (embedded TURN, off by default) |
-| lk-jwt-service | upstream `v0.8.0` (commit `32522b7da188…`) plus `patches/lk-jwt/require-membership.patch`; default image `…/lk-jwt-service:sha-70b897e@sha256:ce73f33824dc…` (CI build of main at 70b897e) | `dockerfiles/Dockerfile.lk-jwt` (`ARG LK_JWT_TAG`, `ARG LK_JWT_COMMIT`); `docker-compose.yml` (`LK_JWT_IMAGE_REF`) | **Patched**: 1 source patch. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service`, non-root (65532). A deployment that pins `LK_JWT_IMAGE_REF` to an upstream image runs that instead |
+| lk-jwt-service | upstream `v0.9.0` (commit `0e176b1eca44…`) plus `patches/lk-jwt/restrict-screen-share.patch`; default image `…/lk-jwt-service:sha-70b897e@sha256:ce73f33824dc…` (CI build of main at 70b897e: v0.8.0 plus the retired `require-membership.patch`) | `dockerfiles/Dockerfile.lk-jwt` (`ARG LK_JWT_TAG`, `ARG LK_JWT_COMMIT`); `docker-compose.yml` (`LK_JWT_IMAGE_REF`) | **Patched**: 1 source patch. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service`, non-root (65532). A deployment that pins `LK_JWT_IMAGE_REF` to an upstream image runs that instead |
 | Caddy | `v2.11.4` (`caddy:2.11.4-builder@sha256:369218c81ca6…`, `caddy:2.11.4@sha256:0c994536bddb…`) | `dockerfiles/Dockerfile.caddy-l4` (builder and final `FROM`) | **Custom build** with xcaddy and the two modules below. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/caddy-l4` |
 | Caddy module `layer4` (mholt/caddy-l4) | `v0.1.2` | `dockerfiles/Dockerfile.caddy-l4` (`xcaddy build`) | Stock module (TURN-TLS SNI split on :443) |
 | Caddy module `rate_limit` (mholt/caddy-ratelimit) | commit `5625512f24f6` (upstream has no tag after `v0.1.0`) | `dockerfiles/Dockerfile.caddy-l4` (`xcaddy build`) | Stock module at a commit (edge rate limit for siwx-oidc `GET /resolve`) |
@@ -272,15 +272,17 @@ with `git apply`; the order is load-bearing. Registry:
 
 **lk-jwt-service: 1 patch.** Registry:
 [`patches/lk-jwt/README.md`](patches/lk-jwt/README.md). Applied by
-`dockerfiles/Dockerfile.lk-jwt` with `git apply`; the image is published by CI and
-`docker-compose.yml` runs it with `LIVEKIT_REQUIRE_MEMBERSHIP=true`. It needs Synapse
-v1.162.0 or later and the application-service tokens `LK_JWT_AS_TOKEN`/`LK_JWT_HS_TOKEN`
-(`env.example`); without them lk-jwt-service refuses to start, by design.
+`dockerfiles/Dockerfile.lk-jwt` with `git apply`; the image is published by CI. The
+room-membership check is upstream's since v0.9.0 (element-hq/lk-jwt-service#250, our
+former entry 1): it is on because lk-jwt runs as an application service and
+`docker-compose.yml` sets `LIVEKIT_FULL_ACCESS_HOMESERVERS` and `LIVEKIT_HS_SERVER_NAME` both
+from `MATRIX_HOST`. It needs Synapse v1.162.0 or later and the application-service tokens
+`LK_JWT_AS_TOKEN`/`LK_JWT_HS_TOKEN` (`env.example`); without them lk-jwt-service refuses to
+start, by design.
 
-1. [`require-membership.patch`](patches/lk-jwt/require-membership.patch): opt-in
-   `LIVEKIT_REQUIRE_MEMBERSHIP`. `/sfu/get`, `/get_token` and `/delegate_delayed_leave`
-   refuse an SFU token to a user who is not joined to the room (MSC4502 `is_joined`).
-   UPSTREAM-TRACKED (element-hq/lk-jwt-service#250).
+2. [`restrict-screen-share.patch`](patches/lk-jwt/restrict-screen-share.patch): opt-in
+   `LIVEKIT_RESTRICT_SCREEN_SHARE`. Callers below the room's kick level get tokens that
+   publish camera and microphone only. POLICY.
 
 Element Web also carries runtime deltas that are not `.patch` files: nginx caching
 and security headers, the service-worker boot shim, a per-build `sw.js` stamp, the

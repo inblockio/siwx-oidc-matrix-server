@@ -427,8 +427,8 @@ apply_matrixrtc_config() {
 # registration. Always-run, like the other apply_* functions, so a deployment
 # whose /data/homeserver.yaml predates this block converges on its next boot.
 #
-# WHY. The patched lk-jwt-service (patches/lk-jwt/README.md entry 1,
-# LIVEKIT_REQUIRE_MEMBERSHIP=true) asks Synapse "is this user joined to this
+# WHY. lk-jwt-service (upstream v0.9.0, element-hq/lk-jwt-service#250; formerly
+# patches/lk-jwt/README.md entry 1) asks Synapse "is this user joined to this
 # room?" through MSC4502, authenticated with an application-service token,
 # before it hands out an SFU token. Synapse ships MSC4502 from v1.162.0 behind
 # experimental_features.msc4502_enabled. Older Synapse ignores an unknown
