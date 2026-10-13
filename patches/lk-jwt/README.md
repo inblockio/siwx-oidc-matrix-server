@@ -108,16 +108,52 @@ delivery; the table, and the disk it sits on, grow without bound until that is f
 
   `cargo test --locked` is green for `-p lk-jwt-service` and
   `-p lk-jwt-service-integration-tests`.
-- **Upstream status:** UPSTREAM-TRACKED as
-  [element-hq/lk-jwt-service#250](https://github.com/element-hq/lk-jwt-service/pull/250),
-  opened 2026-10-11 from `FantasticoFox:require-membership`, rebased on upstream main.
-  Its added and removed lines are identical to this patch (no drift on 2026-10-11).
-  - A push to #250 must update this patch in the same change, and the other way round.
+- **Upstream status:** MERGED UPSTREAM, UNRELEASED (2026-10-13).
+  [element-hq/lk-jwt-service#250](https://github.com/element-hq/lk-jwt-service/pull/250)
+  (opened 2026-10-11 from `FantasticoFox:require-membership`) was merged into upstream `main`
+  on 2026-10-13 by Johennes as squash commit
+  `0e176b1eca44e67b11484d0bdf56999807bf2b8e`. The latest release, v0.8.0 (2026-10-08), does
+  not contain it (compare `v0.8.0...0e176b1e` is `ahead` by 2). The patch stays until the
+  first release tag that contains `0e176b1e`.
+  - **The merged code differs from this patch.** Johennes reworked it before landing, so
+    the bump procedure's "entry 1: no drift" check now reports drift by design, and this
+    patch no longer applies on top of `0e176b1e`. Differences:
+    - **No `LIVEKIT_REQUIRE_MEMBERSHIP`.** Upstream has no flag. The check turns on
+      automatically when the service is configured as an application service **and**
+      `LIVEKIT_FULL_ACCESS_HOMESERVERS` is exactly one entry equal to
+      `LIVEKIT_HS_SERVER_NAME` (`verifies_legacy_membership` in `src/handler.rs`). With
+      several full-access homeservers or `*` it is off.
+    - **No refusal to start.** Where this patch refuses to start with the flag on and no
+      application-service configuration, upstream starts and logs a `warn` ("... do not
+      verify room membership ...") at startup. A misconfiguration therefore fails open,
+      not closed; startup logs `info` "... verify room membership through the homeserver"
+      when the check is active.
+    - **Kept:** `/sfu/get`, `/get_token` and `/delegate_delayed_leave` check MSC4502
+      `is_joined` against the configured `hs_server_name` (never the OpenID token's
+      server) with the AS token; a homeserver resolution failure is 502 `M_UNKNOWN`. The
+      proxied `delegate_delayed_leave` now always requires membership.
   - The related upstream PR #235 (periodic re-check and SFU kick) complements this patch
     rather than replacing it.
-- **Retirement:** when a release that contains #250, or an equivalent standalone-endpoint
-  membership check, is pinned in `dockerfiles/Dockerfile.lk-jwt`, or when the compose
-  files move to that upstream image.
+- **Retirement:** when `dockerfiles/Dockerfile.lk-jwt` pins a release tag that contains
+  `0e176b1e`, or when the compose files move to that upstream image. Detect the release
+  with `gh api repos/element-hq/lk-jwt-service/compare/<tag>...0e176b1eca44e67b11484d0bdf56999807bf2b8e --jq .status`
+  (`behind` or `identical` means the tag contains it), or `git tag --contains 0e176b1e` in
+  a full clone. Drop checklist:
+  1. Bump `LK_JWT_TAG`/`LK_JWT_COMMIT` to that release.
+  2. Map the config: delete `LIVEKIT_REQUIRE_MEMBERSHIP` from `docker-compose.yml` and
+     from the aqua-meet stacks (`stack/up.sh`, `tools/fps-lab.sh`; upstream ignores it).
+     Confirm every deployment sets `LIVEKIT_FULL_ACCESS_HOMESERVERS` to the single
+     homeserver and that it is byte-equal to `LIVEKIT_HS_SERVER_NAME` (compose passes
+     `${MATRIX_HOST}` and `${LK_JWT_HS_SERVER_NAME}` respectively; a mismatch silently
+     disables the check). Keep the AS tokens and Synapse `msc4502_enabled`.
+  3. Remove `require-membership.patch` from this registry and from the Dockerfile `COPY`
+     and `git apply` lines. Entry 2 builds on this patch's configuration and handler code
+     and does not apply on `0e176b1e` either, so re-port `restrict-screen-share.patch` onto
+     the release first (its own fail-closed startup check needs the application-service
+     configuration on its own).
+  4. Verify enforcement on the built image: the startup log shows the `info` line, not
+     the `warn`; a member gets a token and a non-member gets 403 on `/sfu/get`,
+     `/get_token` and `/delegate_delayed_leave` (the 21-case lab from "Evidence").
 
 ## 2. `restrict-screen-share.patch` — POLICY
 
