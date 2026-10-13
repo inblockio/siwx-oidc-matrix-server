@@ -197,8 +197,8 @@ services:
   lk-jwt-service:
     # LK_JWT_IMAGE_REF: env-overridable full image ref, same pattern as
     # REDIS_IMAGE_REF above. Default (2026-10-11) = the lk-jwt-service image
-    # built here by dockerfiles/Dockerfile.lk-jwt (upstream v0.8.0 plus
-    # patches/lk-jwt/require-membership.patch, element-hq/lk-jwt-service#250),
+    # built by dockerfiles/Dockerfile.lk-jwt at 70b897e (upstream v0.8.0 plus
+    # the require-membership.patch that became element-hq/lk-jwt-service#250),
     # published by CI next to the synapse and element-web images (issue #40),
     # pinned to the build of main at 70b897e. It moved in ONE commit together
     # with SYNAPSE_IMAGE_REF's default (the 1.162.0 build of the same commit,
@@ -238,13 +238,14 @@ services:
       # ANY federated homeserver. Startup echoes the parsed value, so the
       # deployed setting is checkable in the logs.
       LIVEKIT_FULL_ACCESS_HOMESERVERS: "${MATRIX_HOST}"
-      # Membership is checked before an SFU token is issued (patches/lk-jwt/
-      # README.md entry 1): without it any OpenID holder gets a token for ANY
-      # room. Fail closed: with the flag on and no application-service
-      # configuration this container REFUSES TO START (one log line naming the
-      # missing variables), by design. Add LK_JWT_AS_TOKEN, LK_JWT_HS_TOKEN and LK_JWT_HS_SERVER_NAME
-      # to .env (env.example says how); the same two values reach Synapse
-      # through env_file, where matrix_server.sh renders the registration.
+      # Membership is checked before an SFU token is issued: without it any
+      # OpenID holder gets a token for ANY room. Upstream v0.9.0 (#250) turns
+      # the check on by itself when it runs as an application service and
+      # LIVEKIT_FULL_ACCESS_HOMESERVERS is exactly LIVEKIT_HS_SERVER_NAME; both
+      # come from MATRIX_HOST below, so they cannot diverge. Builds of
+      # dockerfiles/Dockerfile.lk-jwt ignore this flag; only the pinned default
+      # image above (v0.8.0 plus the old require-membership.patch) reads it.
+      # Delete it in the commit that moves that default to a newer build.
       LIVEKIT_REQUIRE_MEMBERSHIP: "true"
       # Screen share only for the hosts (patches/lk-jwt/README.md entry 2): when
       # "true", the tokens of callers below the room's kick level carry
@@ -254,14 +255,16 @@ services:
       # (the container refuses to start otherwise); an image without
       # restrict-screen-share.patch ignores it.
       LIVEKIT_RESTRICT_SCREEN_SHARE: "${LK_JWT_RESTRICT_SCREEN_SHARE:-false}"
-      # Empty defaults only so the file still parses on an .env that predates
-      # them; the patched image then refuses to start, Synapse is unaffected.
-      # All three are set together or left empty: lk-jwt (upstream too) exits
-      # at startup when only some are set, so the server name has its own
-      # variable instead of reusing MATRIX_HOST.
+      # Add LK_JWT_AS_TOKEN and LK_JWT_HS_TOKEN to .env (env.example says how);
+      # the same two values reach Synapse through env_file, where
+      # matrix_server.sh renders the registration. Empty defaults only so the
+      # file still parses on an .env that predates them. The server name is
+      # always set, so lk-jwt (upstream too) REFUSES TO START without the two
+      # tokens ("must either all be set or all be left empty"): it fails closed
+      # instead of serving tokens without the membership check.
       LIVEKIT_AS_TOKEN: "${LK_JWT_AS_TOKEN:-}"
       LIVEKIT_HS_TOKEN: "${LK_JWT_HS_TOKEN:-}"
-      LIVEKIT_HS_SERVER_NAME: "${LK_JWT_HS_SERVER_NAME:-}"
+      LIVEKIT_HS_SERVER_NAME: "${MATRIX_HOST}"
       # The membership look-up carries the AS token, which can act as any local
       # user (see matrix_server.sh): send it to Synapse inside the compose
       # network, never out through the public edge.
