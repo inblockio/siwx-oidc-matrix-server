@@ -18,12 +18,14 @@ POLICY; only POLICY is permanent. The upstream links here are picked up by the u
 refresh of `patches/element-web/README.md` step 4b, which greps `patches/*/README.md`.
 
 **Bump procedure** (every change of `LK_JWT_TAG`/`LK_JWT_COMMIT` in the Dockerfile):
-dry-run the patch against the new commit, then compare it with its upstream PR:
+dry-run the patches against the new commit (in order: entry 2 builds on entry 1), then compare
+entry 1 with its upstream PR:
 
 ```bash
 d=$(mktemp -d) && git -C "$d" init -q && git -C "$d" fetch -q --depth 1 \
   https://github.com/element-hq/lk-jwt-service "<new commit>" && git -C "$d" checkout -q FETCH_HEAD \
-  && git -C "$d" apply --check "$PWD/patches/lk-jwt/require-membership.patch" && echo OK; rm -rf "$d"
+  && git -C "$d" apply "$PWD/patches/lk-jwt/require-membership.patch" \
+  && git -C "$d" apply --check "$PWD/patches/lk-jwt/restrict-screen-share.patch" && echo OK; rm -rf "$d"
 pm() { grep -E '^[+-]' | grep -vE '^(\+\+\+|---) '; }
 diff <(gh api repos/element-hq/lk-jwt-service/pulls/250 -H 'Accept: application/vnd.github.diff' | pm) \
      <(pm < patches/lk-jwt/require-membership.patch) && echo "entry 1: no drift"
@@ -32,7 +34,8 @@ diff <(gh api repos/element-hq/lk-jwt-service/pulls/250 -H 'Accept: application/
 **Shipping** (issue [#40](https://github.com/inblockio/siwx-oidc-matrix-server/issues/40)).
 The image is built by `dockerfiles/Dockerfile.lk-jwt` and published by the CI
 build-and-push matrix as `ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service`, so a
-patch that stops applying fails CI. It runs as the non-root user 65532. `docker-compose.yml`
+patch that stops applying fails CI. It runs as the non-root user 65532. The Dockerfile applies
+the patches in the order of this registry (1, then 2). `docker-compose.yml`
 uses it with `LIVEKIT_REQUIRE_MEMBERSHIP=true` and the application-service tokens
 `LK_JWT_AS_TOKEN`/`LK_JWT_HS_TOKEN` (`env.example`). Synapse (v1.162.0 or later) enables
 `experimental_features.msc4502_enabled` and renders the registration from the same two
@@ -44,6 +47,12 @@ any local user. A failed write of the registration or its `app_service_config_fi
 stops Synapse from starting. A deployment that pins
 `LK_JWT_IMAGE_REF` to an upstream image keeps running unpatched upstream until it changes
 that pin.
+
+Entry 2 is opt-in: `docker-compose.yml` passes `LIVEKIT_RESTRICT_SCREEN_SHARE` from
+`LK_JWT_RESTRICT_SCREEN_SHARE` in `.env` (default `false`), so a new image changes nothing
+until a deployment turns the flag on (`env.example`). With the flag on the container refuses
+to start without the application-service configuration, like entry 1. An image without
+the patch ignores the variable.
 
 `scripts/lk-jwt-membership-accept.sh` is the acceptance test for `apply_lk_jwt_membership`
 (CI job `lk-jwt-membership-accept`; locally `scripts/lk-jwt-membership-accept.sh --image <synapse image>`
@@ -109,3 +118,61 @@ delivery; the table, and the disk it sits on, grow without bound until that is f
 - **Retirement:** when a release that contains #250, or an equivalent standalone-endpoint
   membership check, is pinned in `dockerfiles/Dockerfile.lk-jwt`, or when the compose
   files move to that upstream image.
+
+## 2. `restrict-screen-share.patch` — POLICY
+
+Applied after entry 1 (it builds on its configuration and handler code).
+
+- **What:** a new opt-in environment variable `LIVEKIT_RESTRICT_SCREEN_SHARE` (default
+  off, upstream-compatible). When it is on, every endpoint that mints an SFU token (`/sfu/get`,
+  `/get_token` and the AS-proxied `/_matrix/client/unstable/io.element.msc4195/rtc/livekit/get_token`
+  for local users) reads the caller's power in the room and writes `canPublishSources` into the
+  grant (which supersedes `canPublish` at the SFU):
+  - power at or above the room's `kick` level (`users[mxid]`, else `users_default`, default 0;
+    `kick` default 50): `camera`, `microphone`, `screen_share`, `screen_share_audio`;
+  - everybody else, and **any** failure: `camera`, `microphone`. The token request still
+    succeeds.
+  - No `m.room.power_levels` event: the creator (`m.room.create` `creator`) is 100, anybody
+    else 0. Room version 12 (and later, `org.matrix.hydra.11`): the creators (sender of the
+    create event, read by the event ID `$<room id without !>`, and `additional_creators`) are
+    above every level.
+  - The power is read as the caller: `GET /_matrix/client/v3/rooms/{room}/state/m.room.power_levels/?user_id=<caller>`
+    (and `m.room.create`, and for v12 the create event) with the AS token, against the same
+    base URL as entry 1 (`hs_server_name` through `LIVEKIT_CS_API_URL_OVERRIDES`, never the
+    server of the OpenID token). One request for a host or a pre-v12 member, up to three for a
+    v12 member below the kick level. The whole read has a 3 s limit. A user of another
+    homeserver is outside the AS namespace: no request, camera and microphone. Callers that
+    already have no publish right (restricted access, federated users relayed by
+    the S-S route) are unchanged.
+  - The service refuses to start with the flag on and no appservice configuration, and a
+    value that is not true/false (a typo) is an error.
+  - With the flag off there is no extra request and no `canPublishSources`.
+- **Why:** upstream hands every participant every source, so who may share a screen could only
+  be decided after the join (a participant lowered by the SFU's permission update, with a
+  window of seconds, and no enforcement in a call without a portal participant). The
+  default belongs in the token: screen share is a host power (`kick` level), and the token is
+  signed by the service, so a client cannot edit it.
+- **Evidence:** the SFU enforces `canPublishSources` (aqua-meet FP10 forged-share probes);
+  the minting paths, the grant construction (`get_join_token`, one place) and the cheap state read
+  were probed in aqua-meet card FP12 section 4. The token check against the built image runs at the swap.
+- **Tests:** in the patch itself:
+  - unit tests in `src/screen_share.rs` (power parsing: `users`, `users_default`, `kick` default,
+    numeric strings, malformed content; no power levels event and the creator rule; room version
+    12 creators and `additional_creators`; every read failure) and in `src/handler_tests.rs`
+    (all three routes: flag off reads nothing, host, member, read error, malformed content,
+    3 s timeout, remote user, restricted user, grant spelling), config-table tests;
+  - integration tests in `integration-tests/tests/{sfu_get,get_token,get_token_cs}.rs`
+    against the fake homeserver, which gained the state and event routes: host at 100 gets the
+    screen sources (and the read carried the AS token and `user_id`), power-0 member gets camera
+    and microphone, creator rule without a power levels event, read 500 and read timeout still
+    200 with camera and microphone, flag off sends no request and carries no restriction.
+    The tests decode the minted JWT.
+
+  `cargo test --locked` is green for `-p lk-jwt-service` and
+  `-p lk-jwt-service-integration-tests`.
+- **Upstream status:** not raised. It is a policy of this deployment (screen share as a host
+  power), not a defect of upstream, and it reads state that upstream's model leaves to the SFU
+  client.
+- **Retirement:** none while the policy is wanted. It is dropped when upstream grows an
+  equivalent (a per-room or per-power source policy in the token), or when screen share is
+  governed elsewhere.

@@ -23,8 +23,9 @@ RUN git init -q . \
     && test "$(git rev-parse FETCH_HEAD^{commit})" = "${LK_JWT_COMMIT}" \
     && git checkout -q "${LK_JWT_COMMIT}"
 
-COPY patches/lk-jwt/require-membership.patch /tmp/lkjwt-membership.patch
-RUN git apply --verbose /tmp/lkjwt-membership.patch
+COPY patches/lk-jwt/require-membership.patch patches/lk-jwt/restrict-screen-share.patch /tmp/
+RUN git apply --verbose /tmp/require-membership.patch \
+    && git apply --verbose /tmp/restrict-screen-share.patch
 
 RUN cargo build -p lk-jwt-service --release --locked \
     && cp target/release/lk-jwt-service /lk-jwt-service \

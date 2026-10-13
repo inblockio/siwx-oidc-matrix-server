@@ -246,6 +246,14 @@ services:
       # to .env (env.example says how); the same two values reach Synapse
       # through env_file, where matrix_server.sh renders the registration.
       LIVEKIT_REQUIRE_MEMBERSHIP: "true"
+      # Screen share only for the hosts (patches/lk-jwt/README.md entry 2): when
+      # "true", the tokens of callers below the room's kick level carry
+      # canPublishSources camera and microphone only. OFF unless the deployment
+      # sets LK_JWT_RESTRICT_SCREEN_SHARE=true in .env, so an image bump alone
+      # never changes who may share. Needs the application-service values below
+      # (the container refuses to start otherwise); an image without
+      # restrict-screen-share.patch ignores it.
+      LIVEKIT_RESTRICT_SCREEN_SHARE: "${LK_JWT_RESTRICT_SCREEN_SHARE:-false}"
       # Empty defaults only so the file still parses on an .env that predates
       # them; the patched image then refuses to start, Synapse is unaffected.
       # All three are set together or left empty: lk-jwt (upstream too) exits

@@ -1,0 +1,2145 @@
+diff --git a/README.md b/README.md
+index 5d9a3df..67f9fde 100644
+--- a/README.md
++++ b/README.md
+@@ -113,6 +113,7 @@ Set environment variables to configure the service:
+ | `LIVEKIT_AS_REGISTRATION_FILE`                | Path to an application service registration file containing the application service tokens. Takes precedence over `LIVEKIT_AS_TOKEN` and `LIVEKIT_HS_TOKEN` if specified. | ❌ No ⚠️ Required when running as an application service unless `LIVEKIT_AS_TOKEN` and `LIVEKIT_HS_TOKEN` are set | |
+ | `LIVEKIT_HS_SERVER_NAME`                      | When running as an application service, the associated homeserver's server name. The C-S API needs to be resolvable from the server name. | ❌ No, ⚠️ Required when running as an application service | |
+ | `LIVEKIT_REQUIRE_MEMBERSHIP`                  | When `true`, `/sfu/get`, `/get_token` and `/delegate_delayed_leave` also check that the user is joined to the room, through the homeserver (see [Requiring room membership](#-requiring-room-membership-on-the-standalone-endpoints)). The service refuses to start if it is set without the application service configuration. | ❌ No | `false` |
++| `LIVEKIT_RESTRICT_SCREEN_SHARE`               | When `true`, the tokens of users who may publish carry `canPublishSources`: camera and microphone for everybody below the room's `kick` power level, and also `screen_share` and `screen_share_audio` for those at or above it (see [Restricting screen share](#-restricting-screen-share-to-the-hosts)). The service refuses to start if it is set without the application service configuration. | ❌ No | `false` |
+ 
+ > [!WARNING]
+ > **Restricting room creation** requires two pieces working together:
+@@ -130,6 +131,25 @@ Set environment variables to configure the service:
+ >      auto_create: false
+ >    ```
+ 
++## 🖥️ Restricting screen share to the hosts
++
++By default every token allows publishing every source. With `LIVEKIT_RESTRICT_SCREEN_SHARE=true` the tokens of
++`/sfu/get`, `/get_token` and the proxied `get_token` carry `canPublishSources` (which supersedes `canPublish` at the
++SFU):
++
++- power level of the user at or above the room's `kick` level (default 50): `camera`, `microphone`, `screen_share`,
++  `screen_share_audio`;
++- anybody else, and any case in which the power cannot be read: `camera`, `microphone`.
++
++The power is read once per token, as the user (application service masquerading with the AS token), from
++`m.room.power_levels` (`users[user]`, else `users_default`, default 0). Without a power levels event the creator has
++100 (`m.room.create`, `creator`); in room version 12 the creators (the sender of the create event and
++`additional_creators`) are above every level. The read has a 3 second limit. Every failure (timeout, error status,
++unparseable or malformed content, a user of another homeserver) gives camera and microphone only; the token request
++itself still succeeds. Users without publish rights (restricted access) and federated users relayed through the
++federation proxy are unchanged. The flag needs the application service configuration, whose `users` namespace covers
++the local users.
++
+ ## 🏠 Homeserver Wiring (Application Service)
+ 
+ When set up as an application service, the integration depends on
+diff --git a/integration-tests/src/fake_homeserver.rs b/integration-tests/src/fake_homeserver.rs
+index 0313118..6acf4bb 100644
+--- a/integration-tests/src/fake_homeserver.rs
++++ b/integration-tests/src/fake_homeserver.rs
+@@ -22,6 +22,18 @@ pub struct IsJoinedRequest {
+     pub mxid: String,
+ }
+ 
++/// A request to `GET /_matrix/client/v3/rooms/{room}/state/{type}/` or to
++/// `GET /_matrix/client/v3/rooms/{room}/event/{event_id}` (the `event_type`
++/// then is `event:<event_id>`).
++#[derive(Clone, Debug)]
++pub struct RoomStateRequest {
++    pub authorization: String,
++    pub room_id: String,
++    pub event_type: String,
++    /// The `user_id` query parameter (application-service masquerading).
++    pub user_id: String,
++}
++
+ /// A request to the MSC4512 /fed_proxy endpoint.
+ #[derive(Clone, Debug)]
+ pub struct FedProxyRequest {
+@@ -91,6 +103,17 @@ struct HsState {
+     /// The recorded /is_joined requests.
+     is_joined_requests: Vec<IsJoinedRequest>,
+ 
++    /// Scripted room state / event responses keyed by (room_id, event_type)
++    /// (an event is keyed as `event:<event_id>`): (status, body). Anything
++    /// not scripted answers 404 M_NOT_FOUND.
++    room_state: HashMap<(String, String), (u16, Option<serde_json::Value>)>,
++
++    /// Delay in ms before a room state / event request is answered.
++    room_state_delay_ms: u64,
++
++    /// The recorded room state / event requests.
++    room_state_requests: Vec<RoomStateRequest>,
++
+     /// The recorded /fed_proxy requests.
+     fed_proxy_requests: Vec<FedProxyRequest>,
+ 
+@@ -111,6 +134,9 @@ impl Default for HsState {
+             delay_look_ups: Vec::new(),
+             not_joined: HashSet::new(),
+             is_joined_requests: Vec::new(),
++            room_state: HashMap::new(),
++            room_state_delay_ms: 0,
++            room_state_requests: Vec::new(),
+             fed_proxy_requests: Vec::new(),
+             fed_proxy_response: (
+                 200,
+@@ -179,6 +205,18 @@ impl FakeHomeserver {
+                 "/_matrix/client/unstable/io.element.msc4502/rooms/{room_id}/is_joined",
+                 get(handle_is_joined),
+             )
++            .route(
++                "/_matrix/client/v3/rooms/{room_id}/state/{event_type}/",
++                get(handle_room_state),
++            )
++            .route(
++                "/_matrix/client/v3/rooms/{room_id}/state/{event_type}",
++                get(handle_room_state),
++            )
++            .route(
++                "/_matrix/client/v3/rooms/{room_id}/event/{event_id}",
++                get(handle_room_event),
++            )
+             .route(
+                 "/_matrix/client/unstable/io.element.msc4512/appservice/fed_proxy",
+                 post(handle_fed_proxy),
+@@ -272,6 +310,43 @@ impl FakeHomeserver {
+         self.state.lock().unwrap().is_joined_requests.clone()
+     }
+ 
++    /// Scripts the answer of `GET /rooms/{room_id}/state/{event_type}/`: the
++    /// HTTP status and, for 200, the event content.
++    pub fn set_room_state(
++        &self,
++        room_id: &str,
++        event_type: &str,
++        status: u16,
++        content: Option<serde_json::Value>,
++    ) {
++        self.state.lock().unwrap().room_state.insert(
++            (room_id.to_owned(), event_type.to_owned()),
++            (status, content),
++        );
++    }
++
++    /// Scripts the answer of `GET /rooms/{room_id}/event/{event_id}`: the HTTP
++    /// status and, for 200, the whole event.
++    pub fn set_room_event(
++        &self,
++        room_id: &str,
++        event_id: &str,
++        status: u16,
++        event: Option<serde_json::Value>,
++    ) {
++        self.set_room_state(room_id, &format!("event:{event_id}"), status, event);
++    }
++
++    /// Delays every room state / event answer by `ms` milliseconds.
++    pub fn set_room_state_delay(&self, ms: u64) {
++        self.state.lock().unwrap().room_state_delay_ms = ms;
++    }
++
++    /// The recorded room state / event requests.
++    pub fn room_state_requests(&self) -> Vec<RoomStateRequest> {
++        self.state.lock().unwrap().room_state_requests.clone()
++    }
++
+     /// The recorded /fed_proxy requests.
+     pub fn fed_proxy_requests(&self) -> Vec<FedProxyRequest> {
+         self.state.lock().unwrap().fed_proxy_requests.clone()
+@@ -419,6 +494,67 @@ async fn handle_is_joined(
+     Json(json!({ "joined": joined }))
+ }
+ 
++/// Answers a scripted room state / event request.
++async fn answer_room_state(
++    state: Arc<Mutex<HsState>>,
++    room_id: String,
++    key: String,
++    query: HashMap<String, String>,
++    headers: HeaderMap,
++) -> (StatusCode, Json<serde_json::Value>) {
++    let authorization = headers
++        .get(axum::http::header::AUTHORIZATION)
++        .and_then(|v| v.to_str().ok())
++        .unwrap_or_default()
++        .to_owned();
++    let (delay_ms, scripted) = {
++        let mut state = state.lock().unwrap();
++        state.room_state_requests.push(RoomStateRequest {
++            authorization,
++            room_id: room_id.clone(),
++            event_type: key.clone(),
++            user_id: query.get("user_id").cloned().unwrap_or_default(),
++        });
++        (
++            state.room_state_delay_ms,
++            state.room_state.get(&(room_id, key)).cloned(),
++        )
++    };
++    if delay_ms > 0 {
++        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
++    }
++    match scripted {
++        Some((status, body)) => (
++            StatusCode::from_u16(status).unwrap(),
++            Json(body.unwrap_or_else(|| json!({ "errcode": "M_UNKNOWN", "error": "scripted" }))),
++        ),
++        None => (
++            StatusCode::NOT_FOUND,
++            Json(json!({ "errcode": "M_NOT_FOUND", "error": "Event not found." })),
++        ),
++    }
++}
++
++/// Handler for `GET /rooms/{room_id}/state/{event_type}/`.
++async fn handle_room_state(
++    State(state): State<Arc<Mutex<HsState>>>,
++    Path((room_id, event_type)): Path<(String, String)>,
++    Query(query): Query<HashMap<String, String>>,
++    headers: HeaderMap,
++) -> impl IntoResponse {
++    answer_room_state(state, room_id, event_type, query, headers).await
++}
++
++/// Handler for `GET /rooms/{room_id}/event/{event_id}`.
++async fn handle_room_event(
++    State(state): State<Arc<Mutex<HsState>>>,
++    Path((room_id, event_id)): Path<(String, String)>,
++    Query(query): Query<HashMap<String, String>>,
++    headers: HeaderMap,
++) -> impl IntoResponse {
++    answer_room_state(state, room_id, format!("event:{event_id}"), query, headers).await
++}
++
+ /// Handler for /fed_proxy requests (MSC4512).
+ async fn handle_fed_proxy(
+     State(state): State<Arc<Mutex<HsState>>>,
+diff --git a/integration-tests/src/lib.rs b/integration-tests/src/lib.rs
+index a27e9ed..094e87a 100644
+--- a/integration-tests/src/lib.rs
++++ b/integration-tests/src/lib.rs
+@@ -11,7 +11,7 @@ mod helpers;
+ 
+ pub use fake_homeserver::{
+     DelayedEventLookup, DelayedEventRequest, FakeHomeserver, FakeUser, FedProxyRequest,
+-    IsJoinedRequest, UserInfoRequest,
++    IsJoinedRequest, RoomStateRequest, UserInfoRequest,
+ };
+ pub use fake_redis::FakeRedis;
+ pub use fake_sfu::{CreateRoomRequest, FakeSfu, GetParticipantRequest};
+diff --git a/integration-tests/tests/get_token.rs b/integration-tests/tests/get_token.rs
+index 96eee5f..b3fddbe 100644
+--- a/integration-tests/tests/get_token.rs
++++ b/integration-tests/tests/get_token.rs
+@@ -1289,3 +1289,203 @@ async fn require_membership_off_does_not_ask_the_homeserver() {
+     assert_eq!(status, 200, "body: {body}");
+     expect_no_is_joined_requests(&hs);
+ }
++
++// ── LIVEKIT_RESTRICT_SCREEN_SHARE ─────────────────────────────────────────────
++
++const RESTRICT_AS_TOKEN: &str = "as_token";
++const ROOM: &str = "!room:example.com";
++const CAMERA_MIC: [&str; 2] = ["camera", "microphone"];
++const ALL_SOURCES: [&str; 4] = ["camera", "microphone", "screen_share", "screen_share_audio"];
++
++/// Application-service configuration plus LIVEKIT_RESTRICT_SCREEN_SHARE=true,
++/// with the fake homeserver as the configured homeserver.
++fn restrict_screen_share_env(hs: &FakeHomeserver) -> HashMap<String, String> {
++    HashMap::from([
++        ("LIVEKIT_AS_TOKEN".to_owned(), RESTRICT_AS_TOKEN.to_owned()),
++        ("LIVEKIT_HS_TOKEN".to_owned(), "hs_token".to_owned()),
++        (
++            "LIVEKIT_HS_SERVER_NAME".to_owned(),
++            hs.server_name().to_owned(),
++        ),
++        (
++            "LIVEKIT_RESTRICT_SCREEN_SHARE".to_owned(),
++            "true".to_owned(),
++        ),
++    ])
++}
++
++/// The `canPublishSources` grant of the minted JWT (empty when absent).
++fn granted_sources(body: &str) -> Vec<String> {
++    let response: Value = serde_json::from_str(body).expect("response is not JSON");
++    let claims = decode_livekit_jwt(response["jwt"].as_str().unwrap_or_default());
++    claims["video"]["canPublishSources"]
++        .as_array()
++        .map(|a| {
++            a.iter()
++                .filter_map(|v| v.as_str().map(str::to_owned))
++                .collect()
++        })
++        .unwrap_or_default()
++}
++
++async fn start_restricted(hs: &FakeHomeserver, sfu: &FakeSfu, restrict: bool) -> Service {
++    let mut extra_env = restrict_screen_share_env(hs);
++    if !restrict {
++        extra_env.clear();
++    }
++    Service::start(ServiceConfig {
++        full_access_homeservers: vec![hs.server_name().to_owned()],
++        cs_api_url_overrides: hs.cs_api_url_override(),
++        livekit_url: Some(sfu.url().to_owned()),
++        extra_env,
++        ..Default::default()
++    })
++    .await
++}
++
++/// The caller at or above the kick level gets every screen source, and the
++/// power was read as the caller with the AS token.
++#[tokio::test]
++async fn restrict_screen_share_host_gets_screen_sources() {
++    let hs = FakeHomeserver::new().await;
++    let host = hs.new_user("host");
++    let sfu = FakeSfu::new().await;
++    hs.set_room_state(
++        ROOM,
++        "m.room.power_levels",
++        200,
++        Some(json!({ "users": { host.user_id.clone(): 100 }, "users_default": 0 })),
++    );
++    let svc = start_restricted(&hs, &sfu, true).await;
++
++    let (status, body) = post_get_token(&svc, get_token_request(&hs, &host).to_string()).await;
++
++    assert_eq!(status, 200, "body: {body}");
++    assert_eq!(granted_sources(&body), ALL_SOURCES);
++    let reads = hs.room_state_requests();
++    assert_eq!(reads.len(), 1, "one power read: {reads:?}");
++    assert_eq!(reads[0].room_id, ROOM);
++    assert_eq!(reads[0].event_type, "m.room.power_levels");
++    assert_eq!(reads[0].user_id, host.user_id);
++    assert_eq!(
++        reads[0].authorization,
++        format!("Bearer {RESTRICT_AS_TOKEN}")
++    );
++    assert_eq!(sfu.create_room_requests().len(), 1);
++}
++
++/// A member at power 0 (users_default) gets camera and microphone only.
++#[tokio::test]
++async fn restrict_screen_share_member_gets_camera_and_microphone() {
++    let hs = FakeHomeserver::new().await;
++    let host = hs.new_user("host");
++    let guest = hs.new_user("guest");
++    let sfu = FakeSfu::new().await;
++    hs.set_room_state(
++        ROOM,
++        "m.room.power_levels",
++        200,
++        Some(json!({ "users": { host.user_id.clone(): 100 }, "users_default": 0 })),
++    );
++    let svc = start_restricted(&hs, &sfu, true).await;
++
++    let (status, body) = post_get_token(&svc, get_token_request(&hs, &guest).to_string()).await;
++
++    assert_eq!(status, 200, "body: {body}");
++    assert_eq!(granted_sources(&body), CAMERA_MIC);
++    let response: Value = serde_json::from_str(&body).unwrap();
++    let claims = decode_livekit_jwt(response["jwt"].as_str().unwrap());
++    assert_eq!(claims["video"]["canPublish"].as_bool(), Some(true));
++    assert_eq!(hs.room_state_requests()[0].user_id, guest.user_id);
++}
++
++/// No power levels event: the creator is 100, anybody else 0.
++#[tokio::test]
++async fn restrict_screen_share_without_power_levels_event_the_creator_shares() {
++    let hs = FakeHomeserver::new().await;
++    let creator = hs.new_user("creator");
++    let other = hs.new_user("other");
++    let sfu = FakeSfu::new().await;
++    hs.set_room_state(
++        ROOM,
++        "m.room.create",
++        200,
++        Some(json!({ "creator": creator.user_id.clone(), "room_version": "10" })),
++    );
++    let svc = start_restricted(&hs, &sfu, true).await;
++
++    let (status, body) = post_get_token(&svc, get_token_request(&hs, &creator).to_string()).await;
++    assert_eq!(status, 200, "body: {body}");
++    assert_eq!(granted_sources(&body), ALL_SOURCES);
++
++    let (status, body) = post_get_token(&svc, get_token_request(&hs, &other).to_string()).await;
++    assert_eq!(status, 200, "body: {body}");
++    assert_eq!(granted_sources(&body), CAMERA_MIC);
++}
++
++/// A failing power read (500) fails closed: camera and microphone, and the
++/// token request still succeeds.
++#[tokio::test]
++async fn restrict_screen_share_read_error_fails_closed() {
++    let hs = FakeHomeserver::new().await;
++    let host = hs.new_user("host");
++    let sfu = FakeSfu::new().await;
++    hs.set_room_state(ROOM, "m.room.power_levels", 500, None);
++    let svc = start_restricted(&hs, &sfu, true).await;
++
++    let (status, body) = post_get_token(&svc, get_token_request(&hs, &host).to_string()).await;
++
++    assert_eq!(status, 200, "body: {body}");
++    assert_eq!(granted_sources(&body), CAMERA_MIC);
++    assert_eq!(sfu.create_room_requests().len(), 1);
++}
++
++/// A power read that takes longer than the 3 s limit fails closed too.
++#[tokio::test]
++async fn restrict_screen_share_read_timeout_fails_closed() {
++    let hs = FakeHomeserver::new().await;
++    let host = hs.new_user("host");
++    let sfu = FakeSfu::new().await;
++    hs.set_room_state(
++        ROOM,
++        "m.room.power_levels",
++        200,
++        Some(json!({ "users": { host.user_id.clone(): 100 } })),
++    );
++    hs.set_room_state_delay(6_000);
++    let svc = start_restricted(&hs, &sfu, true).await;
++
++    let started = std::time::Instant::now();
++    let (status, body) = post_get_token(&svc, get_token_request(&hs, &host).to_string()).await;
++
++    assert_eq!(status, 200, "body: {body}");
++    assert_eq!(granted_sources(&body), CAMERA_MIC);
++    assert!(
++        started.elapsed() < Duration::from_secs(5),
++        "the read must be cut off at about 3 s, took {:?}",
++        started.elapsed()
++    );
++}
++
++/// Without the flag the endpoint stays upstream-compatible: the power levels
++/// are never read and the token carries no source restriction.
++#[tokio::test]
++async fn restrict_screen_share_off_reads_nothing_and_does_not_restrict() {
++    let hs = FakeHomeserver::new().await;
++    let guest = hs.new_user("guest");
++    let sfu = FakeSfu::new().await;
++    hs.set_room_state(ROOM, "m.room.power_levels", 500, None);
++    let svc = start_restricted(&hs, &sfu, false).await;
++
++    let (status, body) = post_get_token(&svc, get_token_request(&hs, &guest).to_string()).await;
++
++    assert_eq!(status, 200, "body: {body}");
++    assert!(
++        granted_sources(&body).is_empty(),
++        "no source restriction without the flag: {body}"
++    );
++    assert!(
++        hs.room_state_requests().is_empty(),
++        "no state read expected"
++    );
++}
+diff --git a/integration-tests/tests/get_token_cs.rs b/integration-tests/tests/get_token_cs.rs
+index d206592..b2bdc58 100644
+--- a/integration-tests/tests/get_token_cs.rs
++++ b/integration-tests/tests/get_token_cs.rs
+@@ -609,3 +609,104 @@ async fn federation_proxy_403_with_unexpected_errcode_surfaces_as_502() {
+         &expected_relayed_body(&user.user_id, DEFAULT_LK_URL),
+     );
+ }
++
++// ── LIVEKIT_RESTRICT_SCREEN_SHARE on the application-service route ───────────
++
++fn restricted_env(hs: &FakeHomeserver) -> HashMap<String, String> {
++    let mut env = app_service_env_with_hs_server_name(hs.server_name());
++    env.insert(
++        "LIVEKIT_RESTRICT_SCREEN_SHARE".to_owned(),
++        "true".to_owned(),
++    );
++    env
++}
++
++fn granted_sources(body: &str) -> Vec<String> {
++    let response: Value = serde_json::from_str(body).expect("response is not JSON");
++    let claims = decode_livekit_jwt(response["jwt"].as_str().unwrap_or_default());
++    claims["video"]["canPublishSources"]
++        .as_array()
++        .map(|a| {
++            a.iter()
++                .filter_map(|v| v.as_str().map(str::to_owned))
++                .collect()
++        })
++        .unwrap_or_default()
++}
++
++/// The host (power 100) gets every source, a power-0 member camera and
++/// microphone only; the power is read as the caller with the AS token.
++#[tokio::test]
++async fn restrict_screen_share_host_and_member() {
++    let hs = FakeHomeserver::new().await;
++    let host = hs.new_user("host");
++    let guest = hs.new_user("guest");
++    let sfu = FakeSfu::new().await;
++    hs.set_room_state(
++        "!room:example.com",
++        "m.room.power_levels",
++        200,
++        Some(json!({ "users": { host.user_id.clone(): 100 } })),
++    );
++    let svc = Service::start(ServiceConfig {
++        full_access_homeservers: vec!["*".to_owned()],
++        cs_api_url_overrides: hs.cs_api_url_override(),
++        livekit_url: Some(sfu.url().to_owned()),
++        extra_env: restricted_env(&hs),
++        ..Default::default()
++    })
++    .await;
++
++    let (status, body) = post_get_token_cs(
++        &svc,
++        get_token_cs_request(sfu.url()).to_string(),
++        Some(&host.user_id),
++    )
++    .await;
++    assert_eq!(status, 200, "body: {body}");
++    assert_eq!(
++        granted_sources(&body),
++        ["camera", "microphone", "screen_share", "screen_share_audio"]
++    );
++
++    let (status, body) = post_get_token_cs(
++        &svc,
++        get_token_cs_request(sfu.url()).to_string(),
++        Some(&guest.user_id),
++    )
++    .await;
++    assert_eq!(status, 200, "body: {body}");
++    assert_eq!(granted_sources(&body), ["camera", "microphone"]);
++
++    let reads = hs.room_state_requests();
++    assert_eq!(reads.len(), 2);
++    assert_eq!(reads[0].user_id, host.user_id);
++    assert_eq!(reads[0].authorization, format!("Bearer {AS_TOKEN}"));
++    assert_eq!(reads[1].user_id, guest.user_id);
++}
++
++/// A failing power read fails closed and the request still succeeds.
++#[tokio::test]
++async fn restrict_screen_share_read_error_fails_closed() {
++    let hs = FakeHomeserver::new().await;
++    let host = hs.new_user("host");
++    let sfu = FakeSfu::new().await;
++    hs.set_room_state("!room:example.com", "m.room.power_levels", 500, None);
++    let svc = Service::start(ServiceConfig {
++        full_access_homeservers: vec!["*".to_owned()],
++        cs_api_url_overrides: hs.cs_api_url_override(),
++        livekit_url: Some(sfu.url().to_owned()),
++        extra_env: restricted_env(&hs),
++        ..Default::default()
++    })
++    .await;
++
++    let (status, body) = post_get_token_cs(
++        &svc,
++        get_token_cs_request(sfu.url()).to_string(),
++        Some(&host.user_id),
++    )
++    .await;
++    assert_eq!(status, 200, "body: {body}");
++    assert_eq!(granted_sources(&body), ["camera", "microphone"]);
++}
+diff --git a/integration-tests/tests/sfu_get.rs b/integration-tests/tests/sfu_get.rs
+index 84e0521..30cdc0d 100644
+--- a/integration-tests/tests/sfu_get.rs
++++ b/integration-tests/tests/sfu_get.rs
+@@ -1249,3 +1249,203 @@ async fn require_membership_off_does_not_ask_the_homeserver() {
+     assert_eq!(status, 200, "body: {body}");
+     expect_no_is_joined_requests(&hs);
+ }
++
++// ── LIVEKIT_RESTRICT_SCREEN_SHARE ─────────────────────────────────────────────
++
++const RESTRICT_AS_TOKEN: &str = "as_token";
++const ROOM: &str = "!room:example.com";
++const CAMERA_MIC: [&str; 2] = ["camera", "microphone"];
++const ALL_SOURCES: [&str; 4] = ["camera", "microphone", "screen_share", "screen_share_audio"];
++
++/// Application-service configuration plus LIVEKIT_RESTRICT_SCREEN_SHARE=true,
++/// with the fake homeserver as the configured homeserver.
++fn restrict_screen_share_env(hs: &FakeHomeserver) -> HashMap<String, String> {
++    HashMap::from([
++        ("LIVEKIT_AS_TOKEN".to_owned(), RESTRICT_AS_TOKEN.to_owned()),
++        ("LIVEKIT_HS_TOKEN".to_owned(), "hs_token".to_owned()),
++        (
++            "LIVEKIT_HS_SERVER_NAME".to_owned(),
++            hs.server_name().to_owned(),
++        ),
++        (
++            "LIVEKIT_RESTRICT_SCREEN_SHARE".to_owned(),
++            "true".to_owned(),
++        ),
++    ])
++}
++
++/// The `canPublishSources` grant of the minted JWT (empty when absent).
++fn granted_sources(body: &str) -> Vec<String> {
++    let response: Value = serde_json::from_str(body).expect("response is not JSON");
++    let claims = decode_livekit_jwt(response["jwt"].as_str().unwrap_or_default());
++    claims["video"]["canPublishSources"]
++        .as_array()
++        .map(|a| {
++            a.iter()
++                .filter_map(|v| v.as_str().map(str::to_owned))
++                .collect()
++        })
++        .unwrap_or_default()
++}
++
++async fn start_restricted(hs: &FakeHomeserver, sfu: &FakeSfu, restrict: bool) -> Service {
++    let mut extra_env = restrict_screen_share_env(hs);
++    if !restrict {
++        extra_env.clear();
++    }
++    Service::start(ServiceConfig {
++        full_access_homeservers: vec![hs.server_name().to_owned()],
++        cs_api_url_overrides: hs.cs_api_url_override(),
++        livekit_url: Some(sfu.url().to_owned()),
++        extra_env,
++        ..Default::default()
++    })
++    .await
++}
++
++/// The caller at or above the kick level gets every screen source, and the
++/// power was read as the caller with the AS token.
++#[tokio::test]
++async fn restrict_screen_share_host_gets_screen_sources() {
++    let hs = FakeHomeserver::new().await;
++    let host = hs.new_user("host");
++    let sfu = FakeSfu::new().await;
++    hs.set_room_state(
++        ROOM,
++        "m.room.power_levels",
++        200,
++        Some(json!({ "users": { host.user_id.clone(): 100 }, "users_default": 0 })),
++    );
++    let svc = start_restricted(&hs, &sfu, true).await;
++
++    let (status, body) = post_sfu_get(&svc, sfu_get_request(&hs, &host).to_string()).await;
++
++    assert_eq!(status, 200, "body: {body}");
++    assert_eq!(granted_sources(&body), ALL_SOURCES);
++    let reads = hs.room_state_requests();
++    assert_eq!(reads.len(), 1, "one power read: {reads:?}");
++    assert_eq!(reads[0].room_id, ROOM);
++    assert_eq!(reads[0].event_type, "m.room.power_levels");
++    assert_eq!(reads[0].user_id, host.user_id);
++    assert_eq!(
++        reads[0].authorization,
++        format!("Bearer {RESTRICT_AS_TOKEN}")
++    );
++    assert_eq!(sfu.create_room_requests().len(), 1);
++}
++
++/// A member at power 0 (users_default) gets camera and microphone only.
++#[tokio::test]
++async fn restrict_screen_share_member_gets_camera_and_microphone() {
++    let hs = FakeHomeserver::new().await;
++    let host = hs.new_user("host");
++    let guest = hs.new_user("guest");
++    let sfu = FakeSfu::new().await;
++    hs.set_room_state(
++        ROOM,
++        "m.room.power_levels",
++        200,
++        Some(json!({ "users": { host.user_id.clone(): 100 }, "users_default": 0 })),
++    );
++    let svc = start_restricted(&hs, &sfu, true).await;
++
++    let (status, body) = post_sfu_get(&svc, sfu_get_request(&hs, &guest).to_string()).await;
++
++    assert_eq!(status, 200, "body: {body}");
++    assert_eq!(granted_sources(&body), CAMERA_MIC);
++    let response: Value = serde_json::from_str(&body).unwrap();
++    let claims = decode_livekit_jwt(response["jwt"].as_str().unwrap());
++    assert_eq!(claims["video"]["canPublish"].as_bool(), Some(true));
++    assert_eq!(hs.room_state_requests()[0].user_id, guest.user_id);
++}
++
++/// No power levels event: the creator is 100, anybody else 0.
++#[tokio::test]
++async fn restrict_screen_share_without_power_levels_event_the_creator_shares() {
++    let hs = FakeHomeserver::new().await;
++    let creator = hs.new_user("creator");
++    let other = hs.new_user("other");
++    let sfu = FakeSfu::new().await;
++    hs.set_room_state(
++        ROOM,
++        "m.room.create",
++        200,
++        Some(json!({ "creator": creator.user_id.clone(), "room_version": "10" })),
++    );
++    let svc = start_restricted(&hs, &sfu, true).await;
++
++    let (status, body) = post_sfu_get(&svc, sfu_get_request(&hs, &creator).to_string()).await;
++    assert_eq!(status, 200, "body: {body}");
++    assert_eq!(granted_sources(&body), ALL_SOURCES);
++
++    let (status, body) = post_sfu_get(&svc, sfu_get_request(&hs, &other).to_string()).await;
++    assert_eq!(status, 200, "body: {body}");
++    assert_eq!(granted_sources(&body), CAMERA_MIC);
++}
++
++/// A failing power read (500) fails closed: camera and microphone, and the
++/// token request still succeeds.
++#[tokio::test]
++async fn restrict_screen_share_read_error_fails_closed() {
++    let hs = FakeHomeserver::new().await;
++    let host = hs.new_user("host");
++    let sfu = FakeSfu::new().await;
++    hs.set_room_state(ROOM, "m.room.power_levels", 500, None);
++    let svc = start_restricted(&hs, &sfu, true).await;
++
++    let (status, body) = post_sfu_get(&svc, sfu_get_request(&hs, &host).to_string()).await;
++
++    assert_eq!(status, 200, "body: {body}");
++    assert_eq!(granted_sources(&body), CAMERA_MIC);
++    assert_eq!(sfu.create_room_requests().len(), 1);
++}
++
++/// A power read that takes longer than the 3 s limit fails closed too.
++#[tokio::test]
++async fn restrict_screen_share_read_timeout_fails_closed() {
++    let hs = FakeHomeserver::new().await;
++    let host = hs.new_user("host");
++    let sfu = FakeSfu::new().await;
++    hs.set_room_state(
++        ROOM,
++        "m.room.power_levels",
++        200,
++        Some(json!({ "users": { host.user_id.clone(): 100 } })),
++    );
++    hs.set_room_state_delay(6_000);
++    let svc = start_restricted(&hs, &sfu, true).await;
++
++    let started = std::time::Instant::now();
++    let (status, body) = post_sfu_get(&svc, sfu_get_request(&hs, &host).to_string()).await;
++
++    assert_eq!(status, 200, "body: {body}");
++    assert_eq!(granted_sources(&body), CAMERA_MIC);
++    assert!(
++        started.elapsed() < Duration::from_secs(5),
++        "the read must be cut off at about 3 s, took {:?}",
++        started.elapsed()
++    );
++}
++
++/// Without the flag the endpoint stays upstream-compatible: the power levels
++/// are never read and the token carries no source restriction.
++#[tokio::test]
++async fn restrict_screen_share_off_reads_nothing_and_does_not_restrict() {
++    let hs = FakeHomeserver::new().await;
++    let guest = hs.new_user("guest");
++    let sfu = FakeSfu::new().await;
++    hs.set_room_state(ROOM, "m.room.power_levels", 500, None);
++    let svc = start_restricted(&hs, &sfu, false).await;
++
++    let (status, body) = post_sfu_get(&svc, sfu_get_request(&hs, &guest).to_string()).await;
++
++    assert_eq!(status, 200, "body: {body}");
++    assert!(
++        granted_sources(&body).is_empty(),
++        "no source restriction without the flag: {body}"
++    );
++    assert!(
++        hs.room_state_requests().is_empty(),
++        "no state read expected"
++    );
++}
+diff --git a/src/config.rs b/src/config.rs
+index 464682e..deb4406 100644
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -38,6 +38,12 @@ pub struct Config {
+     /// homeserver (MSC4502). Requires the application service configuration.
+     /// Configure via LIVEKIT_REQUIRE_MEMBERSHIP (default false).
+     pub require_membership: bool,
++    /// Whether the tokens carry `canPublishSources` camera and microphone
++    /// only for callers below the room's `kick` power level (screen share
++    /// stays with the hosts). Requires the application service
++    /// configuration. Configure via LIVEKIT_RESTRICT_SCREEN_SHARE (default
++    /// false).
++    pub restrict_screen_share: bool,
+ }
+ 
+ /// Configuration options used for running as an application service.
+@@ -269,6 +275,17 @@ pub fn parse_config() -> Result<Config, String> {
+         );
+     }
+ 
++    let restrict_screen_share = parse_bool_env("LIVEKIT_RESTRICT_SCREEN_SHARE")?;
++    if restrict_screen_share && !app_service_config.is_set_up() {
++        return Err(
++            "LIVEKIT_RESTRICT_SCREEN_SHARE is set, but the application service \
++            configuration is not set up: set LIVEKIT_AS_REGISTRATION_FILE (or \
++            LIVEKIT_AS_TOKEN, LIVEKIT_HS_TOKEN and LIVEKIT_HS_SERVER_NAME), which is \
++            needed to read the power levels of the room"
++                .into(),
++        );
++    }
++
+     let mut redis_url_string = env_var("LIVEKIT_REDIS_URL");
+     let redis_password = env_var("LIVEKIT_REDIS_PASSWORD");
+     if redis_url_string.is_empty() {
+@@ -308,6 +325,7 @@ pub fn parse_config() -> Result<Config, String> {
+         redis_url: redis_url_string,
+         app_service_config,
+         require_membership,
++        restrict_screen_share,
+     })
+ }
+ 
+@@ -754,6 +772,7 @@ mod tests {
+                     redis_url: String::new(),
+                     app_service_config: Default::default(),
+                     require_membership: false,
++                    restrict_screen_share: false,
+                 }),
+                 want_err_msg: "",
+             },
+@@ -802,6 +821,7 @@ mod tests {
+                         hs_server_name: "example.com".to_owned(),
+                     },
+                     require_membership: false,
++                    restrict_screen_share: false,
+                 }),
+                 want_err_msg: "",
+             },
+@@ -826,6 +846,7 @@ mod tests {
+                     redis_url: String::new(),
+                     app_service_config: Default::default(),
+                     require_membership: false,
++                    restrict_screen_share: false,
+                 }),
+                 want_err_msg: "",
+             },
+@@ -901,6 +922,7 @@ mod tests {
+                         hs_server_name: "example.com".to_owned(),
+                     },
+                     require_membership: true,
++                    restrict_screen_share: false,
+                 }),
+                 want_err_msg: "",
+             },
+@@ -932,6 +954,7 @@ mod tests {
+                         hs_server_name: "example.com".to_owned(),
+                     },
+                     require_membership: true,
++                    restrict_screen_share: false,
+                 }),
+                 want_err_msg: "",
+             },
+@@ -971,6 +994,7 @@ mod tests {
+                     redis_url: String::new(),
+                     app_service_config: Default::default(),
+                     require_membership: false,
++                    restrict_screen_share: false,
+                 }),
+                 want_err_msg: "",
+             },
+@@ -989,6 +1013,68 @@ mod tests {
+                 want_config: None,
+                 want_err_msg: "LIVEKIT_REQUIRE_MEMBERSHIP must be true or false, got \"ture\"",
+             },
++            Case {
++                name: "Restrict screen share with app service config",
++                env: vec![
++                    ("LIVEKIT_KEY", "test_key"),
++                    ("LIVEKIT_SECRET", "test_secret"),
++                    ("LIVEKIT_URL", "wss://test.livekit.cloud"),
++                    ("LIVEKIT_FULL_ACCESS_HOMESERVERS", "*"),
++                    ("LIVEKIT_AS_TOKEN", "as_token_env_pheethiewixohp9eecheeGh"),
++                    ("LIVEKIT_HS_TOKEN", "hs_token_env_ahb8eiwae0viey7gee4ieNg"),
++                    ("LIVEKIT_HS_SERVER_NAME", "example.com"),
++                    ("LIVEKIT_RESTRICT_SCREEN_SHARE", "true"),
++                ],
++                want_config: Some(Config {
++                    key: "test_key".into(),
++                    secret: "test_secret".into(),
++                    lk_url: "wss://test.livekit.cloud".into(),
++                    skip_verify_tls: false,
++                    full_access_homeservers: vec!["*".into()],
++                    lk_jwt_bind: ":8080".into(),
++                    sanity_check_interval: Duration::ZERO,
++                    cs_api_url_overrides: HashMap::new(),
++                    redis_url: String::new(),
++                    app_service_config: AppServiceConfig {
++                        as_token: "as_token_env_pheethiewixohp9eecheeGh".to_owned(),
++                        hs_token: "hs_token_env_ahb8eiwae0viey7gee4ieNg".to_owned(),
++                        hs_server_name: "example.com".to_owned(),
++                    },
++                    require_membership: false,
++                    restrict_screen_share: true,
++                }),
++                want_err_msg: "",
++            },
++            Case {
++                name: "Restrict screen share without app service config refuses to start",
++                env: vec![
++                    ("LIVEKIT_KEY", "test_key"),
++                    ("LIVEKIT_SECRET", "test_secret"),
++                    ("LIVEKIT_URL", "wss://test.livekit.cloud"),
++                    ("LIVEKIT_FULL_ACCESS_HOMESERVERS", "*"),
++                    ("LIVEKIT_RESTRICT_SCREEN_SHARE", "true"),
++                ],
++                want_config: None,
++                want_err_msg: "LIVEKIT_RESTRICT_SCREEN_SHARE is set, but the application service \
++                    configuration is not set up: set LIVEKIT_AS_REGISTRATION_FILE (or \
++                    LIVEKIT_AS_TOKEN, LIVEKIT_HS_TOKEN and LIVEKIT_HS_SERVER_NAME), which is \
++                    needed to read the power levels of the room",
++            },
++            Case {
++                name: "Restrict screen share typo is rejected, not ignored",
++                env: vec![
++                    ("LIVEKIT_KEY", "test_key"),
++                    ("LIVEKIT_SECRET", "test_secret"),
++                    ("LIVEKIT_URL", "wss://test.livekit.cloud"),
++                    ("LIVEKIT_FULL_ACCESS_HOMESERVERS", "*"),
++                    ("LIVEKIT_AS_TOKEN", "as_token_env_pheethiewixohp9eecheeGh"),
++                    ("LIVEKIT_HS_TOKEN", "hs_token_env_ahb8eiwae0viey7gee4ieNg"),
++                    ("LIVEKIT_HS_SERVER_NAME", "example.com"),
++                    ("LIVEKIT_RESTRICT_SCREEN_SHARE", "ture"),
++                ],
++                want_config: None,
++                want_err_msg: "LIVEKIT_RESTRICT_SCREEN_SHARE must be true or false, got \"ture\"",
++            },
+             Case {
+                 name: "Sanity check interval invalid",
+                 env: vec![
+@@ -1022,6 +1108,7 @@ mod tests {
+                     redis_url: String::new(),
+                     app_service_config: Default::default(),
+                     require_membership: false,
++                    restrict_screen_share: false,
+                 }),
+                 want_err_msg: "",
+             },
+@@ -1058,6 +1145,7 @@ mod tests {
+                     redis_url: "redis://localhost:6379".to_owned(),
+                     app_service_config: Default::default(),
+                     require_membership: false,
++                    restrict_screen_share: false,
+                 }),
+                 want_err_msg: "",
+             },
+@@ -1086,6 +1174,7 @@ mod tests {
+                         .to_owned(),
+                     app_service_config: Default::default(),
+                     require_membership: false,
++                    restrict_screen_share: false,
+                 }),
+                 want_err_msg: "",
+             },
+diff --git a/src/handler.rs b/src/handler.rs
+index 106a5d4..16770de 100644
+--- a/src/handler.rs
++++ b/src/handler.rs
+@@ -35,8 +35,8 @@ use crate::delayed_event_manager::{
+ use crate::helper::new_unique_id;
+ use crate::helper::{
+     CsApiUrl, CsApiUrlCache, Deps, FederationTokenError, GET_TOKEN_SS_PATH, JoinedSubject,
+-    LiveKitAuth, LiveKitIdentity, LiveKitRoomAlias, UniqueId, legacy_livekit_identity_for,
+-    livekit_identity_for, livekit_room_alias_for, matrix_server_name,
++    LiveKitAuth, LiveKitIdentity, LiveKitRoomAlias, ROOM_STATE_TIMEOUT, UniqueId,
++    legacy_livekit_identity_for, livekit_identity_for, livekit_room_alias_for, matrix_server_name,
+ };
+ #[cfg(feature = "appservice-ping-trigger")]
+ use crate::requests::AppservicePingTriggerRequest;
+@@ -45,6 +45,7 @@ use crate::requests::{
+     GetTokenCsRequest, GetTokenCsResponse, GetTokenSsRequest, GetTokenSsResponse, LegacySfuRequest,
+     MatrixErrorBody, MatrixErrorResponse, OpenIdTokenType, SfuRequest, SfuResponse,
+ };
++use crate::screen_share;
+ use crate::store::{Store, StoredJob};
+ 
+ /// Mints the LiveKit join JWT for a (room, identity) pair.
+@@ -54,8 +55,23 @@ pub fn get_join_token(
+     room: &LiveKitRoomAlias,
+     identity: &LiveKitIdentity,
+     can_publish: bool,
++) -> Result<String, String> {
++    get_join_token_with_sources(api_key, api_secret, room, identity, can_publish, None)
++}
++
++/// Like [`get_join_token`]; with `Some(sources)` the grant carries
++/// `canPublishSources`, which supersedes `canPublish` (LiveKit TrackSource
++/// names: camera, microphone, screen_share, screen_share_audio).
++pub fn get_join_token_with_sources(
++    api_key: &str,
++    api_secret: &str,
++    room: &LiveKitRoomAlias,
++    identity: &LiveKitIdentity,
++    can_publish: bool,
++    can_publish_sources: Option<Vec<String>>,
+ ) -> Result<String, String> {
+     let grants = VideoGrants {
++        can_publish_sources: can_publish_sources.unwrap_or_default(),
+         room_join: true,
+         room_create: false,
+         can_publish,
+@@ -164,6 +180,11 @@ pub struct Handler {
+     /// room membership through the homeserver before serving a request.
+     /// Configured via LIVEKIT_REQUIRE_MEMBERSHIP; see `enforce_membership`.
+     require_membership: AtomicBool,
++    /// Whether the tokens of callers who may publish carry
++    /// `canPublishSources`, with the screen sources only for callers at or
++    /// above the room's kick level. Configured via
++    /// LIVEKIT_RESTRICT_SCREEN_SHARE; see `publish_sources`.
++    restrict_screen_share: AtomicBool,
+     /// The period between room-worker sanity checks. Zero disables the sanity
+     /// check.
+     sanity_check_interval: Duration,
+@@ -230,6 +251,7 @@ impl Handler {
+             full_access_homeservers,
+             app_service_config,
+             require_membership: AtomicBool::new(false),
++            restrict_screen_share: AtomicBool::new(false),
+             sanity_check_interval,
+             cs_api_url_overrides: Arc::new(cs_api_url_overrides),
+             cs_api_url_cache: Arc::new(CsApiUrlCache::new()),
+@@ -794,6 +816,72 @@ impl Handler {
+             })
+     }
+ 
++    /// Enables or disables the screen share restriction of the tokens
++    /// (LIVEKIT_RESTRICT_SCREEN_SHARE). Off by default. The caller is
++    /// responsible for only enabling it when the application service
++    /// configuration is set up; the power levels are read with the AS token.
++    pub fn set_restrict_screen_share(&self, restrict: bool) {
++        self.restrict_screen_share
++            .store(restrict, Ordering::Relaxed);
++    }
++
++    /// The `canPublishSources` of the token of `matrix_id` for `room_id`, or
++    /// `None` (no restriction, upstream behaviour) when the restriction is
++    /// off or the caller may not publish at all.
++    ///
++    /// With the restriction on, a caller at or above the room's kick level
++    /// gets camera, microphone and the screen sources, everybody else camera
++    /// and microphone. This never fails and never delays a token for longer
++    /// than [`ROOM_STATE_TIMEOUT`]: anything that goes wrong reading the
++    /// power is "no screen share".
++    async fn publish_sources(
++        &self,
++        matrix_id: &str,
++        room_id: &str,
++        can_publish: bool,
++    ) -> Option<Vec<String>> {
++        if !can_publish || !self.restrict_screen_share.load(Ordering::Relaxed) {
++            return None;
++        }
++        let hs_server_name = &self.app_service_config.hs_server_name;
++        // The AS token masquerades as local users only.
++        let allowed = if matrix_server_name(matrix_id) != Some(hs_server_name.as_str()) {
++            debug!(matrix_id, "Handler: remote user, no screen share");
++            false
++        } else {
++            let read = async {
++                let cs_api_url = self
++                    .resolve_cs_api_url_or_bad_request(hs_server_name)
++                    .await
++                    .ok()?;
++                Some(
++                    screen_share::may_share_screen(
++                        self.deps.as_ref(),
++                        &cs_api_url,
++                        room_id,
++                        matrix_id,
++                        &self.app_service_config.as_token,
++                    )
++                    .await,
++                )
++            };
++            match tokio::time::timeout(ROOM_STATE_TIMEOUT, read).await {
++                Ok(Some(allowed)) => allowed,
++                Ok(None) => {
++                    warn!(matrix_id, room = %room_id,
++                        "Handler: homeserver URL unresolved, no screen share");
++                    false
++                }
++                Err(_) => {
++                    warn!(matrix_id, room = %room_id,
++                        "Handler: reading the power levels timed out, no screen share");
++                    false
++                }
++            }
++        };
++        Some(screen_share::sources_for(allowed))
++    }
++
+     /// Mints a LiveKit join token for `(lk_room_alias, lk_identity)`, mapping
+     /// any failure onto the standard 500. `matrix_id` identifies the
+     /// requester in the error log.
+@@ -803,13 +891,15 @@ impl Handler {
+         lk_identity: &LiveKitIdentity,
+         matrix_id: &str,
+         can_publish: bool,
++        can_publish_sources: Option<Vec<String>>,
+     ) -> Result<String, MatrixErrorResponse> {
+-        get_join_token(
++        get_join_token_with_sources(
+             &self.livekit_auth.key,
+             &self.livekit_auth.secret,
+             lk_room_alias,
+             lk_identity,
+             can_publish,
++            can_publish_sources,
+         )
+         .map_err(|err| {
+             error!(matrix_id, err = %err, "Handler: error getting LiveKit token");
+@@ -965,11 +1055,15 @@ impl Handler {
+         let slot_id = "m.call#ROOM";
+         let lk_room_alias = livekit_room_alias_for(&req.room, slot_id);
+ 
++        let sources = self
++            .publish_sources(&matrix_id, &req.room, is_full_access_user)
++            .await;
+         let token = self.get_join_token_or_internal_error(
+             &lk_room_alias,
+             &lk_identity,
+             &matrix_id,
+             is_full_access_user,
++            sources,
+         )?;
+ 
+         if is_full_access_user {
+@@ -1043,11 +1137,15 @@ impl Handler {
+             legacy_livekit_identity_for(&matrix_id, &req.member.claimed_device_id, &req.member.id);
+         let lk_room_alias = livekit_room_alias_for(&req.room_id, &req.slot_id);
+ 
++        let sources = self
++            .publish_sources(&matrix_id, &req.room_id, is_full_access_user)
++            .await;
+         let token = self.get_join_token_or_internal_error(
+             &lk_room_alias,
+             &lk_identity,
+             &matrix_id,
+             is_full_access_user,
++            sources,
+         )?;
+ 
+         if is_full_access_user {
+@@ -1142,11 +1240,13 @@ impl Handler {
+             let lk_identity = livekit_identity_for(mxid_header, &req.member_id);
+             let lk_room_alias = livekit_room_alias_for(&req.room_id, &req.slot_id);
+ 
++            let sources = self.publish_sources(mxid_header, &req.room_id, true).await;
+             let token = self.get_join_token_or_internal_error(
+                 &lk_room_alias,
+                 &lk_identity,
+                 mxid_header,
+                 true,
++                sources,
+             )?;
+ 
+             self.create_livekit_room_or_internal_error(&lk_room_alias, mxid_header, &lk_identity)
+@@ -1252,6 +1352,7 @@ impl Handler {
+             &lk_identity,
+             &req.user_id,
+             false,
++            None,
+         )?;
+ 
+         self.create_livekit_room_or_internal_error(&lk_room_alias, &req.user_id, &lk_identity)
+diff --git a/src/handler_tests.rs b/src/handler_tests.rs
+index da0e49e..db1f7f2 100644
+--- a/src/handler_tests.rs
++++ b/src/handler_tests.rs
+@@ -42,6 +42,11 @@ type GetDelayedEventDelayFn =
+     Box<dyn Fn(&CsApiUrl, &str, &str, &str, &str) -> Result<Duration, ActionError> + Send + Sync>;
+ type IsJoinedFn =
+     Box<dyn Fn(&CsApiUrl, &str, JoinedSubject<'_>) -> Result<bool, String> + Send + Sync>;
++type RoomStateFn = Box<
++    dyn Fn(&str, &str, &str, &str) -> BoxFuture<'static, Result<Option<serde_json::Value>, String>>
++        + Send
++        + Sync,
++>;
+ type RequestGetTokenViaFederationFn = Box<
+     dyn Fn(&CsApiUrl, &str, &GetTokenSsRequest) -> Result<GetTokenSsResponse, FederationTokenError>
+         + Send
+@@ -60,6 +65,7 @@ struct HandlerTestDeps {
+     execute_delayed_event_action_fn: Option<ExecuteDelayedEventActionFn>,
+     get_delayed_event_delay_fn: Option<GetDelayedEventDelayFn>,
+     is_joined_fn: Option<IsJoinedFn>,
++    room_state_fn: Option<RoomStateFn>,
+     request_get_token_via_federation_fn: Option<RequestGetTokenViaFederationFn>,
+ }
+ 
+@@ -171,6 +177,20 @@ impl Deps for HandlerTestDeps {
+         }
+     }
+ 
++    async fn get_room_state_content(
++        &self,
++        _cs_api_url: &CsApiUrl,
++        room_id: &str,
++        event_type: &str,
++        as_user_id: &str,
++        as_token: &str,
++    ) -> Result<Option<serde_json::Value>, String> {
++        match &self.room_state_fn {
++            Some(f) => f(room_id, event_type, as_user_id, as_token).await,
++            None => panic!("get_room_state_content not mocked in HandlerTestDeps"),
++        }
++    }
++
+     async fn request_get_token_via_federation(
+         &self,
+         own_cs_api_url: &CsApiUrl,
+@@ -5151,3 +5171,257 @@ async fn test_membership_not_joined_with_delay_id_registers_no_job() {
+     assert_eq!(probe.participant_lookups(), 0);
+     handler.close().await;
+ }
++
++// ── LIVEKIT_RESTRICT_SCREEN_SHARE ─────────────────────────────────────────────
++
++/// (room_id, event_type, as_user_id, as_token) of every state read.
++type StateReads = Arc<Mutex<Vec<(String, String, String, String)>>>;
++
++/// Deps for a screen share test: `sub` is the OpenID subject, `power_levels`
++/// the answer of the `m.room.power_levels` read (`None`: not mocked, a read
++/// panics).
++fn restrict_deps(
++    sub: &str,
++    power_levels: Option<Result<Option<serde_json::Value>, String>>,
++) -> (HandlerTestDeps, StateReads) {
++    let reads: StateReads = Arc::default();
++    let recorded = reads.clone();
++    let room_state_fn: Option<RoomStateFn> = power_levels.map(|answer| {
++        Box::new(
++            move |room: &str, event_type: &str, user: &str, token: &str| {
++                recorded.lock().unwrap().push((
++                    room.to_owned(),
++                    event_type.to_owned(),
++                    user.to_owned(),
++                    token.to_owned(),
++                ));
++                let answer = answer.clone();
++                Box::pin(async move { answer }) as BoxFuture<'static, _>
++            },
++        ) as RoomStateFn
++    });
++    let deps = HandlerTestDeps {
++        exchange_openid_userinfo_fn: exchange_openid_userinfo_ok(sub),
++        create_livekit_room_fn: Some(Box::new(|_, _, _| Ok(()))),
++        is_joined_fn: is_joined_ok(true),
++        room_state_fn,
++        ..Default::default()
++    };
++    (deps, reads)
++}
++
++fn restrict_handler(deps: HandlerTestDeps, restrict: bool) -> Arc<Handler> {
++    let handler = new_delegation_app_service_handler(deps);
++    handler.set_restrict_screen_share(restrict);
++    handler
++}
++
++/// The `canPublishSources` of a minted JWT (empty when absent).
++fn jwt_sources(jwt: &str) -> Vec<String> {
++    parse_jwt_claims(jwt, "secret")["video"]["canPublishSources"]
++        .as_array()
++        .map(|a| {
++            a.iter()
++                .filter_map(|v| v.as_str().map(str::to_owned))
++                .collect()
++        })
++        .unwrap_or_default()
++}
++
++const SOURCES_ALL: [&str; 4] = ["camera", "microphone", "screen_share", "screen_share_audio"];
++const SOURCES_CAM_MIC: [&str; 2] = ["camera", "microphone"];
++
++/// Mints a token on the legacy, the standalone and the application-service
++/// route for `@user:example.com` in `!testRoom:example.com` and returns the
++/// three JWTs.
++async fn mint_on_every_route(handler: &Arc<Handler>) -> Vec<(&'static str, String)> {
++    let legacy = handler
++        .process_legacy_sfu_request(&membership_legacy_request(
++            "example.com",
++            "!testRoom:example.com",
++        ))
++        .await
++        .expect("legacy")
++        .jwt;
++    let standalone = handler
++        .process_sfu_request(&valid_sfu_request())
++        .await
++        .expect("get_token")
++        .jwt;
++    let mut cs_req = valid_get_token_cs_request();
++    cs_req.url = default_auth().lk_url;
++    let cs = handler
++        .process_get_token_cs_request(cs_req, GET_TOKEN_CS_MXID)
++        .await
++        .expect("get_token cs")
++        .jwt;
++    vec![("legacy", legacy), ("get_token", standalone), ("cs", cs)]
++}
++
++fn power_levels_for(user: &str, power: i64) -> serde_json::Value {
++    serde_json::json!({ "users": { user: power }, "users_default": 0 })
++}
++
++/// Off (the default): no state read at all, and no source restriction.
++#[tokio::test]
++async fn test_restrict_screen_share_off_reads_nothing() {
++    let (deps, reads) = restrict_deps("@user:example.com", None);
++    let handler = restrict_handler(deps, false);
++    for (route, jwt) in mint_on_every_route(&handler).await {
++        assert!(jwt_sources(&jwt).is_empty(), "{route}: no restriction");
++    }
++    assert!(reads.lock().unwrap().is_empty());
++    handler.close().await;
++}
++
++/// On: a caller at or above the kick level gets the screen sources on every
++/// route, and the power is read as the caller with the AS token.
++#[tokio::test]
++async fn test_restrict_screen_share_host_gets_screen_sources() {
++    let (deps, reads) = restrict_deps(
++        "@user:example.com",
++        Some(Ok(Some(power_levels_for("@user:example.com", 100)))),
++    );
++    let handler = restrict_handler(deps, true);
++    for (route, jwt) in mint_on_every_route(&handler).await {
++        assert_eq!(jwt_sources(&jwt), SOURCES_ALL, "{route}");
++        let video = &parse_jwt_claims(&jwt, "secret")["video"];
++        assert_eq!(video["canPublish"].as_bool(), Some(true), "{route}");
++    }
++    let reads = reads.lock().unwrap().clone();
++    assert_eq!(reads.len(), 3, "one power read per token");
++    for (room, event_type, user, token) in reads.iter() {
++        assert_eq!(room, "!testRoom:example.com");
++        assert_eq!(event_type, "m.room.power_levels");
++        assert_eq!(user, "@user:example.com");
++        assert_eq!(token, "as_token");
++    }
++    handler.close().await;
++}
++
++/// On: a member below the kick level gets camera and microphone on every
++/// route.
++#[tokio::test]
++async fn test_restrict_screen_share_member_gets_camera_and_microphone() {
++    let (deps, _) = restrict_deps(
++        "@user:example.com",
++        Some(Ok(Some(power_levels_for("@user:example.com", 49)))),
++    );
++    let handler = restrict_handler(deps, true);
++    for (route, jwt) in mint_on_every_route(&handler).await {
++        assert_eq!(jwt_sources(&jwt), SOURCES_CAM_MIC, "{route}");
++    }
++    handler.close().await;
++}
++
++/// On: any failure of the read is "no screen share", and the request itself
++/// still succeeds.
++#[tokio::test]
++async fn test_restrict_screen_share_read_error_fails_closed() {
++    let (deps, reads) = restrict_deps("@user:example.com", Some(Err("boom".into())));
++    let handler = restrict_handler(deps, true);
++    for (route, jwt) in mint_on_every_route(&handler).await {
++        assert_eq!(jwt_sources(&jwt), SOURCES_CAM_MIC, "{route}");
++    }
++    assert_eq!(reads.lock().unwrap().len(), 3);
++    handler.close().await;
++}
++
++/// On: malformed power levels are "no screen share".
++#[tokio::test]
++async fn test_restrict_screen_share_malformed_power_levels_fail_closed() {
++    let (deps, _) = restrict_deps(
++        "@user:example.com",
++        Some(Ok(Some(serde_json::json!({ "users": "everybody" })))),
++    );
++    let handler = restrict_handler(deps, true);
++    for (route, jwt) in mint_on_every_route(&handler).await {
++        assert_eq!(jwt_sources(&jwt), SOURCES_CAM_MIC, "{route}");
++    }
++    handler.close().await;
++}
++
++/// On: a read that does not answer within 3 s is "no screen share".
++#[tokio::test]
++async fn test_restrict_screen_share_read_timeout_fails_closed() {
++    let deps = HandlerTestDeps {
++        exchange_openid_userinfo_fn: exchange_openid_userinfo_ok("@user:example.com"),
++        create_livekit_room_fn: Some(Box::new(|_, _, _| Ok(()))),
++        room_state_fn: Some(Box::new(|_, _, _, _| Box::pin(std::future::pending()))),
++        ..Default::default()
++    };
++    let handler = restrict_handler(deps, true);
++    let started = std::time::Instant::now();
++    let jwt = handler
++        .process_sfu_request(&valid_sfu_request())
++        .await
++        .expect("get_token")
++        .jwt;
++    assert_eq!(jwt_sources(&jwt), SOURCES_CAM_MIC);
++    let took = started.elapsed();
++    assert!(
++        took >= Duration::from_secs(3) && took < Duration::from_secs(5),
++        "took {took:?}"
++    );
++    handler.close().await;
++}
++
++/// On: a user of another homeserver is outside the AS namespace; no read is
++/// attempted and the token carries no screen share.
++#[tokio::test]
++async fn test_restrict_screen_share_remote_user_is_not_read() {
++    let (deps, reads) = restrict_deps("@user:other.com", None);
++    let handler = restrict_handler(deps, true);
++    let jwt = handler
++        .process_legacy_sfu_request(&membership_legacy_request(
++            "other.com",
++            "!testRoom:example.com",
++        ))
++        .await
++        .expect("legacy")
++        .jwt;
++    assert_eq!(jwt_sources(&jwt), SOURCES_CAM_MIC);
++    assert!(reads.lock().unwrap().is_empty());
++    handler.close().await;
++}
++
++/// On: a user who may not publish at all (restricted access) keeps
++/// `canPublish: false` and gets no sources, without a read.
++#[tokio::test]
++async fn test_restrict_screen_share_restricted_user_stays_unchanged() {
++    let (deps, reads) = restrict_deps("@user:third.com", None);
++    let handler = restrict_handler(deps, true);
++    let jwt = handler
++        .process_legacy_sfu_request(&membership_legacy_request(
++            "third.com",
++            "!testRoom:example.com",
++        ))
++        .await
++        .expect("legacy")
++        .jwt;
++    let video = parse_jwt_claims(&jwt, "secret")["video"].clone();
++    assert_eq!(video["canPublish"].as_bool(), Some(false));
++    assert!(jwt_sources(&jwt).is_empty());
++    assert!(reads.lock().unwrap().is_empty());
++    handler.close().await;
++}
++
++/// `get_join_token_with_sources` writes the LiveKit spelling of the grant.
++#[tokio::test]
++async fn test_get_join_token_with_sources_grant_spelling() {
++    let jwt = get_join_token_with_sources(
++        "key",
++        "secret",
++        &LiveKitRoomAlias("room".into()),
++        &LiveKitIdentity("id".into()),
++        true,
++        Some(crate::screen_share::sources_for(false)),
++    )
++    .unwrap();
++    let video = parse_jwt_claims(&jwt, "secret")["video"].clone();
++    assert_eq!(
++        video["canPublishSources"],
++        serde_json::json!(["camera", "microphone"])
++    );
++    assert_eq!(video["canPublish"].as_bool(), Some(true));
++}
+diff --git a/src/helper.rs b/src/helper.rs
+index 8201e18..7863c4e 100644
+--- a/src/helper.rs
++++ b/src/helper.rs
+@@ -1023,6 +1023,50 @@ pub trait Deps: Send + Sync {
+         Ok(parsed.joined)
+     }
+ 
++    /// Reads the content of the state event `event_type` (empty state key) of
++    /// `room_id` as the local user `as_user_id` (application-service
++    /// masquerading with the AS token), through
++    /// `GET /_matrix/client/v3/rooms/{room}/state/{type}/`. `Ok(None)` is
++    /// `M_NOT_FOUND`: the room has no such event.
++    async fn get_room_state_content(
++        &self,
++        cs_api_url: &CsApiUrl,
++        room_id: &str,
++        event_type: &str,
++        as_user_id: &str,
++        as_token: &str,
++    ) -> Result<Option<serde_json::Value>, String> {
++        get_json_as_user(
++            self.skip_verify_tls(),
++            cs_api_url,
++            &["rooms", room_id, "state", event_type, ""],
++            as_user_id,
++            as_token,
++        )
++        .await
++    }
++
++    /// Reads the event `event_id` of `room_id` as the local user
++    /// `as_user_id`, through `GET /_matrix/client/v3/rooms/{room}/event/{id}`.
++    /// `Ok(None)` is `M_NOT_FOUND`.
++    async fn get_room_event(
++        &self,
++        cs_api_url: &CsApiUrl,
++        room_id: &str,
++        event_id: &str,
++        as_user_id: &str,
++        as_token: &str,
++    ) -> Result<Option<serde_json::Value>, String> {
++        get_json_as_user(
++            self.skip_verify_tls(),
++            cs_api_url,
++            &["rooms", room_id, "event", event_id],
++            as_user_id,
++            as_token,
++        )
++        .await
++    }
++
+     /// Triggers a ping round-trip to ensure the service and the homeserver
+     /// can reach each other.
+     async fn trigger_appservice_ping(
+@@ -1158,6 +1202,71 @@ pub trait Deps: Send + Sync {
+     }
+ }
+ 
++/// How long a room state read (LIVEKIT_RESTRICT_SCREEN_SHARE) may take.
++pub(crate) const ROOM_STATE_TIMEOUT: Duration = Duration::from_secs(3);
++
++/// `GET {cs_api_url}/_matrix/client/v3/{segments...}?user_id=<user>` with the
++/// AS token. `Ok(None)` is a 404 `M_NOT_FOUND`; every other non-2xx status,
++/// transport failure or unparseable body is an error.
++async fn get_json_as_user(
++    skip_verify_tls: bool,
++    cs_api_url: &CsApiUrl,
++    segments: &[&str],
++    as_user_id: &str,
++    as_token: &str,
++) -> Result<Option<serde_json::Value>, String> {
++    let mut endpoint = url::Url::parse(cs_api_url.as_str())
++        .map_err(|e| format!("invalid client-server API URL: {e}"))?;
++    {
++        let mut path = endpoint
++            .path_segments_mut()
++            .map_err(|_| "invalid client-server API URL: cannot be a base".to_string())?;
++        path.pop_if_empty();
++        path.extend(["_matrix", "client", "v3"]);
++        path.extend(segments);
++    }
++    endpoint
++        .query_pairs_mut()
++        .append_pair("user_id", as_user_id);
++
++    let resp = http_client(skip_verify_tls)
++        .get(endpoint.clone())
++        .bearer_auth(as_token)
++        .timeout(ROOM_STATE_TIMEOUT)
++        .send()
++        .await
++        .map_err(|e| {
++            let msg = error_chain(&e);
++            debug!(url = %endpoint, err = %msg, "room state read");
++            format!("failed to read room state: {msg}")
++        })?;
++
++    let status = resp.status();
++    if status == reqwest::StatusCode::NOT_FOUND {
++        #[derive(Deserialize, Default)]
++        struct ErrBody {
++            #[serde(default)]
++            errcode: String,
++        }
++        let body: ErrBody = resp.json().await.unwrap_or_default();
++        return if body.errcode == "M_NOT_FOUND" {
++            Ok(None)
++        } else {
++            Err("failed to read room state: http status code 404".to_owned())
++        };
++    }
++    if !status.is_success() {
++        return Err(format!(
++            "failed to read room state: http status code {}",
++            status.as_u16()
++        ));
++    }
++    resp.json::<serde_json::Value>()
++        .await
++        .map(Some)
++        .map_err(|e| format!("failed to parse room state response: {e}"))
++}
++
+ /// The production [`Deps`] implementation — all behaviour comes from the
+ /// trait's default methods.
+ #[derive(Default)]
+diff --git a/src/lib.rs b/src/lib.rs
+index e6b9acc..6c44197 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -9,4 +9,5 @@ pub mod handler;
+ pub mod helper;
+ pub mod requests;
+ pub mod retry;
++pub mod screen_share;
+ pub mod store;
+diff --git a/src/main.rs b/src/main.rs
+index 222cfd6..17729bd 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -85,6 +85,13 @@ async fn main() {
+         );
+     }
+ 
++    if config.restrict_screen_share {
++        info!(
++            "Screen share is limited to callers at or above the room's kick level \
++             (LIVEKIT_RESTRICT_SCREEN_SHARE)"
++        );
++    }
++
+     let handler = Handler::new(
+         LiveKitAuth {
+             key: config.key.clone(),
+@@ -101,6 +108,7 @@ async fn main() {
+         }),
+     );
+     handler.set_require_membership(config.require_membership);
++    handler.set_restrict_screen_share(config.restrict_screen_share);
+ 
+     let sanity_check_interval_display = if config.sanity_check_interval.is_zero() {
+         "disabled".to_owned()
+diff --git a/src/screen_share.rs b/src/screen_share.rs
+new file mode 100644
+index 0000000..3cd15d6
+--- /dev/null
++++ b/src/screen_share.rs
+@@ -0,0 +1,520 @@
++// Copyright 2026 Element Creations Ltd.
++//
++// SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
++// Please see LICENSE files in the repository root for full details.
++
++//! LIVEKIT_RESTRICT_SCREEN_SHARE: whether a caller may publish a screen.
++//!
++//! A caller may share the screen when their power level in the room is at
++//! least the room's `kick` level (default 50). The power is read from the
++//! homeserver as the caller (application-service masquerading), so only what
++//! the caller can see is read. Every failure means "may not": the policy
++//! fails closed, and the token request itself still succeeds with the
++//! camera and the microphone.
++
++use serde_json::Value;
++
++use crate::helper::{CsApiUrl, Deps};
++
++/// The sources of a caller below the kick level.
++pub const SOURCES_BASE: [&str; 2] = ["camera", "microphone"];
++/// The sources of a caller at or above the kick level.
++pub const SOURCES_WITH_SCREEN: [&str; 4] =
++    ["camera", "microphone", "screen_share", "screen_share_audio"];
++
++/// The `kick` level of a room without an explicit one.
++const DEFAULT_KICK: i64 = 50;
++
++/// The LiveKit `canPublishSources` list for a caller.
++pub fn sources_for(may_share_screen: bool) -> Vec<String> {
++    let sources: &[&str] = if may_share_screen {
++        &SOURCES_WITH_SCREEN
++    } else {
++        &SOURCES_BASE
++    };
++    sources.iter().map(|s| (*s).to_owned()).collect()
++}
++
++/// A power level as Matrix allows it: an integer, or (old room versions) a
++/// string holding one.
++fn level(value: &Value) -> Option<i64> {
++    value
++        .as_i64()
++        .or_else(|| value.as_str().and_then(|s| s.trim().parse().ok()))
++}
++
++/// `(power of user, kick level)` from the content of an `m.room.power_levels`
++/// event, or `None` when the content is malformed in a field that matters.
++pub fn power_and_kick(content: &Value, user_id: &str) -> Option<(i64, i64)> {
++    let obj = content.as_object()?;
++    let optional = |key: &str, default: i64| match obj.get(key) {
++        None | Some(Value::Null) => Some(default),
++        Some(v) => level(v),
++    };
++    let kick = optional("kick", DEFAULT_KICK)?;
++    let users_default = optional("users_default", 0)?;
++    let power = match obj.get("users") {
++        None | Some(Value::Null) => users_default,
++        Some(Value::Object(users)) => match users.get(user_id) {
++            Some(v) => level(v)?,
++            None => users_default,
++        },
++        Some(_) => return None,
++    };
++    Some((power, kick))
++}
++
++/// Whether the room version gives its creators unlimited power instead of a
++/// level in the power levels event: room version 12 and later, and the
++/// `org.matrix.hydra.11` pre-release of it.
++pub fn creators_have_unlimited_power(room_version: &str) -> bool {
++    room_version == "org.matrix.hydra.11" || room_version.parse::<u32>().is_ok_and(|v| v >= 12)
++}
++
++/// The parts of an `m.room.create` content that decide who the creators are.
++#[derive(Debug, Default, PartialEq, Eq)]
++pub struct CreateInfo {
++    pub room_version: String,
++    /// `content.creator`, present up to room version 10.
++    pub creator: Option<String>,
++    /// `content.additional_creators` (room version 12).
++    pub additional_creators: Vec<String>,
++}
++
++/// Parses the content of an `m.room.create` event. A missing room version
++/// means version 1.
++pub fn parse_create(content: &Value) -> Option<CreateInfo> {
++    let obj = content.as_object()?;
++    let room_version = match obj.get("room_version") {
++        None | Some(Value::Null) => "1".to_owned(),
++        Some(Value::String(v)) => v.clone(),
++        Some(_) => return None,
++    };
++    let creator = obj
++        .get("creator")
++        .and_then(Value::as_str)
++        .map(str::to_owned);
++    let additional_creators = match obj.get("additional_creators") {
++        None | Some(Value::Null) => Vec::new(),
++        Some(Value::Array(list)) => list
++            .iter()
++            .filter_map(|v| v.as_str().map(str::to_owned))
++            .collect(),
++        Some(_) => return None,
++    };
++    Some(CreateInfo {
++        room_version,
++        creator,
++        additional_creators,
++    })
++}
++
++/// Decides whether `user_id` (a local user) may share the screen in
++/// `room_id`. Reads at most the power levels event, the create event and, for
++/// a room of version 12 or later, the create event itself (for its sender).
++/// Never fails: any error is "no".
++pub async fn may_share_screen(
++    deps: &dyn Deps,
++    cs_api_url: &CsApiUrl,
++    room_id: &str,
++    user_id: &str,
++    as_token: &str,
++) -> bool {
++    // A client-supplied room ID that is not one never reaches a URL.
++    if !room_id.starts_with('!') {
++        return false;
++    }
++    let power_levels = match deps
++        .get_room_state_content(
++            cs_api_url,
++            room_id,
++            "m.room.power_levels",
++            user_id,
++            as_token,
++        )
++        .await
++    {
++        Ok(content) => content,
++        Err(err) => {
++            tracing::warn!(room = %room_id, user = %user_id, err = %err,
++                "Screen share: power levels unreadable, camera and microphone only");
++            return false;
++        }
++    };
++    if let Some(content) = &power_levels {
++        match power_and_kick(content, user_id) {
++            None => {
++                tracing::warn!(room = %room_id, user = %user_id,
++                    "Screen share: malformed power levels, camera and microphone only");
++                return false;
++            }
++            Some((power, kick)) if power >= kick => return true,
++            Some(_) => {}
++        }
++        // Room versions before 12 have a server part in the room ID. There
++        // the power levels event is complete: nobody has a power the event
++        // does not state.
++        if room_id.contains(':') {
++            return false;
++        }
++    }
++
++    // No power levels event (the creator has 100, anybody else 0), or a
++    // room of version 12 (creators are above every level and are not listed
++    // in the event).
++    let create = match deps
++        .get_room_state_content(cs_api_url, room_id, "m.room.create", user_id, as_token)
++        .await
++    {
++        Ok(Some(content)) => content,
++        Ok(None) => return false,
++        Err(err) => {
++            tracing::warn!(room = %room_id, user = %user_id, err = %err,
++                "Screen share: create event unreadable, camera and microphone only");
++            return false;
++        }
++    };
++    let Some(info) = parse_create(&create) else {
++        return false;
++    };
++    if creators_have_unlimited_power(&info.room_version) {
++        if info.additional_creators.iter().any(|c| c == user_id) {
++            return true;
++        }
++        // The creating user is the sender of the create event, whose ID is
++        // the room ID with a `$` sigil.
++        let Some(hash) = room_id.strip_prefix('!').filter(|h| !h.is_empty()) else {
++            return false;
++        };
++        return match deps
++            .get_room_event(cs_api_url, room_id, &format!("${hash}"), user_id, as_token)
++            .await
++        {
++            Ok(Some(event)) => event.get("sender").and_then(Value::as_str) == Some(user_id),
++            Ok(None) => false,
++            Err(err) => {
++                tracing::warn!(room = %room_id, user = %user_id, err = %err,
++                    "Screen share: create event unreadable, camera and microphone only");
++                false
++            }
++        };
++    }
++    power_levels.is_none() && info.creator.as_deref() == Some(user_id)
++}
++
++#[cfg(test)]
++mod tests {
++    use std::collections::HashMap;
++    use std::sync::Mutex;
++
++    use async_trait::async_trait;
++    use serde_json::json;
++
++    use super::*;
++
++    const ALICE: &str = "@alice:example.com";
++    const BOB: &str = "@bob:example.com";
++
++    #[test]
++    fn sources_lists() {
++        assert_eq!(sources_for(false), ["camera", "microphone"]);
++        assert_eq!(
++            sources_for(true),
++            ["camera", "microphone", "screen_share", "screen_share_audio"]
++        );
++    }
++
++    #[test]
++    fn power_users_entry_wins() {
++        let pl = json!({ "users": { ALICE: 100, BOB: 10 }, "users_default": 5, "kick": 60 });
++        assert_eq!(power_and_kick(&pl, ALICE), Some((100, 60)));
++        assert_eq!(power_and_kick(&pl, BOB), Some((10, 60)));
++    }
++
++    #[test]
++    fn power_falls_back_to_users_default() {
++        let pl = json!({ "users": { ALICE: 100 }, "users_default": 50 });
++        assert_eq!(power_and_kick(&pl, BOB), Some((50, 50)));
++    }
++
++    #[test]
++    fn power_defaults_kick_50_and_users_default_0() {
++        assert_eq!(power_and_kick(&json!({}), BOB), Some((0, 50)));
++        assert_eq!(power_and_kick(&json!({ "users": {} }), BOB), Some((0, 50)));
++        assert_eq!(
++            power_and_kick(&json!({ "kick": null, "users_default": null }), BOB),
++            Some((0, 50))
++        );
++    }
++
++    #[test]
++    fn power_accepts_numeric_strings() {
++        let pl = json!({ "users": { ALICE: "100" }, "kick": "50" });
++        assert_eq!(power_and_kick(&pl, ALICE), Some((100, 50)));
++    }
++
++    #[test]
++    fn power_malformed_content_is_none() {
++        assert_eq!(power_and_kick(&json!([]), ALICE), None);
++        assert_eq!(power_and_kick(&json!("x"), ALICE), None);
++        assert_eq!(power_and_kick(&json!({ "users": [] }), ALICE), None);
++        assert_eq!(
++            power_and_kick(&json!({ "users": { ALICE: "high" } }), ALICE),
++            None
++        );
++        assert_eq!(
++            power_and_kick(&json!({ "users": { ALICE: 1.5 } }), ALICE),
++            None
++        );
++        assert_eq!(power_and_kick(&json!({ "kick": true }), ALICE), None);
++        assert_eq!(power_and_kick(&json!({ "users_default": [] }), ALICE), None);
++        // A malformed entry of somebody else does not matter.
++        assert_eq!(
++            power_and_kick(&json!({ "users": { BOB: "high" } }), ALICE),
++            Some((0, 50))
++        );
++    }
++
++    #[test]
++    fn room_versions_with_unlimited_creators() {
++        for v in ["12", "13", "org.matrix.hydra.11"] {
++            assert!(creators_have_unlimited_power(v), "{v}");
++        }
++        for v in ["1", "9", "10", "11", "", "custom", "12x"] {
++            assert!(!creators_have_unlimited_power(v), "{v}");
++        }
++    }
++
++    #[test]
++    fn create_parse() {
++        assert_eq!(
++            parse_create(&json!({ "creator": ALICE, "room_version": "10" })),
++            Some(CreateInfo {
++                room_version: "10".into(),
++                creator: Some(ALICE.into()),
++                additional_creators: vec![],
++            })
++        );
++        assert_eq!(
++            parse_create(&json!({ "room_version": "12", "additional_creators": [BOB, 7] })),
++            Some(CreateInfo {
++                room_version: "12".into(),
++                creator: None,
++                additional_creators: vec![BOB.into()],
++            })
++        );
++        assert_eq!(parse_create(&json!({})).unwrap().room_version, "1");
++        assert_eq!(parse_create(&json!({ "room_version": 12 })), None);
++        assert_eq!(parse_create(&json!({ "additional_creators": "x" })), None);
++        assert_eq!(parse_create(&json!([])), None);
++    }
++
++    /// Scripted answers: (kind, key) -> result. Kind is "state" or "event".
++    #[derive(Default)]
++    struct Script {
++        answers: HashMap<(&'static str, String), Result<Option<Value>, String>>,
++        calls: Mutex<Vec<String>>,
++    }
++
++    impl Script {
++        fn state(mut self, event_type: &str, r: Result<Option<Value>, String>) -> Self {
++            self.answers.insert(("state", event_type.to_owned()), r);
++            self
++        }
++        fn event(mut self, event_id: &str, r: Result<Option<Value>, String>) -> Self {
++            self.answers.insert(("event", event_id.to_owned()), r);
++            self
++        }
++        fn calls(&self) -> Vec<String> {
++            self.calls.lock().unwrap().clone()
++        }
++    }
++
++    #[async_trait]
++    impl Deps for Script {
++        async fn get_room_state_content(
++            &self,
++            _cs_api_url: &CsApiUrl,
++            _room_id: &str,
++            event_type: &str,
++            _as_user_id: &str,
++            _as_token: &str,
++        ) -> Result<Option<Value>, String> {
++            self.calls
++                .lock()
++                .unwrap()
++                .push(format!("state:{event_type}"));
++            self.answers
++                .get(&("state", event_type.to_owned()))
++                .cloned()
++                .unwrap_or(Ok(None))
++        }
++
++        async fn get_room_event(
++            &self,
++            _cs_api_url: &CsApiUrl,
++            _room_id: &str,
++            event_id: &str,
++            _as_user_id: &str,
++            _as_token: &str,
++        ) -> Result<Option<Value>, String> {
++            self.calls.lock().unwrap().push(format!("event:{event_id}"));
++            self.answers
++                .get(&("event", event_id.to_owned()))
++                .cloned()
++                .unwrap_or(Ok(None))
++        }
++    }
++
++    async fn decide(script: &Script, room: &str, user: &str) -> bool {
++        may_share_screen(script, &CsApiUrl("http://hs".into()), room, user, "as").await
++    }
++
++    const ROOM: &str = "!room:example.com";
++    const ROOM12: &str = "!createEventHash";
++
++    #[tokio::test]
++    async fn host_at_kick_level_shares_with_one_request() {
++        let s = Script::default().state(
++            "m.room.power_levels",
++            Ok(Some(json!({ "users": { ALICE: 50 } }))),
++        );
++        assert!(decide(&s, ROOM, ALICE).await);
++        assert_eq!(s.calls(), ["state:m.room.power_levels"]);
++    }
++
++    #[tokio::test]
++    async fn member_below_kick_does_not_share() {
++        let s = Script::default().state(
++            "m.room.power_levels",
++            Ok(Some(
++                json!({ "users": { ALICE: 100 }, "users_default": 49 }),
++            )),
++        );
++        assert!(!decide(&s, ROOM, BOB).await);
++        // A pre-12 room's power levels event is complete: no create read.
++        assert_eq!(s.calls(), ["state:m.room.power_levels"]);
++    }
++
++    #[tokio::test]
++    async fn custom_kick_level_is_honoured() {
++        let s = Script::default().state(
++            "m.room.power_levels",
++            Ok(Some(json!({ "users": { ALICE: 50, BOB: 70 }, "kick": 60 }))),
++        );
++        assert!(!decide(&s, ROOM, ALICE).await);
++        assert!(decide(&s, ROOM, BOB).await);
++    }
++
++    #[tokio::test]
++    async fn malformed_power_levels_do_not_share() {
++        let s = Script::default().state("m.room.power_levels", Ok(Some(json!({ "users": 7 }))));
++        assert!(!decide(&s, ROOM, ALICE).await);
++        let s = Script::default().state("m.room.power_levels", Ok(Some(json!([1, 2]))));
++        assert!(!decide(&s, ROOM, ALICE).await);
++    }
++
++    #[tokio::test]
++    async fn read_errors_do_not_share() {
++        let s = Script::default().state("m.room.power_levels", Err("http status code 500".into()));
++        assert!(!decide(&s, ROOM, ALICE).await);
++        assert!(!decide(&s, ROOM12, ALICE).await);
++    }
++
++    #[tokio::test]
++    async fn without_power_levels_event_the_creator_has_100() {
++        let s = Script::default().state(
++            "m.room.create",
++            Ok(Some(json!({ "creator": ALICE, "room_version": "10" }))),
++        );
++        assert!(decide(&s, ROOM, ALICE).await);
++        assert!(!decide(&s, ROOM, BOB).await);
++        assert_eq!(
++            s.calls(),
++            [
++                "state:m.room.power_levels",
++                "state:m.room.create",
++                "state:m.room.power_levels",
++                "state:m.room.create"
++            ]
++        );
++    }
++
++    #[tokio::test]
++    async fn without_power_levels_and_without_creator_field_nobody_shares() {
++        // Room version 11 has no `creator` in the content.
++        let s = Script::default().state("m.room.create", Ok(Some(json!({ "room_version": "11" }))));
++        assert!(!decide(&s, ROOM, ALICE).await);
++        // No create event at all.
++        let s = Script::default();
++        assert!(!decide(&s, ROOM, ALICE).await);
++        // Unreadable create event.
++        let s = Script::default().state("m.room.create", Err("boom".into()));
++        assert!(!decide(&s, ROOM, ALICE).await);
++        // Malformed create event.
++        let s = Script::default().state("m.room.create", Ok(Some(json!({ "room_version": 10 }))));
++        assert!(!decide(&s, ROOM, ALICE).await);
++    }
++
++    #[tokio::test]
++    async fn power_levels_event_beats_the_creator_field_before_v12() {
++        // With a power levels event the creator has only what it states.
++        let s = Script::default()
++            .state("m.room.power_levels", Ok(Some(json!({ "users": {} }))))
++            .state(
++                "m.room.create",
++                Ok(Some(json!({ "creator": ALICE, "room_version": "10" }))),
++            );
++        assert!(!decide(&s, ROOM, ALICE).await);
++    }
++
++    #[tokio::test]
++    async fn v12_creator_is_the_sender_of_the_create_event() {
++        let s = Script::default()
++            .state(
++                "m.room.power_levels",
++                Ok(Some(json!({ "users": { BOB: 50 } }))),
++            )
++            .state("m.room.create", Ok(Some(json!({ "room_version": "12" }))))
++            .event(
++                "$createEventHash",
++                Ok(Some(json!({ "sender": ALICE, "type": "m.room.create" }))),
++            );
++        assert!(decide(&s, ROOM12, ALICE).await);
++        // Bob is listed at 50: no create read needed.
++        assert!(decide(&s, ROOM12, BOB).await);
++        // Carol is neither.
++        assert!(!decide(&s, ROOM12, "@carol:example.com").await);
++    }
++
++    #[tokio::test]
++    async fn v12_additional_creator_shares_without_the_event_read() {
++        let s = Script::default()
++            .state("m.room.power_levels", Ok(Some(json!({}))))
++            .state(
++                "m.room.create",
++                Ok(Some(
++                    json!({ "room_version": "12", "additional_creators": [BOB] }),
++                )),
++            );
++        assert!(decide(&s, ROOM12, BOB).await);
++        assert!(!s.calls().iter().any(|c| c.starts_with("event:")));
++    }
++
++    #[tokio::test]
++    async fn v12_create_event_unreadable_does_not_share() {
++        let s = Script::default()
++            .state("m.room.create", Ok(Some(json!({ "room_version": "12" }))))
++            .event("$createEventHash", Err("http status code 403".into()));
++        assert!(!decide(&s, ROOM12, ALICE).await);
++        let s = Script::default().state("m.room.create", Ok(Some(json!({ "room_version": "12" }))));
++        assert!(!decide(&s, ROOM12, ALICE).await);
++        let s = Script::default()
++            .state("m.room.create", Ok(Some(json!({ "room_version": "12" }))))
++            .event(
++                "$createEventHash",
++                Ok(Some(json!({ "type": "m.room.create" }))),
++            );
++        assert!(!decide(&s, ROOM12, ALICE).await);
++    }
++}
