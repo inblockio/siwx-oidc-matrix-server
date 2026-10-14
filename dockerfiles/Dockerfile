@@ -23,7 +23,7 @@
 #
 # Bumped to v1.162.0 (2026-10-11). Why: v1.162.0 ships MSC4502 (the membership
 # look-up `is_joined`, behind experimental_features.msc4502_enabled), which the
-# patched lk-jwt-service (patches/lk-jwt/README.md entry 1, issue #40) needs to
+# lk-jwt-service (upstream v0.9.0, element-hq/lk-jwt-service#250) needs to
 # check that a caller is joined to the room before it hands out an SFU token.
 # The MSC4133 patch applies unchanged (`scripts/check-patch-hunks.py` and the
 # image build). The patch header still names the version it was forward-ported

@@ -247,7 +247,7 @@ services:
       # image above (v0.8.0 plus the old require-membership.patch) reads it.
       # Delete it in the commit that moves that default to a newer build.
       LIVEKIT_REQUIRE_MEMBERSHIP: "true"
-      # Screen share only for the hosts (patches/lk-jwt/README.md entry 2): when
+      # Screen share only for the hosts (patches/lk-jwt/README.md entry 1): when
       # "true", the tokens of callers below the room's kick level carry
       # canPublishSources camera and microphone only. OFF unless the deployment
       # sets LK_JWT_RESTRICT_SCREEN_SHARE=true in .env, so an image bump alone

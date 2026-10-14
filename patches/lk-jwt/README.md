@@ -18,7 +18,7 @@ POLICY; only POLICY is permanent. The upstream links here are picked up by the u
 refresh of `patches/element-web/README.md` step 4b, which greps `patches/*/README.md`.
 
 **Bump procedure** (every change of `LK_JWT_TAG`/`LK_JWT_COMMIT` in the Dockerfile):
-dry-run entry 2 against the new commit, then run upstream's `cargo test --locked` (root and
+dry-run entry 1 against the new commit, then run upstream's `cargo test --locked` (root and
 `integration-tests/`) on the patched tree:
 
 ```bash
@@ -31,7 +31,7 @@ d=$(mktemp -d) && git -C "$d" init -q && git -C "$d" fetch -q --depth 1 \
 The image is built by `dockerfiles/Dockerfile.lk-jwt` and published by the CI
 build-and-push matrix as `ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service`, so a
 patch that stops applying fails CI. It runs as the non-root user 65532. The Dockerfile applies
-entry 2 to upstream v0.9.0. The room-membership check is upstream's (former entry 1): it is on
+entry 1 to upstream v0.9.0. The room-membership check is upstream's (formerly `require-membership.patch`): it is on
 when lk-jwt runs as an application service and `LIVEKIT_FULL_ACCESS_HOMESERVERS` is exactly
 `LIVEKIT_HS_SERVER_NAME`. `docker-compose.yml` sets both from `MATRIX_HOST` and passes the
 application-service tokens `LK_JWT_AS_TOKEN`/`LK_JWT_HS_TOKEN` (`env.example`); without the
@@ -44,9 +44,9 @@ delayed-event handling needs; that namespace makes the AS token a credential tha
 any local user. A failed write of the registration or its `app_service_config_files` entry
 stops Synapse from starting. A deployment that pins
 `LK_JWT_IMAGE_REF` to an upstream image checks membership only from v0.9.0 on, and never has
-entry 2.
+entry 1.
 
-Entry 2 is opt-in: `docker-compose.yml` passes `LIVEKIT_RESTRICT_SCREEN_SHARE` from
+Entry 1 is opt-in: `docker-compose.yml` passes `LIVEKIT_RESTRICT_SCREEN_SHARE` from
 `LK_JWT_RESTRICT_SCREEN_SHARE` in `.env` (default `false`), so a new image changes nothing
 until a deployment turns the flag on (`env.example`). With the flag on the container refuses
 to start without the application-service configuration. An image without the patch ignores
@@ -71,39 +71,9 @@ for `lk-jwt-service`. A count that grows means Synapse is queueing events for it
 delivering them, because the registration gained a `url` or something else changed its
 delivery; the table, and the disk it sits on, grow without bound until that is fixed.
 
-## 1. `require-membership.patch` — RETIRED (2026-10-13)
+## 1. `restrict-screen-share.patch` — POLICY
 
-Upstream merged it, reworked, as
-[element-hq/lk-jwt-service#250](https://github.com/element-hq/lk-jwt-service/pull/250)
-(squash `0e176b1eca44e67b11484d0bdf56999807bf2b8e`) and released it as v0.9.0 the same day
-(`gh api repos/element-hq/lk-jwt-service/compare/v0.9.0...0e176b1eca44e67b11484d0bdf56999807bf2b8e --jq .status`
-is `identical`). The Dockerfile pins v0.9.0 and the patch is deleted. Differences from the
-patch that matter here:
-
-- **No `LIVEKIT_REQUIRE_MEMBERSHIP`.** The check is on when the service runs as an application
-  service and `LIVEKIT_FULL_ACCESS_HOMESERVERS` is exactly one entry equal to
-  `LIVEKIT_HS_SERVER_NAME` (`verifies_legacy_membership` in `src/handler.rs`). Compose feeds
-  both from `MATRIX_HOST`, so they cannot diverge.
-- **It fails open.** Upstream does not refuse to start when the check is off; it logs a `warn`
-  ("... do not verify room membership ..."), and `info` ("... verify room membership through
-  the homeserver") when it is on. Compose always sets the server name, so lk-jwt refuses to
-  start without the two tokens.
-
-Still open:
-
-- `LIVEKIT_REQUIRE_MEMBERSHIP: "true"` stays in `docker-compose.yml` while its default
-  `LK_JWT_IMAGE_REF` is the v0.8.0-based build `sha-70b897e`, which only checks with it.
-  Delete it in the commit that moves that default to a build of this Dockerfile; the aqua-meet
-  stacks (`stack/up.sh`, `tools/fps-lab.sh`) drop it when they move to such an image.
-- Verify enforcement on the built image: the startup log shows the `info` line, and a
-  non-member gets 403 on `/sfu/get`, `/get_token` and `/delegate_delayed_leave` (the
-  21-case MSC4502 lab).
-- Upstream observation, not raised: the `is_joined` parser (`src/helper.rs`) treats a
-  response without `joined` as not joined (403) instead of malformed (502). It fails closed.
-
-## 2. `restrict-screen-share.patch` — POLICY
-
-Applied on upstream v0.9.0. Since entry 1 is gone it carries the `parse_bool_env` helper
+Applied on upstream v0.9.0. Since `require-membership.patch` is gone it carries the `parse_bool_env` helper
 and the `AtomicBool`/`Ordering` import it used to borrow from it.
 
 - **What:** a new opt-in environment variable `LIVEKIT_RESTRICT_SCREEN_SHARE` (default
@@ -159,3 +129,33 @@ and the `AtomicBool`/`Ordering` import it used to borrow from it.
 - **Retirement:** none while the policy is wanted. It is dropped when upstream grows an
   equivalent (a per-room or per-power source policy in the token), or when screen share is
   governed elsewhere.
+
+## Retired: `require-membership.patch` (2026-10-13)
+
+Upstream merged it, reworked, as
+[element-hq/lk-jwt-service#250](https://github.com/element-hq/lk-jwt-service/pull/250)
+(squash `0e176b1eca44e67b11484d0bdf56999807bf2b8e`) and released it as v0.9.0 the same day
+(`gh api repos/element-hq/lk-jwt-service/compare/v0.9.0...0e176b1eca44e67b11484d0bdf56999807bf2b8e --jq .status`
+is `identical`). The Dockerfile pins v0.9.0 and the patch is deleted. Differences from the
+patch that matter here:
+
+- **No `LIVEKIT_REQUIRE_MEMBERSHIP`.** The check is on when the service runs as an application
+  service and `LIVEKIT_FULL_ACCESS_HOMESERVERS` is exactly one entry equal to
+  `LIVEKIT_HS_SERVER_NAME` (`verifies_legacy_membership` in `src/handler.rs`). Compose feeds
+  both from `MATRIX_HOST`, so they cannot diverge.
+- **It fails open.** Upstream does not refuse to start when the check is off; it logs a `warn`
+  ("... do not verify room membership ..."), and `info` ("... verify room membership through
+  the homeserver") when it is on. Compose always sets the server name, so lk-jwt refuses to
+  start without the two tokens.
+
+Still open:
+
+- `LIVEKIT_REQUIRE_MEMBERSHIP: "true"` stays in `docker-compose.yml` while its default
+  `LK_JWT_IMAGE_REF` is the v0.8.0-based build `sha-70b897e`, which only checks with it.
+  Delete it in the commit that moves that default to a build of this Dockerfile; the aqua-meet
+  stacks (`stack/up.sh`, `tools/fps-lab.sh`) drop it when they move to such an image.
+- Verify enforcement on the built image: the startup log shows the `info` line, and a
+  non-member gets 403 on `/sfu/get`, `/get_token` and `/delegate_delayed_leave` (the
+  21-case MSC4502 lab).
+- Upstream observation, not raised: the `is_joined` parser (`src/helper.rs`) treats a
+  response without `joined` as not joined (403) instead of malformed (502). It fails closed.

@@ -274,13 +274,13 @@ with `git apply`; the order is load-bearing. Registry:
 [`patches/lk-jwt/README.md`](patches/lk-jwt/README.md). Applied by
 `dockerfiles/Dockerfile.lk-jwt` with `git apply`; the image is published by CI. The
 room-membership check is upstream's since v0.9.0 (element-hq/lk-jwt-service#250, our
-former entry 1): it is on because lk-jwt runs as an application service and
+formerly `require-membership.patch`): it is on because lk-jwt runs as an application service and
 `docker-compose.yml` sets `LIVEKIT_FULL_ACCESS_HOMESERVERS` and `LIVEKIT_HS_SERVER_NAME` both
 from `MATRIX_HOST`. It needs Synapse v1.162.0 or later and the application-service tokens
 `LK_JWT_AS_TOKEN`/`LK_JWT_HS_TOKEN` (`env.example`); without them lk-jwt-service refuses to
 start, by design.
 
-2. [`restrict-screen-share.patch`](patches/lk-jwt/restrict-screen-share.patch): opt-in
+1. [`restrict-screen-share.patch`](patches/lk-jwt/restrict-screen-share.patch): opt-in
    `LIVEKIT_RESTRICT_SCREEN_SHARE`. Callers below the room's kick level get tokens that
    publish camera and microphone only. POLICY.
 
