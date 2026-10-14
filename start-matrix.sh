@@ -217,25 +217,23 @@ if test -f "$ENV_FILE"; then
   echo "if you want a new setup: rm .env && docker volume rm siwx-oidc-matrix-server_matrix_data"
   # An .env written before the lk-jwt membership check has no LK_JWT_* tokens.
   # The default lk-jwt image then refuses to start (and restarts forever), so
-  # backfill all three, but only when the .env runs the default image and holds
+  # backfill both, but only when the .env runs the default image and holds
   # none of them: a partial set is the operator's to fix, and a pinned image
   # is the operator's choice.
   if [ -z "${LK_JWT_IMAGE_REF:-}" ] && [ -z "${LK_JWT_AS_TOKEN:-}" ] \
-    && [ -z "${LK_JWT_HS_TOKEN:-}" ] && [ -z "${LK_JWT_HS_SERVER_NAME:-}" ]; then
-    echo "lk-jwt membership check: adding LK_JWT_AS_TOKEN, LK_JWT_HS_TOKEN and LK_JWT_HS_SERVER_NAME to .env"
+    && [ -z "${LK_JWT_HS_TOKEN:-}" ]; then
+    echo "lk-jwt membership check: adding LK_JWT_AS_TOKEN and LK_JWT_HS_TOKEN to .env"
     LK_JWT_AS_TOKEN="$(openssl rand -hex 32)"
     LK_JWT_HS_TOKEN="$(openssl rand -hex 32)"
-    LK_JWT_HS_SERVER_NAME="$MATRIX_HOST"
     {
       echo ""
       echo "#LK-JWT-AS-CONFIG"
       echo "LK_JWT_AS_TOKEN=$LK_JWT_AS_TOKEN"
       echo "LK_JWT_HS_TOKEN=$LK_JWT_HS_TOKEN"
-      echo "LK_JWT_HS_SERVER_NAME=$LK_JWT_HS_SERVER_NAME"
     } >> .env
   elif [ -z "${LK_JWT_IMAGE_REF:-}" ] && { [ -z "${LK_JWT_AS_TOKEN:-}" ] \
-    || [ -z "${LK_JWT_HS_TOKEN:-}" ] || [ -z "${LK_JWT_HS_SERVER_NAME:-}" ]; }; then
-    echoError "lk-jwt-service will not start: .env sets only some of LK_JWT_AS_TOKEN, LK_JWT_HS_TOKEN and LK_JWT_HS_SERVER_NAME (set all three, see env.example)"
+    || [ -z "${LK_JWT_HS_TOKEN:-}" ]; }; then
+    echoError "lk-jwt-service will not start: .env sets only one of LK_JWT_AS_TOKEN and LK_JWT_HS_TOKEN (set both, see env.example)"
   fi
   startupServer
 
@@ -280,12 +278,11 @@ else
 
   # lk-jwt-service application-service registration (membership check):
   # matrix_server.sh renders it for Synapse, lk-jwt reads the same two values
-  # plus the server name (all three set, or none).
+  # (both set, or none); its server name is MATRIX_HOST.
   echo "" >> .env
   echo "#LK-JWT-AS-CONFIG" >> .env
   echo "LK_JWT_AS_TOKEN=$(openssl rand -hex 32)" >> .env
   echo "LK_JWT_HS_TOKEN=$(openssl rand -hex 32)" >> .env
-  echo "LK_JWT_HS_SERVER_NAME=$MATRIX_HOST" >> .env
 
   startupServer
 
