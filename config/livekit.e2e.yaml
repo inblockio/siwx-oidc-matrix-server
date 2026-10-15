@@ -24,6 +24,13 @@ rtc:
   # bridge on purpose and NEED those candidates to reach the SFU.
 room:
   auto_create: true
+# Same webhook as config/livekit.yaml: lk-jwt (delegated leave, used by the
+# harness through /delegate_delayed_leave) learns of a dead connection from it.
+# The signing key name comes from LIVEKIT_WEBHOOK_API_KEY (docker-compose.e2e.yml
+# and e2e-harness/up.sh), because the key name is generated per run.
+webhook:
+  urls:
+    - http://siwx-e2eh-lk-jwt:8080/sfu_webhook
 logging:
   level: info
 turn:
