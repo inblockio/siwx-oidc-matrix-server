@@ -31,8 +31,10 @@ room:
 # or from its LIVEKIT_SANITY_CHECK_INTERVAL_SECONDS poll. Without it a participant
 # whose connection dies without a hang-up (tab closed, crash, network loss) keeps
 # its call member state event: lk-jwt restarts the delayed leave forever.
-# The URL is lk-jwt's compose service name and bind port (internal network, no
-# reverse-proxy route). The signing key name is NOT set here: deployments generate
+# The URL is lk-jwt's compose service name and bind port (internal network). The
+# local and e2e Caddyfiles also expose /livekit/jwt/sfu_webhook through the edge;
+# that is safe because lk-jwt verifies the webhook signature with
+# LIVEKIT_KEY/LIVEKIT_SECRET and drops unsigned requests. The signing key name is NOT set here: deployments generate
 # it, so docker-compose.yml passes it as LIVEKIT_WEBHOOK_API_KEY (= LIVEKIT_KEY,
 # the key lk-jwt verifies with). A deployment with its own copy of this file adds
 # this block there too.

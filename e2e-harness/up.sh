@@ -127,6 +127,7 @@ podman run -d --name siwx-e2eh-livekit --network "${NET}" --restart unless-stopp
   -p "${LIVEKIT_RTC_TCP_PORT}:7881/tcp" \
   -p "${LIVEKIT_RTC_UDP_START}-${LIVEKIT_RTC_UDP_END}:${LIVEKIT_RTC_UDP_START}-${LIVEKIT_RTC_UDP_END}/udp" \
   -e LIVEKIT_KEYS="${LIVEKIT_KEY}: ${LIVEKIT_SECRET}" \
+  -e LIVEKIT_WEBHOOK_API_KEY="${LIVEKIT_KEY}" \
   -v "${REPO_ROOT}/config/livekit.e2e.yaml:/etc/livekit.yaml:ro" \
   "${LIVEKIT_IMAGE_REF}" --config /etc/livekit.yaml >/dev/null
 

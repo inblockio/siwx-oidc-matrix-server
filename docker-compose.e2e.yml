@@ -100,6 +100,8 @@ services:
     command: --config /etc/livekit.yaml
     environment:
       LIVEKIT_KEYS: "${LIVEKIT_KEY}: ${LIVEKIT_SECRET}"
+      # Signs the webhooks to lk-jwt (`webhook:` in config/livekit.e2e.yaml).
+      LIVEKIT_WEBHOOK_API_KEY: "${LIVEKIT_KEY}"
     ports:
       - "7880:7880"
       - "7881:7881/tcp"
