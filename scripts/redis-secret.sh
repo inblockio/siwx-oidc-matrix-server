@@ -16,7 +16,8 @@
 #                    docker-compose.yml, default 1000), which must be this file's group.
 #
 # The password is passed between shell functions only: printf is a shell builtin here, so it
-# never becomes a process argument that `ps` could show.
+# never becomes a process argument that `ps` could show. It is assigned before use (`pw=$(...)`)
+# so that a failure to generate it stops the script under `set -e`.
 set -eu
 umask 077
 
@@ -30,7 +31,8 @@ die() { echo "redis-secret: $*" >&2; exit 1; }
 # The gid docker-compose.yml gives siwx-oidc: the environment, else .env, else 1000.
 want_gid() {
   g="${STACK_SECRETS_GID:-}"
-  [ -n "$g" ] || [ ! -f .env ] || g=$(sed -n 's/^STACK_SECRETS_GID=\([0-9][0-9]*\)$/\1/p' .env | tail -n 1)
+  [ -n "$g" ] || [ ! -f .env ] \
+    || g=$(sed -n "s/^STACK_SECRETS_GID=[\"']\{0,1\}\([0-9][0-9]*\)[\"']\{0,1\}[[:space:]]*\$/\\1/p" .env | tail -n 1)
   echo "${g:-1000}"
 }
 
@@ -56,8 +58,10 @@ write_files() { # $1 = the password. Each file is written beside its target, the
     echo "[default]"
     printf 'redis_url = "redis://:%s@%s"\n' "$1" "$HOST"
   } > "$TOML.tmp"
-  chgrp "$(want_gid)" "$TOML.tmp" 2>/dev/null \
-    || echo "redis-secret: WARN cannot give $TOML group $(want_gid); set STACK_SECRETS_GID in .env to a group you are in (see check)" >&2
+  if ! chgrp "$(want_gid)" "$TOML.tmp" 2>/dev/null; then
+    rm -f "$CONF.tmp" "$TOML.tmp"
+    die "cannot give $TOML group $(want_gid), which siwx-oidc reads it through: set STACK_SECRETS_GID=$(id -g) in .env (or join group $(want_gid)), then run this again"
+  fi
   chmod 0640 "$TOML.tmp"
   mv -f "$CONF.tmp" "$CONF"
   mv -f "$TOML.tmp" "$TOML"
@@ -74,7 +78,8 @@ cmd_init() {
   if [ -f "$CONF" ] || [ -f "$TOML" ]; then
     die "only one of $CONF and $TOML exists: restore the other from the backup, or run rotate"
   fi
-  write_files "$(new_password)"
+  pw=$(new_password)
+  write_files "$pw"
   echo "redis-secret: created $CONF (0600) and $TOML (0640, group $(want_gid))"
 }
 
@@ -104,7 +109,8 @@ cmd_rotate() {
   [ -f "$CONF" ] || [ -f "$TOML" ] || die "nothing to rotate: run init"
   ts=$(date -u +%Y%m%dT%H%M%SZ)
   for f in "$CONF" "$TOML"; do [ ! -f "$f" ] || cp -p "$f" "$f.bak-$ts"; done
-  write_files "$(new_password)"
+  pw=$(new_password)
+  write_files "$pw"
   echo "redis-secret: new password in $CONF and $TOML; the old files are *.bak-$ts"
   echo "next: docker compose up -d --no-deps --force-recreate redis siwx-oidc"
   echo "      then delete the *.bak-$ts files once sign-in works (docs/redis-password.md)"

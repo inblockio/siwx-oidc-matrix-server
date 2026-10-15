@@ -129,18 +129,21 @@ Either copy the password or make a new one on the target. Both keep all data.
 as the working directory on each, so the password crosses only the SSH connection:
 
 ```bash
-ssh <target> 'umask 077; mkdir -p <stack-dir>/secrets'
+# rm first: `cat >` into an existing file would keep that file's (maybe looser) mode
+ssh <target> 'umask 077; mkdir -p <stack-dir>/secrets && rm -f <stack-dir>/secrets/redis.conf <stack-dir>/secrets/siwx-oidc.toml'
 for f in redis.conf siwx-oidc.toml; do
   ssh <target> "umask 077; cat > <stack-dir>/secrets/$f" < secrets/$f
 done
 ssh <target> 'cd <stack-dir> && chmod 0700 secrets && chmod 0600 secrets/redis.conf \
-  && chmod 0640 secrets/siwx-oidc.toml && chgrp "${STACK_SECRETS_GID:-1000}" secrets/siwx-oidc.toml'
+  && chmod 0640 secrets/siwx-oidc.toml'
 sha256sum secrets/redis.conf secrets/siwx-oidc.toml
 ssh <target> 'cd <stack-dir> && sha256sum secrets/redis.conf secrets/siwx-oidc.toml \
   && scripts/redis-secret.sh check'
 ```
 
-The two `sha256sum` outputs must be equal, and `check` must say OK. Hashes are safe to show;
+The two `sha256sum` outputs must be equal, and `check` must say OK. The copied
+`siwx-oidc.toml` gets the target user's primary group; if `check` reports a group mismatch,
+set `STACK_SECRETS_GID` in the target's `.env` to that group (or `chgrp` the file to it). Hashes are safe to show;
 the files are not. Do not use `scp -p` or `rsync -p` from a machine where the modes or the
 group differ, and never paste a file's content into a terminal or a chat.
 

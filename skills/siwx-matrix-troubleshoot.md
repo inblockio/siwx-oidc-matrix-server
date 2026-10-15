@@ -203,23 +203,23 @@ docker compose logs -f --tail=100 siwx-oidc 2>&1 | grep -i error
 docker compose logs matrix_synapse 2>&1 | grep -i "introspect\|401\|auth"
 
 # Redis operations
-scripts/redis-cli.sh MONITOR  # live command stream (Ctrl+C to stop)
+# No MONITOR: it streams key names, and siwx-oidc's key names are raw tokens.
 ```
 
 ## Redis inspection
 
 ```bash
 # Active sessions
-scripts/redis-cli.sh --scan --pattern 'sessions/*'
+scripts/redis-cli.sh --scan --pattern 'sessions/*' | wc -l
 
 # Active tokens (access and refresh)
-scripts/redis-cli.sh --scan --pattern 'token/*'
+scripts/redis-cli.sh --scan --pattern 'token/*' | wc -l
 
 # Tokens per user and device (the revocation index)
-scripts/redis-cli.sh --scan --pattern 'idx:user_device/*'
+scripts/redis-cli.sh --scan --pattern 'idx:user_device/*' | wc -l
 
 # WebAuthn credentials
-scripts/redis-cli.sh --scan --pattern 'webauthn:credential/*'
+scripts/redis-cli.sh --scan --pattern 'webauthn:credential/*' | wc -l
 
 # Inspect a specific key
 scripts/redis-cli.sh GET 'token/mat_XXXX'

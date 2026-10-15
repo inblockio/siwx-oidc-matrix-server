@@ -187,10 +187,10 @@ docker compose logs siwx-oidc --tail=100 2>&1 | grep -iE "webauthn|passkey|regis
 docker compose logs matrix_synapse --tail=100 2>&1 | grep -iE "provision|introspect|device|error|401"
 
 # Redis state: check session exists
-scripts/redis-cli.sh --scan --pattern 'sessions/*'
+scripts/redis-cli.sh --scan --pattern 'sessions/*' | wc -l
 
 # Redis state: check WebAuthn credentials stored
-scripts/redis-cli.sh --scan --pattern 'webauthn:credential/*'
+scripts/redis-cli.sh --scan --pattern 'webauthn:credential/*' | wc -l
 
 # Inspect a specific session (a JSON string)
 scripts/redis-cli.sh GET 'sessions/{session_id}'
@@ -271,7 +271,7 @@ the OS can handle.
 **Diagnose**:
 ```bash
 # Check registered clients in Redis
-scripts/redis-cli.sh --scan --pattern 'clients/*'
+scripts/redis-cli.sh --scan --pattern 'clients/*' | wc -l
 # Inspect a specific client registration
 scripts/redis-cli.sh GET 'clients/{client_id}'
 ```

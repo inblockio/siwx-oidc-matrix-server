@@ -11,9 +11,14 @@
 # siwx-oidc's Redis key NAMES are raw access and refresh tokens: never list keys (KEYS, SCAN,
 # --scan, MONITOR) into a terminal or a log. Count them instead: `... --scan --pattern 'x/*' | wc -l`.
 set -eu
-dir=$(cd "$(dirname "$0")/.." && pwd -P)
-c=$(docker ps -q --filter "label=com.docker.compose.project.working_dir=$dir" \
-  --filter label=com.docker.compose.service=redis)
+# Compose labels the container with the stack directory as it was given, so try the path as
+# reached and with symlinks resolved.
+c=
+for dir in "$(cd "$(dirname "$0")/.." && pwd -L)" "$(cd "$(dirname "$0")/.." && pwd -P)"; do
+  c=$(docker ps -q --filter "label=com.docker.compose.project.working_dir=$dir" \
+    --filter label=com.docker.compose.service=redis)
+  [ -z "$c" ] || break
+done
 [ -n "$c" ] || { echo "redis-cli.sh: no running redis service for $dir" >&2; exit 1; }
 [ "$(echo "$c" | wc -l)" = 1 ] || { echo "redis-cli.sh: more than one redis container for $dir" >&2; exit 1; }
 exec docker exec -i "$c" sh -c \
