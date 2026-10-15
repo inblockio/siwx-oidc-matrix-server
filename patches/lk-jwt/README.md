@@ -74,10 +74,10 @@ room. A first rework limited it to meeting rooms; that was dropped too. Conseque
   SFU's permission updates after the join, as with any stock lk-jwt.
 - The variable `LIVEKIT_RESTRICT_SCREEN_SHARE` and the `.env` key `LK_JWT_RESTRICT_SCREEN_SHARE`
   are gone from `docker-compose.yml` and `env.example`. An `.env` that still sets the key is
-  ignored by compose; an image that still contains the patch (the current default pin) reads
+  ignored by compose; an image that still contains the patch (an older pin) reads
   only the container variable, which compose no longer passes, so it stays off.
-- The default `LK_JWT_IMAGE_REF` pin (build of main at 42ac0f4) still contains the patch,
-  inert. It moves to the first CI build of main without the patch in a pin-only commit.
+- Done 2026-10-15: the default `LK_JWT_IMAGE_REF` pin moved to the first CI build of main
+  without the patch (build of main at 5190a44).
 - The patch stays in this repository's history (`patches/lk-jwt/restrict-screen-share.patch`
   at commit 42ac0f4, PR #48) should the policy return.
 

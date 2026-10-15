@@ -20,8 +20,8 @@ NET="siwx-e2eh-net"
 # this repository publishes (upstream v0.9.0, no patches). The harness
 # registers no application service with its Synapse, so the membership check
 # stays off and the image behaves like upstream here.
-# Pinned to the CI build of main at 42ac0f4, as in docker-compose.yml.
-LK_JWT_IMAGE_REF="${LK_JWT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service:sha-42ac0f4@sha256:3c615f686ff48baeb6327aa4f2bfb7270b9b941394e8a221095fdb2fb92714fb}"
+# Pinned to the CI build of main at 5190a44, as in docker-compose.yml.
+LK_JWT_IMAGE_REF="${LK_JWT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service:sha-5190a44@sha256:c4f9d1ebde0e73f625f6719c10a58a8c27edc6731ccc0aab5c15d10a36584a6a}"
 
 # siwx-oidc + Synapse image refs. Both are DERIVED from source and built on
 # demand by e2e-harness/images.sh (see its header for the scheme and why the
