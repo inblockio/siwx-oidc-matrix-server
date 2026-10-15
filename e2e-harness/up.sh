@@ -17,7 +17,7 @@ ENV_FILE="${REPO_ROOT}/.env.e2e"
 NET="siwx-e2eh-net"
 
 # Same env-overridable ref as docker-compose.e2e.yml: the lk-jwt-service image
-# this repository publishes (upstream v0.9.0 + patches/lk-jwt/). The harness
+# this repository publishes (upstream v0.9.0, no patches). The harness
 # registers no application service with its Synapse, so the membership check
 # stays off and the image behaves like upstream here.
 # Pinned to the CI build of main at 42ac0f4, as in docker-compose.yml.

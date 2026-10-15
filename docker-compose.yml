@@ -11,7 +11,7 @@ services:
     # sufficient. Every image below follows the same pattern.
     #
     # The defaults are IMMUTABLE (2026-09-29): tag plus digest of the images CI
-    # published from main (Synapse and lk-jwt-service at 70b897e, 2026-10-11,
+    # published from main (Synapse at 70b897e, 2026-10-11, lk-jwt-service at 42ac0f4, 2026-10-15,
     # Element Web at 33a0c95), which carry exactly the Synapse version,
     # Element tag and patch set the README's Dependencies table lists. They used
     # to be `:main`, so a checkout with no overrides silently ran whatever main
@@ -201,10 +201,16 @@ services:
     # LK_JWT_IMAGE_REF: env-overridable full image ref, same pattern as
     # REDIS_IMAGE_REF above. Default (2026-10-15) = the lk-jwt-service image
     # built by dockerfiles/Dockerfile.lk-jwt at 42ac0f4 (upstream v0.9.0, which
-    # checks room membership itself, plus restrict-screen-share.patch),
-    # published by CI next to the synapse and element-web images (issue #40),
-    # pinned to the build of main at 42ac0f4. The membership check needs a
-    # Synapse that can answer it (SYNAPSE_IMAGE_REF's default, 1.162.0).
+    # checks room membership itself), published by CI next to the synapse and
+    # element-web images (issue #40), pinned to the build of main at 42ac0f4.
+    # That build still contains the retired restrict-screen-share.patch, which
+    # is inert without its flag (no deployed .env sets it); the pin moves to
+    # the first build of main without the patch, in a pin-only commit.
+    # WARNING: this image refuses EVERY call token (403) unless Synapse can
+    # answer the MSC4502 membership question: Synapse v1.162.0 or later (this
+    # file's SYNAPSE_IMAGE_REF default) with the registration that
+    # matrix_server.sh renders from LK_JWT_AS_TOKEN/LK_JWT_HS_TOKEN. With an
+    # older Synapse, or without the tokens, no one can join a call.
     # A deployment whose .env pins LK_JWT_IMAGE_REF keeps running that image
     # until it changes the pin.
     # Behaviour change since 0.7.0 (#222) still applies: only
@@ -247,12 +253,6 @@ services:
       # job re-checks that its participant is still on the SFU. 0 disables it.
       # Upstream images before the webhook handling ignore the variable.
       LIVEKIT_SANITY_CHECK_INTERVAL_SECONDS: "${LK_JWT_SANITY_CHECK_INTERVAL_SECONDS:-60}"
-      # SHARE-COMMENT-TAIL
-      # sets LK_JWT_RESTRICT_SCREEN_SHARE=true in .env, so an image bump alone
-      # never changes who may share. Needs the application-service values below
-      # (the container refuses to start otherwise); an image without
-      # restrict-screen-share.patch ignores it.
-      LIVEKIT_RESTRICT_SCREEN_SHARE: "${LK_JWT_RESTRICT_SCREEN_SHARE:-false}"
       # Add LK_JWT_AS_TOKEN and LK_JWT_HS_TOKEN to .env (env.example says how);
       # the same two values reach Synapse through env_file, where
       # matrix_server.sh renders the registration. Empty defaults only so the

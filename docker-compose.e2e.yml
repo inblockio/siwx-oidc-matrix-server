@@ -117,8 +117,8 @@ services:
       - siwx-e2eh-net
 
   siwx-e2eh-lk-jwt:
-    # The lk-jwt-service image this repository publishes (upstream v0.9.0 plus
-    # patches/lk-jwt/), as in docker-compose.yml. The harness registers no
+    # The lk-jwt-service image this repository publishes (upstream v0.9.0, no
+    # patches), as in docker-compose.yml. The harness registers no
     # application service with its Synapse, so the membership check stays off
     # here and the image behaves like upstream. Pinned to the CI build of
     # main at 42ac0f4, the same default as docker-compose.yml. The healthcheck

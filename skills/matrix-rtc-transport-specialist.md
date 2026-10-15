@@ -79,7 +79,7 @@ livekit:
     - ./config/livekit.yaml:/etc/livekit.yaml:ro
 
 lk-jwt-service:
-  image: ${LK_JWT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service:sha-42ac0f4@sha256:…}   # pinned (v0.9.0 + restrict-screen-share patch)
+  image: ${LK_JWT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service:sha-42ac0f4@sha256:…}   # pinned (upstream v0.9.0, own build)
   environment:
     LIVEKIT_URL: "wss://${MATRIX_HOST}/livekit/sfu"    # the PUBLIC URL; see below
     LIVEKIT_KEY: "${LIVEKIT_KEY}"
