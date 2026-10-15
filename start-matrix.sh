@@ -79,6 +79,9 @@ function echoError() {
 
 
 function startupServer() {
+# The Redis password files (docs/redis-password.md): created on the first start,
+# left alone after that. docker-compose.yml refuses to start without them.
+./scripts/redis-secret.sh init || exit 1
 if [ "$ATTACH" == "true" ]; then
     docker compose up --pull always
 else

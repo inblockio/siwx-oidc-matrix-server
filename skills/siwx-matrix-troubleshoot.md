@@ -52,7 +52,7 @@ docker compose exec siwx-oidc wget -qO- http://127.0.0.1:8081/.well-known/openid
 docker compose exec matrix_synapse curl -sf http://localhost:8080/health
 
 # Redis connectivity
-docker compose exec redis redis-cli ping
+scripts/redis-cli.sh ping
 
 # Element config (check templating worked)
 docker compose exec element-web cat /app/config.json
@@ -169,7 +169,7 @@ writes the new value at its next boot, so recreate both `matrix_synapse` and `si
 
 **Diagnose**:
 ```bash
-docker compose exec redis redis-cli DBSIZE
+scripts/redis-cli.sh DBSIZE
 # Should return non-zero for an active deployment
 ```
 
@@ -203,26 +203,26 @@ docker compose logs -f --tail=100 siwx-oidc 2>&1 | grep -i error
 docker compose logs matrix_synapse 2>&1 | grep -i "introspect\|401\|auth"
 
 # Redis operations
-docker compose exec redis redis-cli MONITOR  # live command stream (Ctrl+C to stop)
+scripts/redis-cli.sh MONITOR  # live command stream (Ctrl+C to stop)
 ```
 
 ## Redis inspection
 
 ```bash
 # Active sessions
-docker compose exec redis redis-cli --scan --pattern 'sessions/*'
+scripts/redis-cli.sh --scan --pattern 'sessions/*'
 
 # Active tokens (access and refresh)
-docker compose exec redis redis-cli --scan --pattern 'token/*'
+scripts/redis-cli.sh --scan --pattern 'token/*'
 
 # Tokens per user and device (the revocation index)
-docker compose exec redis redis-cli --scan --pattern 'idx:user_device/*'
+scripts/redis-cli.sh --scan --pattern 'idx:user_device/*'
 
 # WebAuthn credentials
-docker compose exec redis redis-cli --scan --pattern 'webauthn:credential/*'
+scripts/redis-cli.sh --scan --pattern 'webauthn:credential/*'
 
 # Inspect a specific key
-docker compose exec redis redis-cli GET 'token/mat_XXXX'
+scripts/redis-cli.sh GET 'token/mat_XXXX'
 
 # The full keyspace: siwx-oidc docs/architecture.md, "Redis keyspace"
 ```

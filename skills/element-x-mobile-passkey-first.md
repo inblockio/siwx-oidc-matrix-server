@@ -187,13 +187,13 @@ docker compose logs siwx-oidc --tail=100 2>&1 | grep -iE "webauthn|passkey|regis
 docker compose logs matrix_synapse --tail=100 2>&1 | grep -iE "provision|introspect|device|error|401"
 
 # Redis state: check session exists
-docker compose exec redis redis-cli --scan --pattern 'sessions/*'
+scripts/redis-cli.sh --scan --pattern 'sessions/*'
 
 # Redis state: check WebAuthn credentials stored
-docker compose exec redis redis-cli --scan --pattern 'webauthn:credential/*'
+scripts/redis-cli.sh --scan --pattern 'webauthn:credential/*'
 
 # Inspect a specific session (a JSON string)
-docker compose exec redis redis-cli GET 'sessions/{session_id}'
+scripts/redis-cli.sh GET 'sessions/{session_id}'
 ```
 
 ## Debugging: common problems
@@ -271,9 +271,9 @@ the OS can handle.
 **Diagnose**:
 ```bash
 # Check registered clients in Redis
-docker compose exec redis redis-cli --scan --pattern 'clients/*'
+scripts/redis-cli.sh --scan --pattern 'clients/*'
 # Inspect a specific client registration
-docker compose exec redis redis-cli GET 'clients/{client_id}'
+scripts/redis-cli.sh GET 'clients/{client_id}'
 ```
 
 **Verify**: The `redirect_uris` should include the Element X URI scheme for the
