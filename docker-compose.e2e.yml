@@ -121,9 +121,9 @@ services:
     # patches), as in docker-compose.yml. The harness registers no
     # application service with its Synapse, so the membership check stays off
     # here and the image behaves like upstream. Pinned to the CI build of
-    # main at 42ac0f4, the same default as docker-compose.yml. The healthcheck
+    # main at 5190a44, the same default as docker-compose.yml. The healthcheck
     # note below is from 0.6.0 and is kept until the harness is re-verified.
-    image: ${LK_JWT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service:sha-42ac0f4@sha256:3c615f686ff48baeb6327aa4f2bfb7270b9b941394e8a221095fdb2fb92714fb}
+    image: ${LK_JWT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service:sha-5190a44@sha256:c4f9d1ebde0e73f625f6719c10a58a8c27edc6731ccc0aab5c15d10a36584a6a}
     container_name: siwx-e2eh-lk-jwt
     restart: unless-stopped
     environment:

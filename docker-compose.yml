@@ -11,7 +11,7 @@ services:
     # sufficient. Every image below follows the same pattern.
     #
     # The defaults are IMMUTABLE (2026-09-29): tag plus digest of the images CI
-    # published from main (Synapse at 70b897e, 2026-10-11, lk-jwt-service at 42ac0f4, 2026-10-15,
+    # published from main (Synapse at 70b897e, 2026-10-11, lk-jwt-service at 5190a44, 2026-10-15,
     # Element Web at 33a0c95), which carry exactly the Synapse version,
     # Element tag and patch set the README's Dependencies table lists. They used
     # to be `:main`, so a checkout with no overrides silently ran whatever main
@@ -200,13 +200,11 @@ services:
   lk-jwt-service:
     # LK_JWT_IMAGE_REF: env-overridable full image ref, same pattern as
     # REDIS_IMAGE_REF above. Default (2026-10-15) = the lk-jwt-service image
-    # built by dockerfiles/Dockerfile.lk-jwt at 42ac0f4 (upstream v0.9.0, which
+    # built by dockerfiles/Dockerfile.lk-jwt at 5190a44 (upstream v0.9.0, which
     # checks room membership itself), published by CI next to the synapse and
-    # element-web images (issue #40), pinned to the build of main at 42ac0f4.
-    # That build still contains the retired restrict-screen-share.patch, which
-    # is inert without its flag (a deployment may still set that flag in its
-    # .env; it is ignored now); the pin moves to
-    # the first build of main without the patch, in a pin-only commit.
+    # element-web images (issue #40), pinned to the build of main at 5190a44.
+    # It is the first build without the retired restrict-screen-share.patch
+    # (plain upstream, no patch).
     # WARNING: this image refuses EVERY call token (403) unless Synapse can
     # answer the MSC4502 membership question: Synapse v1.162.0 or later (this
     # file's SYNAPSE_IMAGE_REF default) with the registration that
@@ -217,7 +215,7 @@ services:
     # Behaviour change since 0.7.0 (#222) still applies: only
     # LIVEKIT_FULL_ACCESS_HOMESERVERS users and local users may publish;
     # federated users get subscribe-only tokens.
-    image: ${LK_JWT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service:sha-42ac0f4@sha256:3c615f686ff48baeb6327aa4f2bfb7270b9b941394e8a221095fdb2fb92714fb}
+    image: ${LK_JWT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service:sha-5190a44@sha256:c4f9d1ebde0e73f625f6719c10a58a8c27edc6731ccc0aab5c15d10a36584a6a}
     restart: unless-stopped
     environment:
       # MUST stay the PUBLIC wss:// URL — do not "fix" it to http://livekit:7880.
