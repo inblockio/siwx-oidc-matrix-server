@@ -90,10 +90,14 @@ Upstream merged it, reworked, as
 is `identical`). The Dockerfile pins v0.9.0 and the patch is deleted. Differences from the
 patch that matter here:
 
-- **No `LIVEKIT_REQUIRE_MEMBERSHIP`.** The check is on when the service runs as an application
-  service and `LIVEKIT_FULL_ACCESS_HOMESERVERS` is exactly one entry equal to
-  `LIVEKIT_HS_SERVER_NAME` (`verifies_legacy_membership` in `src/handler.rs`). Compose feeds
-  both from `MATRIX_HOST`, so they cannot diverge.
+- **v0.9.0 has no `LIVEKIT_REQUIRE_MEMBERSHIP`; older images still need it.** The check is on
+  when the service runs as an application service and `LIVEKIT_FULL_ACCESS_HOMESERVERS` is
+  exactly one entry equal to `LIVEKIT_HS_SERVER_NAME` (`verifies_legacy_membership` in
+  `src/handler.rs`). Compose feeds both from `MATRIX_HOST`, so they cannot diverge. v0.9.0
+  and newer ignore `LIVEKIT_REQUIRE_MEMBERSHIP`, but the pre-v0.9.0 images (v0.8.0 plus the
+  retired patch, e.g. `sha-70b897e`) check membership only with it, so
+  `docker-compose.yml` keeps passing it as `"true"`. A deployment that pins such an image
+  keeps the check; dropping the variable there would silently skip it.
 - **It fails open.** Upstream does not refuse to start when the check is off; it logs a `warn`
   ("... do not verify room membership ..."), and `info` ("... verify room membership through
   the homeserver") when it is on. Compose always sets the server name, so lk-jwt refuses to
@@ -102,9 +106,10 @@ patch that matter here:
 Still open:
 
 - Done 2026-10-15: the default `LK_JWT_IMAGE_REF` moved to the build of main at 42ac0f4
-  (v0.9.0 plus the then-current screen-share patch) and `LIVEKIT_REQUIRE_MEMBERSHIP` left `docker-compose.yml` in the same
-  commit. The aqua-meet stacks (`stack/up.sh`, `tools/fps-lab.sh`) drop it when they move to
-  such an image.
+  (v0.9.0 plus the then-current screen-share patch). `LIVEKIT_REQUIRE_MEMBERSHIP` stays in
+  `docker-compose.yml` (inert on that image) for deployments that pin an older image; remove
+  it once no deployment pins a pre-v0.9.0 image. The aqua-meet stacks (`stack/up.sh`,
+  `tools/fps-lab.sh`) may drop it only when they move to such an image.
 - Verify enforcement on the built image: the startup log shows the `info` line, and a
   non-member gets 403 on `/sfu/get`, `/get_token` and `/delegate_delayed_leave` (the
   21-case MSC4502 lab).

@@ -204,7 +204,8 @@ services:
     # checks room membership itself), published by CI next to the synapse and
     # element-web images (issue #40), pinned to the build of main at 42ac0f4.
     # That build still contains the retired restrict-screen-share.patch, which
-    # is inert without its flag (no deployed .env sets it); the pin moves to
+    # is inert without its flag (a deployment may still set that flag in its
+    # .env; it is ignored now); the pin moves to
     # the first build of main without the patch, in a pin-only commit.
     # WARNING: this image refuses EVERY call token (403) unless Synapse can
     # answer the MSC4502 membership question: Synapse v1.162.0 or later (this
@@ -249,6 +250,11 @@ services:
       # LIVEKIT_FULL_ACCESS_HOMESERVERS is exactly LIVEKIT_HS_SERVER_NAME; both
       # come from MATRIX_HOST below, so they cannot diverge. The service logs
       # a startup warning when the check is off.
+      # Read only by images that predate upstream v0.9.0 (v0.8.0 plus the old
+      # require-membership.patch, e.g. sha-70b897e): there the
+      # check is off without it. v0.9.0 and newer ignore it. Keep it while any
+      # deployment pins such an image, or that deployment skips the check.
+      LIVEKIT_REQUIRE_MEMBERSHIP: "true"
       # Pull fallback for a missed SFU webhook: every N seconds a delegated-leave
       # job re-checks that its participant is still on the SFU. 0 disables it.
       # Upstream images before the webhook handling ignore the variable.
