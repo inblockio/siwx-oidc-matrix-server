@@ -48,7 +48,9 @@ write_files() { # $1 = the password. Each file is written beside its target, the
   [ -d "$DIR" ] || mkdir -p "$DIR"
   chmod 0700 "$DIR"
   # Whatever stops the script from here on, no password-bearing temporary file stays behind.
+  # (dash runs the EXIT trap on a signal only when the signal turns into an exit.)
   trap 'rm -f "$CONF.tmp" "$TOML.tmp"' EXIT
+  trap 'exit 1' INT TERM HUP
   {
     echo "# Redis password of this stack (docs/redis-password.md). Written by scripts/redis-secret.sh."
     printf 'requirepass %s\n' "$1"
