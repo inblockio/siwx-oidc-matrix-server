@@ -80,8 +80,10 @@ function echoError() {
 
 function startupServer() {
 # The Redis password files (docs/redis-password.md): created on the first start,
-# left alone after that. docker-compose.yml refuses to start without them.
+# left alone after that, and checked (modes, group, both carry the same password)
+# before every start. Docker refuses to create the containers without them.
 ./scripts/redis-secret.sh init || exit 1
+./scripts/redis-secret.sh check || exit 1
 if [ "$ATTACH" == "true" ]; then
     docker compose up --pull always
 else

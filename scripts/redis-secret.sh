@@ -47,6 +47,8 @@ new_password() {
 write_files() { # $1 = the password. Each file is written beside its target, then renamed.
   [ -d "$DIR" ] || mkdir -p "$DIR"
   chmod 0700 "$DIR"
+  # Whatever stops the script from here on, no password-bearing temporary file stays behind.
+  trap 'rm -f "$CONF.tmp" "$TOML.tmp"' EXIT
   {
     echo "# Redis password of this stack (docs/redis-password.md). Written by scripts/redis-secret.sh."
     printf 'requirepass %s\n' "$1"
