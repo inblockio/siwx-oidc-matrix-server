@@ -117,13 +117,13 @@ services:
       - siwx-e2eh-net
 
   siwx-e2eh-lk-jwt:
-    # The lk-jwt-service image this repository publishes (upstream v0.8.0 plus
+    # The lk-jwt-service image this repository publishes (upstream v0.9.0 plus
     # patches/lk-jwt/), as in docker-compose.yml. The harness registers no
-    # application service with its Synapse, so LIVEKIT_REQUIRE_MEMBERSHIP stays
-    # off here and the image behaves like upstream. Pinned to the CI build of
-    # main at 70b897e, the same default as docker-compose.yml. The healthcheck
+    # application service with its Synapse, so the membership check stays off
+    # here and the image behaves like upstream. Pinned to the CI build of
+    # main at 42ac0f4, the same default as docker-compose.yml. The healthcheck
     # note below is from 0.6.0 and is kept until the harness is re-verified.
-    image: ${LK_JWT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service:sha-70b897e@sha256:ce73f33824dcea711a82811653cedba6979a99d8901d22269d1f3367f4471173}
+    image: ${LK_JWT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service:sha-42ac0f4@sha256:3c615f686ff48baeb6327aa4f2bfb7270b9b941394e8a221095fdb2fb92714fb}
     container_name: siwx-e2eh-lk-jwt
     restart: unless-stopped
     environment:

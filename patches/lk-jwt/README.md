@@ -150,10 +150,10 @@ patch that matter here:
 
 Still open:
 
-- `LIVEKIT_REQUIRE_MEMBERSHIP: "true"` stays in `docker-compose.yml` while its default
-  `LK_JWT_IMAGE_REF` is the v0.8.0-based build `sha-70b897e`, which only checks with it.
-  Delete it in the commit that moves that default to a build of this Dockerfile; the aqua-meet
-  stacks (`stack/up.sh`, `tools/fps-lab.sh`) drop it when they move to such an image.
+- Done 2026-10-15: the default `LK_JWT_IMAGE_REF` moved to the build of main at 42ac0f4
+  (v0.9.0 plus entry 1) and `LIVEKIT_REQUIRE_MEMBERSHIP` left `docker-compose.yml` in the same
+  commit. The aqua-meet stacks (`stack/up.sh`, `tools/fps-lab.sh`) drop it when they move to
+  such an image.
 - Verify enforcement on the built image: the startup log shows the `info` line, and a
   non-member gets 403 on `/sfu/get`, `/get_token` and `/delegate_delayed_leave` (the
   21-case MSC4502 lab).

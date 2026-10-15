@@ -17,11 +17,11 @@ ENV_FILE="${REPO_ROOT}/.env.e2e"
 NET="siwx-e2eh-net"
 
 # Same env-overridable ref as docker-compose.e2e.yml: the lk-jwt-service image
-# this repository publishes (upstream v0.8.0 + patches/lk-jwt/). The harness
-# registers no application service with its Synapse, so it leaves
-# LIVEKIT_REQUIRE_MEMBERSHIP off and the image behaves like upstream here.
-# Pinned to the CI build of main at 70b897e, as in docker-compose.yml.
-LK_JWT_IMAGE_REF="${LK_JWT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service:sha-70b897e@sha256:ce73f33824dcea711a82811653cedba6979a99d8901d22269d1f3367f4471173}"
+# this repository publishes (upstream v0.9.0 + patches/lk-jwt/). The harness
+# registers no application service with its Synapse, so the membership check
+# stays off and the image behaves like upstream here.
+# Pinned to the CI build of main at 42ac0f4, as in docker-compose.yml.
+LK_JWT_IMAGE_REF="${LK_JWT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service:sha-42ac0f4@sha256:3c615f686ff48baeb6327aa4f2bfb7270b9b941394e8a221095fdb2fb92714fb}"
 
 # siwx-oidc + Synapse image refs. Both are DERIVED from source and built on
 # demand by e2e-harness/images.sh (see its header for the scheme and why the

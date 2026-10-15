@@ -199,22 +199,18 @@ services:
 
   lk-jwt-service:
     # LK_JWT_IMAGE_REF: env-overridable full image ref, same pattern as
-    # REDIS_IMAGE_REF above. Default (2026-10-11) = the lk-jwt-service image
-    # built by dockerfiles/Dockerfile.lk-jwt at 70b897e (upstream v0.8.0 plus
-    # the require-membership.patch that became element-hq/lk-jwt-service#250),
+    # REDIS_IMAGE_REF above. Default (2026-10-15) = the lk-jwt-service image
+    # built by dockerfiles/Dockerfile.lk-jwt at 42ac0f4 (upstream v0.9.0, which
+    # checks room membership itself, plus restrict-screen-share.patch),
     # published by CI next to the synapse and element-web images (issue #40),
-    # pinned to the build of main at 70b897e. It moved in ONE commit together
-    # with SYNAPSE_IMAGE_REF's default (the 1.162.0 build of the same commit,
-    # which can enable MSC4502): the P1 image against a Synapse without MSC4502
-    # refuses every call token, so bump the two together.
-    # A deployment whose .env pins LK_JWT_IMAGE_REF to an upstream image (the
-    # maintainers' dev/prod do) keeps running that image until it changes the
-    # pin; upstream images ignore LIVEKIT_REQUIRE_MEMBERSHIP, so the setting
-    # below is inert there.
+    # pinned to the build of main at 42ac0f4. The membership check needs a
+    # Synapse that can answer it (SYNAPSE_IMAGE_REF's default, 1.162.0).
+    # A deployment whose .env pins LK_JWT_IMAGE_REF keeps running that image
+    # until it changes the pin.
     # Behaviour change since 0.7.0 (#222) still applies: only
     # LIVEKIT_FULL_ACCESS_HOMESERVERS users and local users may publish;
     # federated users get subscribe-only tokens.
-    image: ${LK_JWT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service:sha-70b897e@sha256:ce73f33824dcea711a82811653cedba6979a99d8901d22269d1f3367f4471173}
+    image: ${LK_JWT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service:sha-42ac0f4@sha256:3c615f686ff48baeb6327aa4f2bfb7270b9b941394e8a221095fdb2fb92714fb}
     restart: unless-stopped
     environment:
       # MUST stay the PUBLIC wss:// URL — do not "fix" it to http://livekit:7880.
@@ -245,18 +241,13 @@ services:
       # OpenID holder gets a token for ANY room. Upstream v0.9.0 (#250) turns
       # the check on by itself when it runs as an application service and
       # LIVEKIT_FULL_ACCESS_HOMESERVERS is exactly LIVEKIT_HS_SERVER_NAME; both
-      # come from MATRIX_HOST below, so they cannot diverge. Builds of
-      # dockerfiles/Dockerfile.lk-jwt ignore this flag; only the pinned default
-      # image above (v0.8.0 plus the old require-membership.patch) reads it.
-      # Delete it in the commit that moves that default to a newer build.
-      LIVEKIT_REQUIRE_MEMBERSHIP: "true"
+      # come from MATRIX_HOST below, so they cannot diverge. The service logs
+      # a startup warning when the check is off.
       # Pull fallback for a missed SFU webhook: every N seconds a delegated-leave
       # job re-checks that its participant is still on the SFU. 0 disables it.
       # Upstream images before the webhook handling ignore the variable.
       LIVEKIT_SANITY_CHECK_INTERVAL_SECONDS: "${LK_JWT_SANITY_CHECK_INTERVAL_SECONDS:-60}"
-      # Screen share only for the hosts (patches/lk-jwt/README.md entry 1): when
-      # "true", the tokens of callers below the room's kick level carry
-      # canPublishSources camera and microphone only. OFF unless the deployment
+      # SHARE-COMMENT-TAIL
       # sets LK_JWT_RESTRICT_SCREEN_SHARE=true in .env, so an image bump alone
       # never changes who may share. Needs the application-service values below
       # (the container refuses to start otherwise); an image without
