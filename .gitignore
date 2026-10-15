@@ -18,6 +18,8 @@
 # could have leaked them. (`/.env` above does not match `.env.real`.)
 /signing_key.pem
 /.env.real
+# The Redis password files (docs/redis-password.md, scripts/redis-secret.sh).
+/secrets/
 
 # Timestamped backups made before a config change. Operators leave these beside
 # the file they copied, and an .env backup is a FULL PLAINTEXT COPY of

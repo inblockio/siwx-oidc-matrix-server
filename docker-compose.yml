@@ -67,17 +67,31 @@ services:
     # (8.8 -> 8.10 against prod's AOF) and needs its own promotion step; a
     # DOWNGRADE of either box against an existing AOF is a data-loss risk.
     image: ${REDIS_IMAGE_REF:-redis:8.10.2@sha256:d5ac52db24d4e70566fe9944f22cf5bdc2bc739b05c0f426335161ea6c23f3b3}
-    command: redis-server --appendonly yes
+    # Password (docs/redis-password.md): Redis reads `requirepass <password>`
+    # from secrets/redis.conf on STDIN (the `-` argument). This shell runs as
+    # root and opens the file before the image entrypoint drops Redis to the
+    # redis user, so the file stays 0600 and owned by the stack user, and the
+    # password is on no command line and in no `docker inspect` output. The
+    # `-` must stay the FIRST argument after redis-server: the entrypoint
+    # appends --loadmodule flags, and Redis reads stdin only when `-` is the
+    # first or the last argument.
+    command: ["sh", "-c", "exec /usr/local/bin/docker-entrypoint.sh redis-server - --appendonly yes < /run/secrets/redis_conf"]
+    secrets:
+      - redis_conf
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      # Authenticated, so "healthy" also proves the password file works. A
+      # plain `redis-cli ping` answers NOAUTH and still exits 0.
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$(sed -n 's/^requirepass //p' /run/secrets/redis_conf)\" redis-cli ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
     restart: always
     volumes:
       - redis_data:/data
+    # Only on redis-net: siwx-oidc is its one client, so no other service of
+    # the stack can reach Redis at all.
     networks:
-      - default
+      - redis-net
 
   siwx-oidc:
     # Built by the separate siwx-oidc repo, so it is versioned independently of
@@ -93,8 +107,18 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    # The Redis URL, password included, is `redis_url` in secrets/siwx-oidc.toml,
+    # mounted as siwx-oidc.toml in the working directory, where siwx-oidc reads
+    # its config file (docs/redis-password.md). Set no SIWEOIDC_REDIS_URL or
+    # SIWXOIDC_REDIS_URL in `environment`: the environment beats the file. The
+    # file is 0640 and its group is the stack user's; siwx-oidc runs as uid
+    # 10001 and reads it through that group (group_add).
+    secrets:
+      - source: siwx_oidc_toml
+        target: /siwx-oidc/siwx-oidc.toml
+    group_add:
+      - "${STACK_SECRETS_GID:-1000}"
     environment:
-      SIWEOIDC_REDIS_URL: "redis://redis"
       SIWEOIDC_ADDRESS: 0.0.0.0
       SIWEOIDC_HOST: ${SIWEOIDC_HOST}
       SIWEOIDC_PORT: ${SIWEOIDC_PORT}
@@ -121,6 +145,7 @@ services:
     networks:
       - portal-net
       - default
+      - redis-net
 
   element-web:
     # See SYNAPSE_IMAGE_REF comment above — same split-var rationale, same
@@ -306,3 +331,15 @@ volumes:
 networks:
   portal-net:
     external: true
+  # Redis and its one client, siwx-oidc. internal: no route out of the host.
+  redis-net:
+    internal: true
+
+# The Redis password (docs/redis-password.md). Created by
+# `scripts/redis-secret.sh init`, which start-matrix.sh runs. Docker refuses
+# to create the containers when a file is missing.
+secrets:
+  redis_conf:
+    file: ./secrets/redis.conf
+  siwx_oidc_toml:
+    file: ./secrets/siwx-oidc.toml

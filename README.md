@@ -165,7 +165,7 @@ deployment is known to run a different version.
 | Element Web build toolchain | `node:24.20.0-bullseye@sha256:25f3016fcdae…`; pnpm `11.23.0` (upstream `devEngines`, via corepack); `pnpm install --frozen-lockfile` | `dockerfiles/Dockerfile.element` (builder `FROM`, `corepack enable` step) | Stock |
 | Element Web serving base | `nginxinc/nginx-unprivileged:1.31.6-alpine-slim@sha256:c81a27f28bc2…` | `dockerfiles/Dockerfile.element` (runtime `FROM`) | Stock, with our `config/element-nginx.conf` and security headers |
 | siwx-oidc | default `ghcr.io/inblockio/siwx-oidc:sha-40efae9@sha256:54739f4813bf…` (CI build of siwx-oidc main at 40efae9) | `docker-compose.yml` (`SIWX_OIDC_IMAGE_REF`) | First-party, built in [inblockio/siwx-oidc](https://github.com/inblockio/siwx-oidc) |
-| Redis | `8.10.2` (`redis:8.10.2@sha256:d5ac52db24d4…`) | `docker-compose.yml` (`REDIS_IMAGE_REF`) | Stock, run with `--appendonly yes` |
+| Redis | `8.10.2` (`redis:8.10.2@sha256:d5ac52db24d4…`) | `docker-compose.yml` (`REDIS_IMAGE_REF`) | Stock, run with `--appendonly yes` and a password ([docs/redis-password.md](docs/redis-password.md)) |
 | LiveKit server | `v1.13.7` (`livekit/livekit-server:v1.13.7@sha256:6fd3b7088874…`) | `docker-compose.yml` (`LIVEKIT_IMAGE_REF`) | Stock, configured by `config/livekit.yaml` (embedded TURN, off by default) |
 | lk-jwt-service | upstream `v0.9.0` (commit `0e176b1eca44…`), unmodified; default image `…/lk-jwt-service:sha-5190a44@sha256:c4f9d1ebde0e…` (CI build of main at 5190a44, the first build without the retired `restrict-screen-share.patch`) | `dockerfiles/Dockerfile.lk-jwt` (`ARG LK_JWT_TAG`, `ARG LK_JWT_COMMIT`); `docker-compose.yml` (`LK_JWT_IMAGE_REF`) | **Own build, no patch.** Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service`, non-root (65532). A deployment that pins `LK_JWT_IMAGE_REF` to an upstream image runs that instead |
 | Caddy | `v2.11.4` (`caddy:2.11.4-builder@sha256:369218c81ca6…`, `caddy:2.11.4@sha256:0c994536bddb…`) | `dockerfiles/Dockerfile.caddy-l4` (builder and final `FROM`) | **Custom build** with xcaddy and the two modules below. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/caddy-l4` |
@@ -437,6 +437,16 @@ chmod 600 .env
 ```
 
 `start-matrix.sh` sets this automatically. Do not relax these permissions.
+
+### Redis password
+
+Redis requires a password, and only siwx-oidc can reach it: the two share the internal
+`redis-net` network, which no other service of the stack joins. siwx-oidc keeps its
+sessions and tokens there, and the key names of that store are the raw tokens. The
+password lives in `secrets/` (not in `.env`, which `env_file` hands to Synapse too),
+is created on the first `start-matrix.sh` run, and stays out of `docker inspect` and
+every process command line. Where it lives, how to check, rotate and back it up, and
+how to move it to another machine: [docs/redis-password.md](docs/redis-password.md).
 
 ### OIDC signing key
 
