@@ -188,7 +188,7 @@ re-litigated each time someone audits the registry.
 | 3 | `honest-qr-disabled-reason` | When "Show QR code" is blocked by **this session's own** crypto state, stop reporting it as the account provider not supporting device link. The stock string is simply false for us and hides the actual remedy. | none |
 | 4 | `offer-verify-current-session` | `DeviceVerificationStatusCard` gave an unverified **current** session a card with no action and no reason, leaving the destructive identity reset as the only visible exit. | none |
 | 5 | `auto-approve-check-code` | MSC4108 QR device-link check-code auto-approves once both digits are typed. The deliberate read-and-type is the security property; the extra confirm click is not. | none |
-| 6 | `browser-eventindex` | A `BrowserEventIndexManager` implementing `BaseEventIndexManager` so E2EE room search works in hosted Element Web, with a **non-blocking** load so a large index cannot delay app start, bounded crawl/memory/disk budgets, a chunked encrypted store, and a streamed cold scan for what is on disk outside the resident window. Upstream PR #34718 plus increments A, B, C, D-core and E, which lead it, and the fifth carry's edit and redaction fixes of the cold tier. | labs flag `feature_web_event_index` (off unless set; this repository's config sets it) |
+| 6 | `browser-eventindex` | A `BrowserEventIndexManager` implementing `BaseEventIndexManager` so E2EE room search works in hosted Element Web, with a **non-blocking** load so a large index cannot delay app start, bounded crawl/memory/disk budgets, a chunked encrypted store, and a streamed cold scan for what is on disk outside the resident window. Upstream PR #34718 plus increments A, B, C, D-core and E, which lead it, and the fifth carry's edit and redaction fixes of the cold tier, and the sixth carry's (a deleted, edited message stays deleted across crawls; the disk budget counts each chunk once). | labs flag `feature_web_event_index` (off unless set; this repository's config sets it) |
 | 7 | `show-attested-did` | Shows the provider-attested DID (`io.inblock.did`) under the MXID in the member panel and in All settings -> Account. | none |
 | 8 | `resolve-did-search` | A DID typed into Spotlight or the invite/DM dialog resolves to the user's MXID. Depends on 7. | none |
 | 9 | `sw-versions-no-cache-on-error` | The service worker never caches a failed `/versions` check, retries it anonymously, and shares one check per server. | none |
@@ -945,6 +945,110 @@ A tag bump must try every patch in this file's order.
       the old "Use the Desktop app" failure exactly.
     - Reviews: `SHIP WITH FOLLOW-UPS` twice (2026-10-08, the carry and its follow-ups); the
       follow-ups in this list are in the provenance commit, the rest are the limitations above.
+- **SIXTH CARRY, 2026-10-15: a deleted, edited message stays deleted, and the disk budget
+  counts each chunk once, on top of the same A+B+C+D-core+E content.** Same
+  sanctioned-exception rule as the earlier carries (rule 3 above); this entry is the record
+  it requires. **No schema change** (`EVENTINDEX_DB_VERSION` untouched), so existing indexes
+  are kept on upgrade and on rollback; **no i18n string** (`en_EN.json` is not touched; the
+  delta from the fifth carry changes six files, none of them a string file).
+  - **Provenance commit: `cf8dde88d2`** on
+    [`inblockio/element-web`](https://github.com/inblockio/element-web/tree/integration/web-event-index-prod-20261015),
+    branch **`integration/web-event-index-prod-20261015`**: the fifth carry's provenance
+    `d37876a72b` plus 12 commits (`git log d37876a72b..cf8dde88d2`). Supersedes
+    `d37876a72b`. Still **not** merged into `feat/web-event-index` (the PR branch has no cold
+    tier).
+  - **What it fixes:**
+    1. **Disk-byte double count (DC).** The disk-chunk heap gets an entry on every chunk
+       rewrite, and the budget pass skipped an entry only when its chunk was gone or its
+       `maxTs` had moved, so a chunk with several live entries was selected once per entry
+       and its bytes were subtracted once per selection. The persisted total
+       (`meta.diskBytes`, restored at every open) then fell below what the chunk rows add up
+       to, the shortfall was persisted and compounded across reloads, and a budget pass
+       could stop with the real disk size still above the budget. The pass now counts each
+       chunk once. Profiles that already drifted are recounted ONCE, in the
+       background: 32 chunk rows per slice, each slice an operation on the persist chain,
+       chained behind hydration, never on the app-start path, summing the stored ciphertext
+       lengths without decrypting anything, then setting the `diskBytesHealed` flag. A
+       brand-new, reset or wiped profile is created with the flag set and never scans. A
+       chunk deleted under a reader (a budget pass, or a redaction emptying it) is no longer
+       re-created as bookkeeping by that reader (`deletedChunkIds`), and
+       `setUserVersion` now goes through the persist chain, so it cannot discard the
+       recount's figure and flag.
+    2. **A deleted message that had been edited came back with its edited text (S1).**
+       Element redacts only the original of an edited message; the server never redacts the
+       edit. A backward crawl meets the redaction first (nothing indexed, so a no-op), then
+       the still-unredacted edit, which the crawler rebuilt into a record under the
+       original's id with the edited text. Now `deleteEvent` always records the id it was
+       given in a bounded tombstone set, and an arrival whose own id or edit target is
+       tombstoned is dropped before it can create or change a record (gated in
+       `upsertEvent`, `addEventToIndex` and `addHistoricEvents`). The set is mirrored to one
+       encrypted `meta` row (purpose-tagged key, ids inside the ciphertext, capped at
+       `REDACTION_TOMBSTONES_MAX` = 4096, FIFO, evictions counted and logged once per
+       session), written through the persist chain, and merged at load before any arrival is
+       checked. A tombstone is released when a backward crawl meets the id already redacted,
+       and only while no other checkpoint of its room is queued. Redactions in a room's
+       live timeline are applied before the no-token checkpoint adds its events.
+    3. **An epoch re-check after every await in the arrival paths:** an arrival held across
+       a close and a re-init for another account no longer resumes into the new account's
+       index.
+  - **Known limitations (residuals of the reviewed state, documented in
+    `docs/web-event-index.md`):**
+    - A late federated edit that reaches the server after a backward crawl released the
+      tombstone of its original is not recognised.
+    - A long-lived profile in active encrypted rooms sits at the 4096 cap, because live
+      redactions are never released; every new redaction then evicts the oldest tombstone,
+      which can be a real one.
+    - A crash before the tombstone row write commits loses that tombstone.
+    - A profile that already rebuilt a deleted message from its edit on an older build keeps
+      that record until its index is reset. There is no heal for that.
+    - The disk-byte recount runs once for EVERY existing profile (there is no persisted
+      evidence to skip drift-free ones), in the background.
+    - A forward crawl can deliver an edit before the redaction of its original; the S1
+      limitations in the provenance doc say when the edit stays searchable.
+  - **Rollback note** (read from the code; baseline is the fifth carry `d37876a72b`, paths
+    in `apps/web/src/vector/platform/BrowserEventIndexManager.ts`): the older build
+    IGNORES both new meta items and does NOT wipe the index. It opens the same database at
+    the same version (`:168`; the upgrade step only runs for older versions, `:910`),
+    reads the `meta` row by key and uses only the fields it knows (`:2038-2044`), and
+    nothing in it refers to the tombstone row's key. Two consequences. (1) The older build
+    puts the `meta` row back as `{ ...meta, diskBytes, ... }` on its chunk writes (`:4053`,
+    `:4566`, `:5682`), which keeps `diskBytesHealed`, but with the old accounting: the
+    double count returns while it runs, and going forward again the flag is still set, so
+    the newer build does not recount, and the shortfall accrued meanwhile stays until the
+    index is reset (the disk budget is enforced loosely, nothing is lost). (2) Rollback,
+    then a LOGOUT and login on the older build, then forward again: the older build's wipe
+    (`:5746-5760`) deletes the `meta` row, the manifest pages, the oldest-indexed row and
+    the parked-redactions row, but not the tombstone row (it does not know the key), so an
+    encrypted orphan is left. The newer build, at its next start on that profile, cannot
+    decrypt the orphan with the new index's key and takes its existing "could not be
+    decrypted; wiping leftover" branch (`:5124-5129` of the sixth carry,
+    `loadRedactionTombstones` at `:5678`): that user's index is wiped once (privacy-safe;
+    one re-crawl), and the wipe removes the orphan (`:6384`). Without that logout, forward
+    again reads the same tombstone row (same key) and carries on.
+  - **How it was regenerated (the 2026-09-25 method):** pristine `v1.12.29` + entries 1-5
+    committed as the base, the fifth-carry patch applied (re-exporting it with
+    `git diff --abbrev=7 -O<the patch's own file order>` reproduces it **byte for byte**,
+    `cmp` clean), then `git diff d37876a72b cf8dde88d2` applied on top **without**
+    `--3way` (clean), then re-exported the same way against the 1-5 base.
+  - **Verification:**
+    - **Patch size: nineteen files, 19662 lines** (was 16954). Old -> new patch: only the
+      sections of `BaseEventIndexManager.ts`, `EventIndex.ts`, `EventIndex.test.ts`,
+      `BrowserEventIndexManager.ts`, `BrowserEventIndexManager.test.ts` and
+      `docs/web-event-index.md` change (six of nineteen; the other thirteen sections are
+      byte-identical); each of the six files in the applied tree is byte-identical to
+      `cf8dde88d2`.
+    - **Apply check:** eleven `OK` lines, one per entry, in Dockerfile order on a pristine
+      `v1.12.29` (`2d90d6b7b6`), `git apply --verbose` without `--3way`.
+    - **Repository checks:** `scripts/check-patch-registry.sh` OK (17 marker rows cover
+      every entry; entry 6's two rows, `element-eventindex` and `feature_web_event_index`,
+      are present in the new patch), `python3 scripts/check-patch-hunks.py` OK,
+      `python3 scripts/check-copy-markdown-vectors.py` OK, `node --test
+      scripts/browser-eventindex-invariants.mjs` 12/12.
+    - **Gates on v1.12.29 with all eleven patches applied:** the `patch-tests` job script
+      (`scripts/element-patch-tests.sh`, run with `--skip-browser`; the one Chromium suite
+      is entry 11's and unrelated): 14 files, **1900** tests passed, 0 failed
+      (`BrowserEventIndexManager` 281, `EventIndex` 16); `tsc --noEmit` in `apps/web`: 0
+      errors in project sources (the 7 known ones in `node_modules/matrix-js-sdk`).
 - **Upstream status: FILED AND ACTIVELY TRACKED — we are trying to get this
   merged.** [element-hq/element-web#34718](https://github.com/element-hq/element-web/pull/34718)
   "Add a browser EventIndex so encrypted-room search works on the web"
