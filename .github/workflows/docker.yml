@@ -72,11 +72,11 @@ jobs:
           - image: caddy-l4
             dockerfile: dockerfiles/Dockerfile.caddy-l4
             licenses: 'Apache-2.0'
-          # lk-jwt-service with our membership patch (AGPL-3.0-only; the
-          # upstream files carry "AGPL-3.0-only OR LicenseRef-Element-Commercial"
-          # and the commercial option is Element's alone) and our Dockerfile
-          # (Apache-2.0). Building it here is also the apply check for
-          # patches/lk-jwt/: a patch that stops applying fails this job.
+          # lk-jwt-service, upstream unmodified (AGPL-3.0-only; the upstream
+          # files carry "AGPL-3.0-only OR LicenseRef-Element-Commercial" and
+          # the commercial option is Element's alone) built by our Dockerfile
+          # (Apache-2.0). A patch added to patches/lk-jwt/ is applied by that
+          # Dockerfile, so one that stops applying fails this job.
           - image: lk-jwt-service
             dockerfile: dockerfiles/Dockerfile.lk-jwt
             licenses: 'AGPL-3.0-only AND Apache-2.0'

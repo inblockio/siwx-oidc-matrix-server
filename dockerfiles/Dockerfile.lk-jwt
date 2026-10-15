@@ -1,18 +1,18 @@
-# lk-jwt-service with the vendored patches in patches/lk-jwt/ (registry:
-# patches/lk-jwt/README.md). The upstream source is fetched at a pinned commit,
-# each patch is applied with `git apply` (no --3way, no fuzz), so a patch that
-# stops applying fails the build instead of shipping silently. The build and
-# runtime stages follow upstream's own Dockerfile at the same commit.
+# lk-jwt-service, plain upstream (registry of modifications: patches/lk-jwt/
+# README.md, currently none). The upstream source is fetched at a pinned commit
+# and built unmodified; a patch would be applied with `git apply` (no --3way, no
+# fuzz) between the checkout and the build, so one that stops applying fails the
+# build instead of shipping silently. The build and runtime stages follow
+# upstream's own Dockerfile at the same commit.
 #
 # Published by the build-and-push matrix of .github/workflows/docker.yml as
-# ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service (issue #40), so a
-# patch that stops applying fails CI, not only a local build.
+# ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service (issue #40).
 FROM docker.io/library/rust:1.95-alpine@sha256:e98196986adced5602f6e21c54babdbf2a8700400c7a78868324a3630e0c5d15 AS builder
 
 ARG LK_JWT_TAG=v0.9.0
 ARG LK_JWT_COMMIT=0e176b1eca44e67b11484d0bdf56999807bf2b8e
 
-# git for the fetch and the apply; musl-dev, cmake, make, gcc, g++, perl and
+# git for the fetch (and a future patch); musl-dev, cmake, make, gcc, g++, perl and
 # linux-headers for the vendored aws-lc-sys and ring C code (as upstream).
 RUN apk add --no-cache git musl-dev cmake make gcc g++ perl linux-headers ca-certificates
 
@@ -23,9 +23,6 @@ RUN git init -q . \
     && test "$(git rev-parse FETCH_HEAD^{commit})" = "${LK_JWT_COMMIT}" \
     && git checkout -q "${LK_JWT_COMMIT}"
 
-COPY patches/lk-jwt/restrict-screen-share.patch /tmp/
-RUN git apply --verbose /tmp/restrict-screen-share.patch
-
 RUN cargo build -p lk-jwt-service --release --locked \
     && cp target/release/lk-jwt-service /lk-jwt-service \
     && cp target/release/healthcheck /lk-jwt-service-healthcheck
@@ -35,8 +32,8 @@ FROM scratch
 COPY --from=builder /lk-jwt-service /lk-jwt-service
 COPY --from=builder /lk-jwt-service-healthcheck /lk-jwt-service-healthcheck
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-# Like the other images of this repository, it carries our LICENSE and NOTICE
-# (NOTICE states the patch's licence), plus upstream's AGPL text.
+# Like the other images of this repository, it carries our LICENSE and NOTICE,
+# plus upstream's AGPL text.
 COPY --chmod=0644 LICENSE NOTICE /usr/share/licenses/siwx-oidc-matrix-server/
 COPY --from=builder /proj/LICENSE /usr/share/licenses/lk-jwt-service/LICENSE
 
