@@ -26,6 +26,19 @@ rtc:
   #     - "<subnet of portal-net>"
 room:
   auto_create: false
+# lk-jwt (delegated MatrixRTC leave, MSC4140) learns that a participant left the
+# SFU only from this webhook (participant_left, participant_connection_aborted),
+# or from its LIVEKIT_SANITY_CHECK_INTERVAL_SECONDS poll. Without it a participant
+# whose connection dies without a hang-up (tab closed, crash, network loss) keeps
+# its call member state event: lk-jwt restarts the delayed leave forever.
+# The URL is lk-jwt's compose service name and bind port (internal network, no
+# reverse-proxy route). The signing key name is NOT set here: deployments generate
+# it, so docker-compose.yml passes it as LIVEKIT_WEBHOOK_API_KEY (= LIVEKIT_KEY,
+# the key lk-jwt verifies with). A deployment with its own copy of this file adds
+# this block there too.
+webhook:
+  urls:
+    - http://lk-jwt-service:8080/sfu_webhook
 logging:
   level: info
 # Embedded TURN with TLS terminated at the edge (external_tls). OFF by default,

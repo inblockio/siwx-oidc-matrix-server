@@ -160,6 +160,9 @@ services:
     command: --config /etc/livekit.yaml
     environment:
       LIVEKIT_KEYS: "${LIVEKIT_KEY}: ${LIVEKIT_SECRET}"
+      # Signs the webhooks to lk-jwt (`webhook:` in config/livekit.yaml). Must be
+      # the key lk-jwt runs with (LIVEKIT_KEY below); the secret is the key's own.
+      LIVEKIT_WEBHOOK_API_KEY: "${LIVEKIT_KEY}"
     ports:
       - "7881:7881/tcp"
       # Below the Linux ephemeral range (32768-60999) so these listeners cannot
@@ -247,6 +250,10 @@ services:
       # image above (v0.8.0 plus the old require-membership.patch) reads it.
       # Delete it in the commit that moves that default to a newer build.
       LIVEKIT_REQUIRE_MEMBERSHIP: "true"
+      # Pull fallback for a missed SFU webhook: every N seconds a delegated-leave
+      # job re-checks that its participant is still on the SFU. 0 disables it.
+      # Upstream images before the webhook handling ignore the variable.
+      LIVEKIT_SANITY_CHECK_INTERVAL_SECONDS: "${LK_JWT_SANITY_CHECK_INTERVAL_SECONDS:-60}"
       # Screen share only for the hosts (patches/lk-jwt/README.md entry 1): when
       # "true", the tokens of callers below the room's kick level carry
       # canPublishSources camera and microphone only. OFF unless the deployment
