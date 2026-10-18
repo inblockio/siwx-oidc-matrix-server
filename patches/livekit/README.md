@@ -50,10 +50,11 @@ from a directory of YAML files, one file per policy (a country or a carrier grou
 participant's `ClientConfiguration.ForceRelay` becomes `ENABLED`. The patch returns that
 config up front for a matching address. A join matches the address it comes from. A resume
 matches the address the client resumes from (not the join address, so moving onto a listed
-network mid-call counts), and with a policy configured the ICE config is applied before the
+network mid-call counts), and on a match the ICE config is applied before the
 ReconnectResponse is built: that response carries the participant's `ClientConfiguration`,
 whose `ForceRelay` follows the applied config, and upstream would only apply it afterwards
-(`Room.ResumeParticipant` sends the response, then `ICERestart`). Every livekit-client honours `forceRelay`
+(`Room.ResumeParticipant` sends the response, then `ICERestart`). A resume that does not match is
+upstream's, untouched, so a client that fell back to TURN/TLS on its own keeps what it was told. Every livekit-client honours `forceRelay`
 (`iceTransportPolicy: 'relay'`) and the server's ICE servers; Element Call (in Element Web,
 in Element X, and as aqua-meet's fork) never overrides either, so one server patch covers
 every client. The address is LiveKit's `ClientInfo.Address` (`GetClientIP`:

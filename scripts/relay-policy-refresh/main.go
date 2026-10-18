@@ -143,7 +143,15 @@ func refresh(client *http.Client, file string, check bool) (bool, error) {
 	changed := out != string(data)
 	fmt.Printf("%s: %d ASNs, %d announced, %d after collapsing, changed=%v\n", file, len(asns), len(all), len(prefixes), changed)
 	if changed && !check {
-		if err := os.WriteFile(file, []byte(out), 0o644); err != nil {
+		// Write a sibling and rename it over the file: a running LiveKit may reload
+		// the directory at any moment and must never read a half-written list. The
+		// temporary name does not end in .yaml, so a reload never picks it up.
+		tmp := file + ".tmp"
+		if err := os.WriteFile(tmp, []byte(out), 0o644); err != nil {
+			return false, err
+		}
+		if err := os.Rename(tmp, file); err != nil {
+			os.Remove(tmp)
 			return false, err
 		}
 	}
