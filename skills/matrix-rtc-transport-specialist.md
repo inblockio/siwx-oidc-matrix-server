@@ -30,7 +30,7 @@ Element Web
    |  1. GET /.well-known/matrix/client  (discovers rtc_foci -> livekit_service_url)
    |  2. POST /livekit/jwt               (sends Matrix OpenID token, gets LiveKit JWT)
    |  3. WSS  /livekit/sfu/              (WebSocket signaling to LiveKit)
-   |  4. UDP  :20100-20200               (WebRTC media, direct to host)
+   |  4. TLS  :443                      (media: relay-only over TURN/TLS at the edge)
    v
 Caddy (reverse proxy)
    |           |              |
@@ -102,6 +102,13 @@ lk-jwt-service:
   details). Probe `/livekit/jwt/healthz` through the proxy instead.
 
 ### Why these port choices
+
+**Current state (2026-10-18):** `docker-compose.yml` publishes NONE of these ports.
+Under the catch-all relay policy (`config/relay-policy/all.yaml`) every client is
+relay-only over TURN/TLS through the edge `:443`, so direct ICE (7881/tcp), the UDP
+media range and the plain TURN UDP listener 3478 are unused; TURN relay allocations
+bind container-internal ports (`turn.relay_range` default 30000-40000). Everything
+below is the historical rationale for when a deployment still publishes them.
 
 - **7881/tcp**: LiveKit WebRTC-over-TCP fallback (for clients behind strict UDP firewalls)
 - **20100-20200/udp**: WebRTC media. Must sit BELOW the Linux ephemeral range

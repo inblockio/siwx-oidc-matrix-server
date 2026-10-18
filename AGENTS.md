@@ -222,8 +222,14 @@ Guides and scripts here must not contradict it:
 
 ### MatrixRTC (LiveKit)
 
-- **The UDP media range 20100–20200 stays below the Linux ephemeral range** and must match
-  in `docker-compose.yml` and `config/livekit.yaml`.
+- **The UDP media range 20100–20200 stays below the Linux ephemeral range** in
+  `config/livekit.yaml`; it names what the SFU binds inside the container
+  (embedded TURN relays to this host's own addresses only on those ports).
+  `docker-compose.yml` publishes no media ports: under the catch-all relay policy
+  every client is relay-only over TURN/TLS through the edge, and direct ICE
+  (7881/tcp), the UDP media range and the plain TURN UDP listener 3478 are unused.
+  Closing them means removing the `ports:` publishes, never a ufw rule (Docker
+  publishes bypass the host firewall).
 - **`LIVEKIT_URL` stays the public `wss://` URL.** lk-jwt-service (verified through
   0.6.0) uses it both for the SFU URL it hands out and for its own room-creation call,
   which therefore comes back in through the proxy; the proxy admits

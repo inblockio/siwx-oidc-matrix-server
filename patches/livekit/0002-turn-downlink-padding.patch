@@ -1,0 +1,166 @@
+diff --git a/pkg/service/turn.go b/pkg/service/turn.go
+index 99c0e41..0fd7656 100644
+--- a/pkg/service/turn.go
++++ b/pkg/service/turn.go
+@@ -110,6 +110,17 @@ func NewTurnServer(conf *config.Config, authHandler turn.AuthHandler, standalone
+ 	logValues = append(logValues, "turn.relay_range_end", turnConf.RelayPortRangeEnd)
+ 	logValues = append(logValues, "turn.per_user_relay_allocation_limit", turnConf.PerUserRelayAllocationLimit)
+ 
++	// Downlink padding (LIVEKIT_TURN_DOWNLINK_PAD_BYTES, see turnpad.go):
++	// applied here, before turn.NewServer below creates the server, because
++	// the patched module reads the target server-wide.
++	padBytes, err := applyTurnDownlinkPad()
++	if err != nil {
++		return nil, err
++	}
++	if padBytes > 0 {
++		logValues = append(logValues, "turn.downlink_pad_bytes", padBytes)
++	}
++
+ 	// embedded TURN shares the host with the SFU, limit relays to this host to its media ports
+ 	var localIPs map[netip.Addr]struct{}
+ 	var mediaPorts []portRange
+diff --git a/pkg/service/turnpad.go b/pkg/service/turnpad.go
+new file mode 100644
+index 0000000..6b55f3e
+--- /dev/null
++++ b/pkg/service/turnpad.go
+@@ -0,0 +1,71 @@
++// Copyright 2026 inblock.io
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++package service
++
++import (
++	"fmt"
++	"os"
++	"strconv"
++	"strings"
++
++	"github.com/pion/turn/v5"
++
++	"github.com/livekit/protocol/logger"
++)
++
++const (
++	// turnDownlinkPadEnv sets the fixed size, in bytes, that every
++	// server-to-client TURN media message is padded up to (see
++	// patches/pion-turn/0001-downlink-padding.patch in the image build).
++	// Unset/empty disables it: upstream behaviour.
++	turnDownlinkPadEnv = "LIVEKIT_TURN_DOWNLINK_PAD_BYTES"
++
++	turnDownlinkPadMin = 64
++	turnDownlinkPadMax = 60000
++)
++
++// parseTurnDownlinkPadEnv validates turnDownlinkPadEnv. A set but invalid
++// value is a startup error, so a typo can never half-enable padding.
++func parseTurnDownlinkPadEnv() (int32, error) {
++	v := strings.TrimSpace(os.Getenv(turnDownlinkPadEnv))
++	if v == "" {
++		return 0, nil
++	}
++	n, err := strconv.ParseInt(v, 10, 32)
++	if err != nil {
++		return 0, fmt.Errorf("invalid %s %q: %w", turnDownlinkPadEnv, v, err)
++	}
++	if n < turnDownlinkPadMin || n > turnDownlinkPadMax {
++		return 0, fmt.Errorf("%s must be between %d and %d, got %d",
++			turnDownlinkPadEnv, turnDownlinkPadMin, turnDownlinkPadMax, n)
++	}
++	return int32(n), nil
++}
++
++// applyTurnDownlinkPad wires the parsed env into the TURN server. It must run
++// before the TURN server is created: the padding target is read server-wide
++// by the patched module, and a value applied after allocations exist is not
++// guaranteed to take effect.
++func applyTurnDownlinkPad() (int32, error) {
++	n, err := parseTurnDownlinkPadEnv()
++	if err != nil {
++		return 0, err
++	}
++	if n > 0 {
++		turn.SetDownlinkPadTarget(n)
++		logger.Infow("TURN downlink padding enabled", "bytes", n)
++	}
++	return n, nil
++}
+diff --git a/pkg/service/turnpad_test.go b/pkg/service/turnpad_test.go
+new file mode 100644
+index 0000000..d3180e6
+--- /dev/null
++++ b/pkg/service/turnpad_test.go
+@@ -0,0 +1,61 @@
++// Copyright 2026 inblock.io
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++package service
++
++import "testing"
++
++func TestParseTurnDownlinkPadEnv(t *testing.T) {
++	t.Setenv(turnDownlinkPadEnv, "")
++	for _, tc := range []struct {
++		name string
++		val  string
++		want int32
++	}{
++		{"unset means disabled", "", 0},
++		{"whitespace means disabled", "   ", 0},
++		{"a normal target", "1300", 1300},
++		{"the floor", "64", 64},
++		{"the ceiling", "60000", 60000},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			t.Setenv(turnDownlinkPadEnv, tc.val)
++			got, err := parseTurnDownlinkPadEnv()
++			if err != nil {
++				t.Fatalf("parse %q: %v", tc.val, err)
++			}
++			if got != tc.want {
++				t.Fatalf("parse %q = %d, want %d", tc.val, got, tc.want)
++			}
++		})
++	}
++
++	for _, tc := range []struct {
++		name string
++		val  string
++	}{
++		{"not a number", "1300x"},
++		{"signed number", "-1300"},
++		{"below the floor", "63"},
++		{"above the ceiling", "60001"},
++		{"a size hint", "1.3KB"},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			t.Setenv(turnDownlinkPadEnv, tc.val)
++			if _, err := parseTurnDownlinkPadEnv(); err == nil {
++				t.Fatalf("parse %q unexpectedly succeeded", tc.val)
++			}
++		})
++	}
++}

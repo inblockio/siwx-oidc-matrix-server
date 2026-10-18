@@ -1,0 +1,313 @@
+diff --git a/downlink_padding.go b/downlink_padding.go
+new file mode 100644
+index 0000000..5c7da45
+--- /dev/null
++++ b/downlink_padding.go
+@@ -0,0 +1,28 @@
++// SPDX-FileCopyrightText: 2026 inblock.io
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++package turn
++
++import (
++	"github.com/pion/turn/v5/internal/allocation"
++)
++
++// SetDownlinkPadTarget enables fixed-size downlink padding for the embedded
++// TURN server (see internal/allocation/downlink_padding.go): every media
++// packet relayed to a client is sent as a STUN Data indication padded to
++// bytes. bytes <= 0 disables it (upstream behaviour). Must be called before
++// NewServer; a change after the server has started has no effect.
++func SetDownlinkPadTarget(bytes int32) {
++	allocation.SetDownlinkPadTarget(bytes)
++}
+diff --git a/internal/allocation/allocation.go b/internal/allocation/allocation.go
+index 796a3f5..7d0dd09 100644
+--- a/internal/allocation/allocation.go
++++ b/internal/allocation/allocation.go
+@@ -388,6 +388,19 @@ func (a *Allocation) packetConnHandler(manager *Manager) {
+ 			n,
+ 			srcAddr)
+ 
++		if target := downlinkPadTarget.Load(); target > 0 {
++			// inblock.io: with downlink padding configured, media to the
++			// client always goes as a padded Data indication (see
++			// downlink_padding.go), never as size-revealing ChannelData.
++			if raw := buildPaddedDataIndication(buffer[:n], srcAddr, target); raw != nil {
++				if _, err = a.TurnSocket.WriteTo(raw, a.fiveTuple.SrcAddr); err != nil {
++					a.log.Errorf("Failed to send padded DataIndication from allocation %v %v", srcAddr, err)
++				}
++				continue
++			}
++			// Not a UDP peer address: fall through to the normal paths.
++		}
++
+ 		if channel := a.GetChannelByAddr(srcAddr); channel != nil { // nolint:nestif
+ 			channelData := &proto.ChannelData{
+ 				Data:   buffer[:n],
+diff --git a/internal/allocation/downlink_padding.go b/internal/allocation/downlink_padding.go
+new file mode 100644
+index 0000000..dbb9829
+--- /dev/null
++++ b/internal/allocation/downlink_padding.go
+@@ -0,0 +1,124 @@
++// SPDX-FileCopyrightText: 2026 inblock.io
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++package allocation
++
++import (
++	"encoding/binary"
++	"net"
++	"sync/atomic"
++
++	"github.com/pion/stun/v3"
++
++	"github.com/pion/turn/v5/internal/proto"
++)
++
++// Downlink padding (inblock.io): when a fixed size is configured, every media
++// packet the server relays to a client is sent as a STUN Data indication
++// padded to that size, so the relayed flow carries no per-packet size
++// information (audio is normally ~200 bytes, video ~1200, which makes relayed
++// calls stand out from bulk TLS traffic on the same host).
++//
++// The padding rides an unregistered STUN attribute inside the Data indication,
++// not extra bytes between messages: TURN-over-TCP framing is self-delimiting
++// (see proto.STUNConn), so anything between messages would corrupt the stream.
++// Comprehension-optional attribute types (0x8000-0xFFFF) must be ignored by
++// receivers that do not understand them (RFC 8489 s. 14.2), so no client
++// change is needed. The Data indication is the base TURN delivery mechanism
++// every client implements; with padding active the server stops using the
++// ChannelData optimization for server-to-client media (RFC 5766 s. 11.7 says
++// the server sends a ChannelData message when a channel is bound - a
++// deliberate deviation, accepted for the traffic-shape goal).
++//
++// Only server-to-client media is padded. Client-to-server messages and TURN
++// control traffic (allocate/refresh/permission responses) are untouched: the
++// client side of those is the browser's, which this server cannot change, and
++// control responses are rare.
++const (
++	// stunAttrTypePadding is unregistered and in the comprehension-optional
++	// range: receivers that do not know it must skip it.
++	stunAttrTypePadding stun.AttrType = 0x8070
++
++	// stunHeaderSize mirrors proto.stunHeaderSize, kept local so the padding
++	// code has no new cross-package surface.
++	stunHeaderSize = 20
++)
++
++// downlinkPadTarget is the configured fixed message size, 0 = off. It is set
++// once through SetDownlinkPadTarget before the server starts accepting
++// allocations; the server's allocations are created strictly after that, so
++// the plain (non-atomic-read) Store here only guards against torn writes on
++// 32-bit platforms.
++var downlinkPadTarget atomic.Int32
++
++// SetDownlinkPadTarget enables downlink padding when bytes is > 0 and disables
++// it when 0. Values below 0 are ignored. Must be called before turn.NewServer,
++// never after (see the var's comment).
++func SetDownlinkPadTarget(bytes int32) {
++	downlinkPadTarget.Store(bytes)
++}
++
++// buildPaddedDataIndication returns a Data indication carrying payload from
++// srcAddr, padded to target bytes when it would be shorter. It returns nil
++// when srcAddr is not a UDP address or the indication cannot be built; the
++// caller then falls back to the normal ChannelData / Data indication paths.
++func buildPaddedDataIndication(payload []byte, srcAddr net.Addr, target int32) []byte {
++	udpAddr, ok := srcAddr.(*net.UDPAddr)
++	if !ok {
++		return nil
++	}
++
++	msg, err := stun.Build(
++		stun.TransactionID,
++		stun.NewType(stun.MethodData, stun.ClassIndication),
++		proto.PeerAddress{IP: udpAddr.IP, Port: udpAddr.Port},
++		proto.Data(payload),
++	)
++	if err != nil {
++		return nil
++	}
++	return padStunMessage(msg.Raw, target)
++}
++
++// padStunMessage appends the padding attribute to raw until it is target
++// bytes (up to 3 bytes short, since STUN attributes are 4-byte aligned). raw
++// must be exactly one complete STUN message; anything else is returned
++// unchanged (fail-open to normal behaviour).
++func padStunMessage(raw []byte, target int32) []byte {
++	if len(raw) < stunHeaderSize || !stun.IsMessage(raw) {
++		return raw
++	}
++	attrLen := int(target) - len(raw) - 4 // 4 = attribute header
++	if attrLen < 0 {
++		// Already at (or within one attribute of) the target: leave it.
++		return raw
++	}
++	attrLen -= attrLen % 4
++
++	bodyLen := int(binary.BigEndian.Uint16(raw[2:4]))
++	if bodyLen+stunHeaderSize != len(raw) {
++		return raw
++	}
++
++	out := make([]byte, 0, len(raw)+4+attrLen)
++	out = append(out, raw...)
++	var attrHeader [4]byte
++	binary.BigEndian.PutUint16(attrHeader[0:2], uint16(stunAttrTypePadding))
++	binary.BigEndian.PutUint16(attrHeader[2:4], uint16(attrLen)) // zeros are the padding
++	out = append(out, attrHeader[:]...)
++	out = append(out, make([]byte, attrLen)...)
++
++	binary.BigEndian.PutUint16(out[2:4], uint16(bodyLen+4+attrLen))
++	return out
++}
+diff --git a/internal/allocation/downlink_padding_test.go b/internal/allocation/downlink_padding_test.go
+new file mode 100644
+index 0000000..c1709de
+--- /dev/null
++++ b/internal/allocation/downlink_padding_test.go
+@@ -0,0 +1,119 @@
++// SPDX-FileCopyrightText: 2026 inblock.io
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++package allocation
++
++import (
++	"bytes"
++	"encoding/binary"
++	"net"
++	"testing"
++
++	"github.com/pion/stun/v3"
++
++	"github.com/pion/turn/v5/internal/proto"
++)
++
++func TestBuildPaddedDataIndication(t *testing.T) {
++	// A short, audio-sized payload padded up to the target.
++	payload := bytes.Repeat([]byte{0xA5}, 160)
++	peer := &net.UDPAddr{IP: net.ParseIP("172.21.0.5"), Port: 20123}
++
++	raw := buildPaddedDataIndication(payload, peer, 1300)
++	if raw == nil {
++		t.Fatal("expected a padded indication, got nil")
++	}
++
++	// Padded to the target, within STUN's 4-byte attribute alignment.
++	if len(raw) > 1300 || len(raw) < 1300-3 {
++		t.Fatalf("padded size %d not within [1297, 1300]", len(raw))
++	}
++
++	msg := &stun.Message{Raw: raw}
++	if err := msg.Decode(); err != nil {
++		t.Fatalf("padded indication does not decode: %v", err)
++	}
++	if !stun.IsMessage(raw) || msg.Type != stun.NewType(stun.MethodData, stun.ClassIndication) {
++		t.Fatalf("not a Data indication: %v", msg.Type)
++	}
++
++	var gotPeer proto.PeerAddress
++	if err := gotPeer.GetFrom(msg); err != nil {
++		t.Fatalf("XOR-PEER-ADDRESS missing: %v", err)
++	}
++	if gotPeer.String() != peer.String() {
++		t.Fatalf("peer %v, want %v", gotPeer, peer)
++	}
++
++	var gotData proto.Data
++	if err := gotData.GetFrom(msg); err != nil {
++		t.Fatalf("DATA missing: %v", err)
++	}
++	if !bytes.Equal(gotData, payload) {
++		t.Fatal("DATA payload altered by padding")
++	}
++
++	// The declared STUN body length must cover the whole message, so the
++	// receiver's framing (proto.STUNConn) stays intact.
++	if bodyLen := int(binary.BigEndian.Uint16(raw[2:4])); bodyLen+20 != len(raw) {
++		t.Fatalf("body length %d does not cover message of %d bytes", bodyLen, len(raw))
++	}
++
++	// The padding attribute is present and is the last one.
++	if last := msg.Attributes[len(msg.Attributes)-1]; last.Type != stunAttrTypePadding {
++		t.Fatalf("last attribute type %v, want padding %v", last.Type, stunAttrTypePadding)
++	}
++}
++
++func TestBuildPaddedDataIndicationLargePayload(t *testing.T) {
++	// A video-sized payload at or above the target passes through unpadded,
++	// still as a Data indication.
++	payload := bytes.Repeat([]byte{0x5A}, 1280)
++	peer := &net.UDPAddr{IP: net.ParseIP("172.21.0.5"), Port: 20100}
++
++	raw := buildPaddedDataIndication(payload, peer, 1300)
++	if raw == nil {
++		t.Fatal("expected an indication, got nil")
++	}
++	msg := &stun.Message{Raw: raw}
++	if err := msg.Decode(); err != nil {
++		t.Fatalf("does not decode: %v", err)
++	}
++	var gotData proto.Data
++	if err := gotData.GetFrom(msg); err != nil || !bytes.Equal(gotData, payload) {
++		t.Fatalf("payload altered (err %v)", err)
++	}
++}
++
++func TestBuildPaddedDataIndicationNonUDP(t *testing.T) {
++	// A non-UDP source address cannot become a PeerAddress: nil, so the
++	// caller falls back to the normal paths.
++	if raw := buildPaddedDataIndication([]byte{1}, &net.TCPAddr{}, 1300); raw != nil {
++		t.Fatalf("expected nil for a TCP address, got %d bytes", len(raw))
++	}
++}
++
++func TestPadStunMessageRefusesNonMessage(t *testing.T) {
++	// Anything that is not exactly one complete STUN message is left alone.
++	for _, tc := range [][]byte{
++		nil,
++		[]byte{0x00},
++		bytes.Repeat([]byte{0x00}, 10), // too short for a header
++		append(append([]byte{0x00, 0x17}, 0x00, 0x05), make([]byte, 16)...), // 20-byte header whose length field lies about the body
++	} {
++		if got := padStunMessage(tc, 1300); !bytes.Equal(got, tc) {
++			t.Fatalf("input %v was modified", tc)
++		}
++	}
++}

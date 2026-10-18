@@ -203,21 +203,24 @@ services:
       # Signs the webhooks to lk-jwt (`webhook:` in config/livekit.yaml). Must be
       # the key lk-jwt runs with (LIVEKIT_KEY below); the secret is the key's own.
       LIVEKIT_WEBHOOK_API_KEY: "${LIVEKIT_KEY}"
-    ports:
-      - "7881:7881/tcp"
-      # Below the Linux ephemeral range (32768-60999) so these listeners cannot
-      # collide with the host's own ephemeral source ports. MUST match
-      # rtc.port_range_start/end in config/livekit.yaml exactly, and the host
-      # firewall must allow 20100:20200/udp before this is rolled out. The
-      # range moved here from 50100-50200, which sat inside the ephemeral range.
-      - "20100-20200:20100-20200/udp"
-      # Embedded TURN, used only when `turn.enabled` is true in
-      # config/livekit.yaml (off by default; its `turn:` block lists what the
-      # edge needs). UDP leg only: TURN-TLS terminates at the edge
-      # (caddy-l4 SNI split on 443 → plaintext TURN to container port 5349
-      # over the proxy network), so 5349 must NOT be host-published. ufw must
-      # allow 3478/udp.
-      - "3478:3478/udp"
+      # Downlink padding (livekit patch 0002 + the pion/turn patch in the same
+      # image; the stock image ignores it): every server-to-client TURN media
+      # message is padded up to this size, so the relayed flow's message sizes
+      # do not reveal call media (audio ~200 B at 50 Hz, video ~1200 B bursts).
+      # Unset or empty = off. Applies only to media the SERVER relays; the
+      # client's own uplink is the browser's and cannot be padded here.
+      LIVEKIT_TURN_DOWNLINK_PAD_BYTES: "1300"
+    # No host-published ports (2026-10-18). Under the catch-all relay policy
+    # (config/relay-policy/all.yaml) every client is relay-only over TURN/TLS,
+    # which terminates at the edge :443 (SNI split; container 5349 is internal
+    # to the proxy network), so the direct-ICE TCP port 7881, the UDP media range
+    # 20100-20200 and the plain TURN UDP listener 3478 are unused, and TURN relay
+    # allocations bind container-internal ports (turn.relay_range default
+    # 30000-40000). The ranges stay in config/livekit.yaml: they name what the
+    # SFU binds inside the container (the media-port allowlist embedded TURN
+    # relays on this host's own addresses). Removing the publishes is what
+    # closes the ports: Docker publishes bypass the host firewall (ufw), so ufw
+    # rules cannot gate them.
     volumes:
       - ./config/livekit.yaml:/etc/livekit.yaml:ro
       # The DIRECTORY, never a single policy file: a git checkout replaces a
