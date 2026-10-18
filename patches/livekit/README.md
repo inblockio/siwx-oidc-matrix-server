@@ -139,11 +139,17 @@ publish no media ports at all.
 allocation relay write) keeps the upstream policy check and then hands the
 address to `localDelivery`: a UDP destination that is one of `localIPs` but not
 an interface address, on a media port, is rewritten to a deterministic
-interface address of the same address family (port kept). Destinations that
-are already interface addresses (the loopback included), other hosts'
-addresses, and non-media ports pass through unchanged, and an empty
-interface set disables the rewrite (fail-open to upstream behavior).
-`collectInterfaceIPs` enumerates them at TURN construction.
+interface address of the same address family (port kept). The rewrite target
+is NEVER the loopback: the ICE stack's IP filter drops loopback remote peers,
+so a check delivered via 127.0.0.1 reaches the media socket and is silently
+discarded - observed live (rewritten checks arrived on 127.0.0.1, 16-answer
+retransmit storms, every join still failed until the exclusion). Destinations
+that are already interface addresses (the loopback is one: delivering to a
+service bound on it is local delivery and stays untouched), other hosts'
+addresses, and non-media ports pass through unchanged, and an empty (or
+loopback-only) interface set disables the rewrite (fail-open to upstream
+behavior). `collectInterfaceIPs` enumerates the candidates at TURN
+construction.
 
 **Why.** The 2026-10-18 port closure (compose `ports:` removal) broke relayed
 calls on dev until the media range was republished: bisected live (removal ->
@@ -153,13 +159,19 @@ shape goal holds (no UDP listener answers an external probe). POLICY.
 
 **Evidence.** Live bisect on dev-aquafire (2026-10-18): no publishes ->
 `Failed to connect to Livekit server` on join, media range republished ->
-suite green twice; the padded module unchanged in both. Tests:
+suite green twice; the padded module unchanged in both. Second round, in the
+container's netns (`nsenter -t <pid> -n tcpdump`): with the first cut of the
+patch, rewritten checks left the allocation for 127.0.0.1:201xx and the SFU
+never answered them (loopback peers dropped); the exclusion fixes exactly
+that. Tests:
 `pkg/service/turnrelay_localdelivery_test.go` (a real-socket end to end:
-mapped-IP media-port write delivered on an interface address; the same write
-to a non-media port dropped; unit cases for every non-rewrite shape; the
-interface enumerator's exclusions), run by the Dockerfile beside the other
-livekit patch tests, and upstream's `TestTURNRelayPolicy_PacketConn` /
-`TestNewTurnServer_RelayPolicy` (loopback delivery) still pass unchanged.
+mapped-IP media-port write delivered on an interface address while the
+loopback sorts lower and must lose; loopback-only interfaces disable the
+rewrite; the same write to a non-media port dropped; unit cases for every
+non-rewrite shape; the interface enumerator's exclusions), run by the
+Dockerfile beside the other livekit patch tests, and upstream's
+`TestTURNRelayPolicy_PacketConn` / `TestNewTurnServer_RelayPolicy` (loopback
+delivery) still pass unchanged.
 
 **Upstream status.** Not filed. Upstream's embedded TURN relay policy
 (`turnRelayPolicy` in `pkg/service/turnrelay.go`) restricts relays to local
