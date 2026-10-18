@@ -1,0 +1,20 @@
+# Relay policy for LiveKit (patches/livekit/0001-relay-policy.patch): a client whose
+# address is in one of these ranges gets relay-only ICE over TURN/TLS on :443 from the
+# start of a call. See config/relay-policy/README.md for the format and for adding a
+# policy. This one is the catch-all: /0 matches every client, so it is the default
+# every deployment ships. Revert to carrier-scoped relay by deleting this file
+# (hot reload, no restart); see README.md, "The catch-all".
+name: all-clients
+description: >-
+  Every client, as the call-media default (2026-10-18): relay-only ICE over
+  TURN/TLS on :443, so call media never leaves a client as plaintext STUN,
+  DTLS or non-443 TURN that on-path DPI can flag as VoIP. Traffic through the
+  TURN leg is ordinary TLS behind the box's edge, same certificate and same
+  handshake profile as any other site on the host. Residual: packet
+  timing/size statistics still look like real-time media (documented,
+  accepted; padding or cover traffic would be the fix).
+asns: []
+manual_prefixes: []
+prefixes:
+  - 0.0.0.0/0
+  - ::/0
