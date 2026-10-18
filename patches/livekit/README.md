@@ -127,32 +127,47 @@ this knob goes with it.
 **What.** A relayed TURN write that targets this host's own mapped address
 (its public or 1:1-NAT IP, what the SFU advertises with `use_external_ip`) on
 an RTC media port is delivered on one of this host's interface addresses
-instead, so it never leaves the host. Without it, such a write hairpins out of
-the container to the host's **published** port for the media range (docker-proxy),
-and that publish cannot be closed while relayed calls must work: a client's
-relayed ICE checks address the SFU's advertised candidate (mapped IP, media
-port), and with the catch-all relay policy every client is relay-only, so
-nothing else can carry them. This is what allows `docker-compose.yml` to
-publish no media ports at all.
+instead, so it never leaves the host; and, symmetrically, an inbound relay
+packet from that interface address on a media port is presented to the TURN
+allocation as coming from the mapped address the write targeted. Without the
+outbound rewrite, such a write hairpins out of the container to the host's
+**published** port for the media range (docker-proxy), and that publish cannot
+be closed while relayed calls must work: a client's relayed ICE checks address
+the SFU's advertised candidate (mapped IP, media port), and with the
+catch-all relay policy every client is relay-only, so nothing else can carry
+them. Without the return rewrite the delivery breaks the call: the client's
+TURN permission (keyed by peer IP) and its ICE remote candidate both name the
+mapped address, so an answer that arrives from the container's interface
+address is dropped by the allocation and would be discarded by the client's
+ICE even if relayed. This is what allows `docker-compose.yml` to publish no
+media ports at all.
 
-**How.** `turnRelayPacketConn.WriteTo` (already the choke point of every
-allocation relay write) keeps the upstream policy check and then hands the
-address to `localDelivery`: a UDP destination that is one of `localIPs` but not
-an interface address, on a media port, is rewritten to a deterministic
-interface address of the same address family (port kept). The rewrite target
-must be an address the ICE stack actually gathers a candidate on, so it is
-NEVER the loopback (pion's IP filter drops loopback remote peers - observed
-live: rewritten checks arrived on 127.0.0.1 and were never answered) and
-NEVER inside `rtc.ips.excludes` (observed live: checks delivered on the proxy
+**How.** `turnRelayPacketConn` (already the choke point of every allocation
+relay socket) now rewrites both directions. `WriteTo` keeps the upstream
+policy check and hands the address to `localDeliveryPair`: a UDP destination
+that is one of `localIPs` but not an interface address, on a media port, is
+rewritten to a deterministic interface address of the same address family
+(port kept), and the pair (delivery target -> mapped address) is recorded on
+the connection. `ReadFrom` presents an inbound packet from a recorded delivery
+target on a media port as coming from the mapped address, port kept -
+exactly what the docker-proxy hairpin's conntrack presents, so the
+allocation's permission lookup (pion/turn fingerprints permissions by peer IP
+only, `internal/allocation/allocation.go`) and the Data indication's
+XOR-PEER-ADDRESS both name the public IP. The rewrite target must be an
+address the ICE stack actually gathers a candidate on, so it is NEVER the
+loopback (pion's IP filter drops loopback remote peers - observed live:
+rewritten checks arrived on 127.0.0.1 and were never answered) and NEVER
+inside `rtc.ips.excludes` (observed live: checks delivered on the proxy
 network's subnet 172.18.0.4, sorted lowest, were read by the media socket and
 silently dropped, no candidate there; `NewTurnServer` mirrors the excludes
 into the policy, and a malformed entry is a startup error). Destinations that
 are already interface addresses (the loopback is one: delivering to a service
 bound on it is local delivery and stays untouched), other hosts' addresses,
-and non-media ports pass through unchanged, and an empty, loopback-only or
-fully excluded interface set disables the rewrite (fail-open to upstream
-behavior). `collectInterfaceIPs` enumerates the candidates at TURN
-construction.
+and non-media ports pass through unchanged, inbound packets from sources that
+were never a rewrite target pass through unchanged, and an empty,
+loopback-only or fully excluded interface set disables the rewrite (fail-open
+to upstream behavior). `collectInterfaceIPs` enumerates the candidates at
+TURN construction.
 
 **Why.** The 2026-10-18 port closure (compose `ports:` removal) broke relayed
 calls on dev until the media range was republished: bisected live (removal ->
@@ -160,40 +175,75 @@ join failure, re-add -> 3-way E2EE call green), root cause docker-proxy
 hairpin. With local delivery the media range stays closed and the traffic
 shape goal holds (no UDP listener answers an external probe). POLICY.
 
-**STATUS: NOT QUALIFIED (2026-10-18, end of day).** Every one of this patch's
-three revisions broke relayed joins when actually deployed, and the third
-broke them even with the media range republished: (1) the rewrite target
-picked 127.0.0.1, which pion's ICE IP filter drops as a remote peer; (2)
-after the loopback exclusion it picked the `rtc.ips.excludes` proxy-network
-address, where the ICE agent gathers no candidate; (3) with both exclusions
-the rewritten flow reached the SFU and the SFU answered (in-container capture:
-237 checks in, 482 responses out) but the client never completed ICE - STUN
-checks and responses flow, no DTLS/RTP ever starts, and the join times out.
-The surviving difference against the docker-proxy path is suspected to be in
-how the allocation's peer permission matches the response's source address
-(responses arrive from the SFU's container socket, while the client created
-its TURN permission for the advertised public IP), but that is unproven - the
-next revision must re-evaluate from evidence, not from this theory. Until
-then: DO NOT bump `LIVEKIT_IMAGE_REF`'s default (or any deployment's pin) to
-a build containing patch 0003, and keep `20100-20200/udp` published. The
-last-good build is `sha-697233b` (patches 1-2 only, padding verified on the
-wire); dev runs it.
+**STATUS: QUALIFIED ON DEV (2026-10-18, evening).** Revisions 1-3 (each
+deployed to dev) broke relayed joins: (1) the rewrite target picked
+127.0.0.1, which pion's ICE IP filter drops as a remote peer; (2) after the
+loopback exclusion it picked the `rtc.ips.excludes` proxy-network address,
+where the ICE agent gathers no candidate; (3) with both exclusions the
+rewritten flow reached the SFU and the SFU answered (in-container capture:
+237 checks in, 237 binding responses and 245 triggered checks out) but the
+client completed nothing - no DTLS/RTP ever started. The root cause is
+PROVEN, not theorized, by the comparison revision 3 never had: an
+in-container capture of a PASSING relayed call (meet.spec 2/2 against the
+last-good image, `pass-live.pcap`, 2026-10-18) against the failing-state
+`in3.pcap`. The docker-proxy hairpin is a symmetric NAT: the client's checks
+reach the SFU from the bridge gateway (172.21.0.1:relay-port, SNAT) and the
+SFU's answers reach the relay socket FROM THE PUBLIC IP (207.154.209.103:
+media-port, conntrack-restored source), which is what both the client's TURN
+permission and its ICE remote candidate name. Revision 3 rewrote only the
+outbound leg, so the answers arrived from the container's interface address
+(172.21.0.2) and matched neither. Revision 4 (this patch) adds the symmetric
+`ReadFrom` rewrite, making the local-delivery path byte-identical at the
+allocation and client to the docker-proxy path.
+
+Dev qualification of revision 4 (image
+`livekit-server:sha-94111e8@sha256:dba793badf26…`, dev-aquafire, 2026-10-18):
+meet.spec 2/2 with the range still published (capture: all relay traffic
+already in-container, `172.21.0.2↔172.21.0.2`, ICE in ~110 checks, DTLS+RTP
+flowing, zero hairpin flows); then the `20100-20200/udp` publish REMOVED
+from the dev compose and 2/2 again, twice, with captures showing the same
+fully-local shape (132 DTLS + 15k RTP/RTCP per run, zero packets toward the
+public IP). Host side verified: no docker-proxy listeners, no DNAT rules,
+no ufw allow left for the range, and external UDP probes to 20100/20150/20200
+go unanswered. One behavioral note for the closed state: LiveKit's
+`use_external_ip` STUN *validation* needs the publish's return path, so with
+the range closed the startup log shows `could not validate external IP` and
+falls back to `no external IPs found, using node IP for NAT1To1Ips` with the
+STUN-discovered `207.154.209.103` - the same advertised candidates; the old
+"grep 'using external IPs' must show one entry" check no longer applies in a
+port-closed deployment.
+
+The compose DEFAULT pin and the `docker-compose.yml` media-range publish
+stay as they are (default `sha-697233b`, patches 1-2 only; range published)
+until the v4 build is promoted deliberately: removing the publish from a
+deployment whose image predates revision 4 breaks every relayed join, so the
+default-image bump and the publish removal travel together, and prod (still
+on the morning item's `sha-f343840`, media range open) needs Tim's go.
 
 **Evidence.** Live bisect on dev-aquafire (2026-10-18): no publishes ->
 `Failed to connect to Livekit server` on join, media range republished ->
 suite green twice; the padded module unchanged in both. Second round, in the
-container's netns (`nsenter -t <pid> -n tcpdump`): with the first cut of the
-patch, rewritten checks left the allocation for 127.0.0.1:201xx and the SFU
-never answered them (loopback peers dropped); the exclusion fixes exactly
-that. Tests:
-`pkg/service/turnrelay_localdelivery_test.go` (a real-socket end to end:
-mapped-IP media-port write delivered on an interface address while the
-loopback sorts lower and must lose; loopback-only interfaces disable the
-rewrite; an excluded CIDR is skipped and an all-excluded set disables the
-rewrite, a malformed exclude rejected; the same write to a non-media port
-dropped; unit cases for every non-rewrite shape; the interface enumerator's
-exclusions), run by the Dockerfile beside the other livekit patch tests, and
-upstream's `TestTURNRelayPolicy_PacketConn` / `TestNewTurnServer_RelayPolicy`
+container's netns (`nsenter -t <pid> -n tcpdump`, SLL2): revision 1's
+rewritten checks left the allocation for 127.0.0.1:201xx and the SFU never
+answered (loopback peers dropped); revision 3's failing capture
+(`in3.pcap`: checks in from 172.21.0.2:relay, responses out to
+172.21.0.2:relay, XOR-MAPPED-ADDR=172.21.0.2, zero client answers, no DTLS
+in 80 s) against the passing capture (`pass-live.pcap`: checks in from
+172.21.0.1:relay after the docker-proxy SNAT, responses in from
+207.154.209.103:media, XOR-MAPPED-ADDR=172.21.0.1:relay, client answers
+present, DTLS + RTP/RTCP flowing within seconds). Tests:
+`pkg/service/turnrelay_localdelivery_test.go` (a real-socket end to end over
+both legs: mapped-IP media-port write delivered on an interface address while
+the loopback sorts lower and must lose, and the peer's answer read back as
+coming from the MAPPED address, not the interface address; return-leg unit
+cases: passthrough before any rewrite, rewrite for a recorded target on a
+media port with the port kept, passthrough for a non-media port and for a
+non-target source; loopback-only interfaces disable the rewrite; an excluded
+CIDR is skipped and an all-excluded set disables the rewrite, a malformed
+exclude rejected; the same write to a non-media port dropped; unit cases for
+every non-rewrite shape; the interface enumerator's exclusions), run by the
+Dockerfile beside the other livekit patch tests, and upstream's
+`TestTURNRelayPolicy_PacketConn` / `TestNewTurnServer_RelayPolicy`
 (loopback delivery, NewTurnServer with the excludes wiring) still pass
 unchanged.
 

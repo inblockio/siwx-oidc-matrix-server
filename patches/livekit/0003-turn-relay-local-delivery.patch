@@ -1,7 +1,8 @@
 diff --git a/pkg/service/turn.go b/pkg/service/turn.go
+index 0fd7656..eb7a59a 100644
 --- a/pkg/service/turn.go
 +++ b/pkg/service/turn.go
-@@ -182,6 +182,12 @@
+@@ -182,6 +182,12 @@ func NewTurnServer(conf *config.Config, authHandler turn.AuthHandler, standalone
  			relayAddrGen = telemetry.NewRelayAddressGenerator(relayAddrGen)
  		} else {
  			relayAddrGen = newTURNRelayPolicy(relayAddrGen, localIPs, mediaPorts)
@@ -15,18 +16,19 @@ diff --git a/pkg/service/turn.go b/pkg/service/turn.go
  
  		if turnConf.TLSPort > 0 {
 diff --git a/pkg/service/turnrelay.go b/pkg/service/turnrelay.go
-index 618e66d..af37a3d 100644
+index 618e66d..feec234 100644
 --- a/pkg/service/turnrelay.go
 +++ b/pkg/service/turnrelay.go
-@@ -17,6 +17,7 @@ package service
+@@ -17,6 +17,8 @@ package service
  import (
  	"net"
  	"net/netip"
 +	"slices"
++	"sync"
  
  	"github.com/pion/turn/v5"
  	"github.com/pkg/errors"
-@@ -92,6 +93,19 @@ type turnRelayPolicy struct {
+@@ -92,6 +94,19 @@ type turnRelayPolicy struct {
  
  	localIPs   map[netip.Addr]struct{}
  	mediaPorts []portRange
@@ -46,14 +48,14 @@ index 618e66d..af37a3d 100644
  }
  
  func newTURNRelayPolicy(g turn.RelayAddressGenerator, localIPs map[netip.Addr]struct{}, mediaPorts []portRange) *turnRelayPolicy {
-@@ -99,7 +113,37 @@ func newTURNRelayPolicy(g turn.RelayAddressGenerator, localIPs map[netip.Addr]st
+@@ -99,9 +114,39 @@ func newTURNRelayPolicy(g turn.RelayAddressGenerator, localIPs map[netip.Addr]st
  		RelayAddressGenerator: g,
  		localIPs:              localIPs,
  		mediaPorts:            mediaPorts,
 +		interfaceIPs:           collectInterfaceIPs(),
-+	}
-+}
-+
+ 	}
+ }
+ 
 +// collectInterfaceIPs returns this host's routable interface addresses
 +// (loopback, link-local and unspecified excluded), the addresses a packet
 +// addressed to this very host is actually delivered on.
@@ -79,12 +81,14 @@ index 618e66d..af37a3d 100644
 +			continue
 +		}
 +		ips[addr] = struct{}{}
- 	}
++	}
 +	return ips
- }
- 
++}
++
  func (g *turnRelayPolicy) allows(addr net.Addr) bool {
-@@ -111,8 +155,96 @@ func (g *turnRelayPolicy) allows(addr net.Addr) bool {
+ 	udpAddr, ok := addr.(*net.UDPAddr)
+ 	if !ok {
+@@ -111,8 +156,109 @@ func (g *turnRelayPolicy) allows(addr net.Addr) bool {
  	if _, ok := g.localIPs[ap.Addr().Unmap().WithZone("")]; !ok {
  		return true
  	}
@@ -112,25 +116,38 @@ index 618e66d..af37a3d 100644
 +// publish is gone. Own-address writes that already name an interface
 +// address, and writes to any other address, pass through unchanged.
 +func (g *turnRelayPolicy) localDelivery(addr net.Addr) net.Addr {
++	delivered, _, _ := g.localDeliveryPair(addr)
++	return delivered
++}
++
++// localDeliveryPair resolves the local delivery rewrite for a relayed write:
++// the address the packet is actually written to, plus, when it was rewritten,
++// the host's mapped address the delivery target stands in for. The pair is
++// what makes the rewrite reversible on the return leg (see
++// turnRelayPacketConn.ReadFrom): the client's TURN permission and its ICE
++// remote candidate both name the mapped address, so the SFU's answers must be
++// presented as coming from it, exactly as the docker-proxy hairpin presents
++// them.
++func (g *turnRelayPolicy) localDeliveryPair(addr net.Addr) (net.Addr, netip.Addr, bool) {
 +	udpAddr, ok := addr.(*net.UDPAddr)
 +	if !ok || len(g.interfaceIPs) == 0 {
-+		return addr
++		return addr, netip.Addr{}, false
 +	}
 +	dst := udpAddr.AddrPort().Addr().Unmap().WithZone("")
 +	if _, ok := g.interfaceIPs[dst]; ok {
-+		return addr // already delivered locally
++		return addr, netip.Addr{}, false // already delivered locally
 +	}
 +	if _, ok := g.localIPs[dst]; !ok {
-+		return addr // not this host's mapped address
++		return addr, netip.Addr{}, false // not this host's mapped address
 +	}
 +	if !g.isMediaPort(uint16(udpAddr.Port)) {
-+		return addr
++		return addr, netip.Addr{}, false
 +	}
 +	target, ok := g.interfaceAddrFor(dst)
 +	if !ok {
-+		return addr // no interface address of the same family to deliver on
++		return addr, netip.Addr{}, false // no interface address of the same family to deliver on
 +	}
-+	return &net.UDPAddr{IP: net.IP(target.AsSlice()), Port: udpAddr.Port}
++	return &net.UDPAddr{IP: net.IP(target.AsSlice()), Port: udpAddr.Port}, dst, true
 +}
 +
 +// setExcludedCIDRs applies rtc.ips.excludes (and the inverse of
@@ -182,21 +199,91 @@ index 618e66d..af37a3d 100644
  			return true
  		}
  	}
-@@ -138,7 +270,7 @@ func (c *turnRelayPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
+@@ -128,17 +274,76 @@ func (g *turnRelayPolicy) AllocatePacketConn(c turn.AllocateListenerConfig) (net
+ }
+ 
+ // turnRelayPacketConn silently drops relayed packets to peers the policy does
+-// not allow.
++// not allow, and performs the local delivery rewrite symmetrically: a write
++// that targets the host's mapped address is delivered on an interface
++// address, and an inbound packet from that interface address is presented as
++// coming from the mapped address it stood in for. The docker-proxy hairpin
++// the rewrite replaces is a symmetric NAT, and its return leg is load
++// bearing: the TURN server's permission lookup is keyed by peer IP, and the
++// client matches inbound STUN against the remote candidate address it was
++// told - both name the public IP, so an answer that arrives from the
++// container's interface address is dropped by the allocation (no permission
++// for that IP) and would be discarded by the client's ICE even if relayed.
++// Observed live on dev-aquafire (2026-10-18): with the write leg alone, the
++// SFU answered 237 relayed checks and the client received none of them - no
++// response, no DTLS, ICE never completed.
+ type turnRelayPacketConn struct {
+ 	net.PacketConn
+ 	policy *turnRelayPolicy
++
++	// deliveryFor records, per local delivery rewrite this connection
++	// performed, which interface address stands in for which mapped
++	// address: delivery target -> mapped address. Written by WriteTo (the
++	// client data path), read by ReadFrom (the allocation's relay loop) -
++	// different goroutines, hence the mutex.
++	deliveryMu  sync.Mutex
++	deliveryFor map[netip.Addr]netip.Addr
+ }
+ 
+ func (c *turnRelayPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
  	if !c.policy.allows(addr) {
  		return len(p), nil
  	}
 -	return c.PacketConn.WriteTo(p, addr)
-+	return c.PacketConn.WriteTo(p, c.policy.localDelivery(addr))
++	delivered, mapped, rewritten := c.policy.localDeliveryPair(addr)
++	if rewritten {
++		target := delivered.(*net.UDPAddr).AddrPort().Addr().Unmap().WithZone("")
++		c.deliveryMu.Lock()
++		if c.deliveryFor == nil {
++			c.deliveryFor = make(map[netip.Addr]netip.Addr, 1)
++		}
++		c.deliveryFor[target] = mapped
++		c.deliveryMu.Unlock()
++	}
++	return c.PacketConn.WriteTo(p, delivered)
++}
++
++// ReadFrom presents an inbound packet from a local delivery target as coming
++// from the mapped address it stood in for, mirroring the return leg of the
++// docker-proxy hairpin: the allocation's permission lookup and the Data
++// indication's XOR-PEER-ADDRESS then both name the public IP the client
++// created its TURN permission and its ICE remote candidate for. Packets
++// from any other source pass through unchanged, as does everything while no
++// rewrite has been performed on this connection.
++func (c *turnRelayPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
++	n, addr, err := c.PacketConn.ReadFrom(p)
++	if err != nil || addr == nil {
++		return n, addr, err
++	}
++	udpAddr, ok := addr.(*net.UDPAddr)
++	if !ok {
++		return n, addr, err
++	}
++	if !c.policy.isMediaPort(uint16(udpAddr.Port)) {
++		return n, addr, err
++	}
++	src := udpAddr.AddrPort().Addr().Unmap().WithZone("")
++	c.deliveryMu.Lock()
++	mapped, hit := c.deliveryFor[src]
++	c.deliveryMu.Unlock()
++	if !hit {
++		return n, addr, err
++	}
++	return n, &net.UDPAddr{IP: net.IP(mapped.AsSlice()), Port: udpAddr.Port}, nil
  }
  
  // getTURNLocalIPs returns the addresses that are delivered to this host: its
 diff --git a/pkg/service/turnrelay_localdelivery_test.go b/pkg/service/turnrelay_localdelivery_test.go
 new file mode 100644
-index 0000000..b9d1a66
+index 0000000..64ebe80
 --- /dev/null
 +++ b/pkg/service/turnrelay_localdelivery_test.go
-@@ -0,0 +1,173 @@
+@@ -0,0 +1,257 @@
 +// Copyright 2026 inblock.io
 +//
 +// Licensed under the Apache License, Version 2.0 (the "License");
@@ -216,6 +303,7 @@ index 0000000..b9d1a66
 +import (
 +	"net"
 +	"net/netip"
++	"strconv"
 +	"testing"
 +	"time"
 +
@@ -263,17 +351,100 @@ index 0000000..b9d1a66
 +	require.NoError(t, err)
 +
 +	require.NoError(t, mediaPeer.SetReadDeadline(time.Now().Add(2*time.Second)))
-+	n, _, err := mediaPeer.ReadFrom(buf)
++	n, peerAddr, err := mediaPeer.ReadFrom(buf)
 +	require.NoError(t, err)
 +	require.Equal(t, "delivered", string(buf[:n]))
 +	// the packet arrived at the media peer listening on the interface address,
 +	// i.e. the rewrite chose it over the loopback that sorts lower
++
++	// The return leg is the symmetric half of the rewrite: the peer answers
++	// to the address the packet came from, and the relay connection presents
++	// that answer as coming from the MAPPED address the write targeted - the
++	// TURN permission and the ICE remote candidate both name it, so anything
++	// else is dropped by the allocation or discarded by the client (this is
++	// the failure that made revision 3 break every relayed join).
++	_, err = mediaPeer.WriteTo([]byte("answer"), peerAddr)
++	require.NoError(t, err)
++
++	require.NoError(t, relay.SetReadDeadline(time.Now().Add(2*time.Second)))
++	n, from, err := conn.ReadFrom(buf)
++	require.NoError(t, err)
++	require.Equal(t, "answer", string(buf[:n]))
++	require.Equal(t, &net.UDPAddr{IP: net.IP(mapped.AsSlice()), Port: int(mediaPort)}, from)
 +
 +	// The same write to a non-media port on the mapped address is still
 +	// dropped by the policy, rewrite or not.
 +	require.NoError(t, relay.SetReadDeadline(time.Now().Add(100*time.Millisecond)))
 +	_, _, err = relay.ReadFrom(buf)
 +	require.Error(t, err) // nothing hairpinned out through the relay socket
++}
++
++func TestTURNRelayPolicy_LocalDeliveryReadFromCases(t *testing.T) {
++	// The return-leg rewrite applies only to media-port packets from a
++	// delivery target this connection actually rewrote a write to; every
++	// other source, and every packet before any rewrite happened, passes
++	// through unchanged.
++	mapped := netip.MustParseAddr("8.8.8.8")
++	iface := firstNonLoopbackInterfaceIP(t)
++
++	// the "SFU": a socket on the interface address bound on a media port, an
++	// ephemeral-port socket on the same address, and a loopback stranger
++	sfu, err := net.ListenPacket("udp4", iface.String()+":0")
++	require.NoError(t, err)
++	t.Cleanup(func() { _ = sfu.Close() })
++	sfuPort := uint16(sfu.LocalAddr().(*net.UDPAddr).Port)
++
++	ephemeral, err := net.ListenPacket("udp4", iface.String()+":0")
++	require.NoError(t, err)
++	t.Cleanup(func() { _ = ephemeral.Close() })
++
++	policy := &turnRelayPolicy{
++		mediaPorts: []portRange{{sfuPort, sfuPort}},
++	}
++	relay := listenUDP(t)
++	relayAddr := relay.LocalAddr().(*net.UDPAddr)
++	conn := &turnRelayPacketConn{PacketConn: relay, policy: policy}
++
++	readSource := func(t *testing.T) net.Addr {
++		t.Helper()
++		require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
++		_, from, rerr := conn.ReadFrom(make([]byte, 64))
++		require.NoError(t, rerr)
++		return from
++	}
++
++	// before any rewrite, even the delivery target's media-port packets pass
++	// through with their true source
++	_, err = sfu.WriteTo([]byte("a"), relayAddr)
++	require.NoError(t, err)
++	udp := readSource(t).(*net.UDPAddr)
++	require.Equal(t, net.IP(iface.AsSlice()).String(), udp.IP.String())
++
++	// once the connection has recorded the rewrite, the same packet reads
++	// as coming from the mapped address, port kept
++	conn.deliveryMu.Lock()
++	conn.deliveryFor = map[netip.Addr]netip.Addr{iface: mapped}
++	conn.deliveryMu.Unlock()
++	_, err = sfu.WriteTo([]byte("b"), relayAddr)
++	require.NoError(t, err)
++	udp = readSource(t).(*net.UDPAddr)
++	require.Equal(t, net.IP(mapped.AsSlice()).String(), udp.IP.String())
++	require.Equal(t, int(sfuPort), udp.Port)
++
++	// a non-media port on the same target address: unchanged
++	_, err = ephemeral.WriteTo([]byte("c"), relayAddr)
++	require.NoError(t, err)
++	udp = readSource(t).(*net.UDPAddr)
++	require.Equal(t, net.IP(iface.AsSlice()).String(), udp.IP.String())
++
++	// a media port from an address that is not the delivery target: unchanged
++	nonTarget, err := net.ListenPacket("udp4", "127.0.0.1:"+strconv.Itoa(int(sfuPort)))
++	require.NoError(t, err)
++	t.Cleanup(func() { _ = nonTarget.Close() })
++	_, err = nonTarget.WriteTo([]byte("d"), relayAddr)
++	require.NoError(t, err)
++	udp = readSource(t).(*net.UDPAddr)
++	require.Equal(t, "127.0.0.1", udp.IP.String())
 +}
 +
 +func TestTURNRelayPolicy_LocalDeliveryNeverRewritesToLoopback(t *testing.T) {
