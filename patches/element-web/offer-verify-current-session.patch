@@ -92,23 +92,23 @@ index 87cb911..8325d0a 100644
 +    return <DeviceSecurityCard {...securityCardProps}>{actions}</DeviceSecurityCard>;
  };
 diff --git a/apps/web/src/i18n/strings/en_EN.json b/apps/web/src/i18n/strings/en_EN.json
-index 3397af7..494582a 100644
+index fdeddf0..c204bbb 100644
 --- a/apps/web/src/i18n/strings/en_EN.json
 +++ b/apps/web/src/i18n/strings/en_EN.json
-@@ -2937,6 +2937,7 @@
-             "verified_sessions_explainer_1": "Verified sessions have been confirmed your digital identity.",
-             "verified_sessions_explainer_2": "This means that you have all the keys needed to unlock your encrypted messages and confirm to other users that you trust this session.",
-             "verified_sessions_list_description": "For best security, remove any session that you don't recognize or use anymore.",
+@@ -2970,6 +2970,7 @@
+             "verified_sessions_explainer_1": "Verified devices have been confirmed with your digital identity.",
+             "verified_sessions_explainer_2": "This means that you have all the keys needed to unlock your encrypted messages and confirm to other users that you trust this device.",
+             "verified_sessions_list_description": "Remove any device you don't recognise or no longer use.",
 +            "verify_blocked_current_session_unverified": "Verify your current session first. An unverified session can't verify another one.",
-             "verify_session": "Verify session",
-             "web_session": "Web session"
+             "verify_session": "Verify device",
+             "web_session": "Browser"
          },
 diff --git a/apps/web/src/components/views/settings/devices/DeviceVerificationStatusCard.test.tsx b/apps/web/src/components/views/settings/devices/DeviceVerificationStatusCard.test.tsx
-index 1f9abbf..c6c02bf 100644
+index c8b40df..816e4c2 100644
 --- a/apps/web/src/components/views/settings/devices/DeviceVerificationStatusCard.test.tsx
 +++ b/apps/web/src/components/views/settings/devices/DeviceVerificationStatusCard.test.tsx
 @@ -46,14 +46,19 @@ describe("<DeviceVerificationStatusCard />", () => {
-             expect(getByText("Verify your current session for enhanced secure messaging.")).toBeTruthy();
+             expect(getByText("Verify your current device for enhanced secure messaging.")).toBeTruthy();
          });
  
 -        it("renders an unverifiable device", () => {
@@ -120,12 +120,12 @@ index 1f9abbf..c6c02bf 100644
                      isCurrentDevice: true,
                  }),
              );
--            expect(getByText("This session doesn't support encryption and thus can't be verified.")).toBeTruthy();
+-            expect(getByText("This device doesn't support encryption and thus can't be verified.")).toBeTruthy();
 +            // The current session is an Element session, so it always supports encryption; a null
 +            // status only means we could not read this session's own verification status. Saying
 +            // "this session doesn't support encryption and thus can't be verified" here is false,
 +            // and hiding the button with it left the card with no action, no reason and no route.
-+            expect(getByText("Verify your current session for enhanced secure messaging.")).toBeTruthy();
++            expect(getByText("Verify your current device for enhanced secure messaging.")).toBeTruthy();
 +            expect(queryByTestId(verifyButtonTestId)).toBeTruthy();
          });
  

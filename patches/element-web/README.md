@@ -25,14 +25,17 @@ Rules of this registry:
    `.github/workflows/checks.yml`, which builds `dockerfiles/Dockerfile.element --target
    patch-tests`, i.e. runs `scripts/element-patch-tests.sh`. The files are derived from the
    patches' `+++ b/` paths, never listed by hand, and each goes to the runner that owns it
-   at the tag (vitest or jest); a test file no runner would execute fails the job. A patch
+   at the tag (vitest or jest; from v1.12.31 upstream has no jest, and vitest owns every
+   file); a test file no runner would execute fails the job. A patch
    that adds a vitest config (entry 11's `vitest.browser.copy-md.config.ts`) has that config
-   run too, in headless Chromium. The only exception is
+   run too, in headless Chromium (the stage runs on bookworm, because Playwright 1.63 no
+   longer installs Chromium on Debian 11). The only exception is
    [`patch-tests-known-red.txt`](patch-tests-known-red.txt): a test that is red on the
    unpatched tag as well, with reason and evidence. A test red only with our patches is a
    defect, not an exception. The script has one fixup, documented in its header: jest at
    v1.12.29 cannot load suites that import `matrix-js-sdk` until `content-type` joins its
-   `transformIgnorePatterns` allowlist, so the script adds it on the command line.
+   `transformIgnorePatterns` allowlist, so the script adds it on the command line. It is
+   unused from v1.12.31, which has no jest.
    **Every entry also has a marker:** a fixed string, listed in
    [`markers.tsv`](markers.tsv), that is present in our build and absent from stock
    upstream at the same tag, with the proof under "Marker discrimination record" at the
@@ -156,6 +159,18 @@ ordered explicitly. Entry 10 is not covered by this exception (see its entry).
 Without a date this becomes an indefinite wait and the three patches stay in
 limbo by default.
 
+**Evaluated 2026-10-18 (v1.12.29 -> v1.12.32 bump): no outcome yet, nothing filed.**
+None of the three definitions holds. Not SUCCESS: #34718 is open and unmerged, and
+no maintainer has committed to merging it. Not FAILURE: it is open, and the last
+maintainer activity is 2026-09-13 (the assigned crypto reviewer, uhoreg, away "for a
+couple weeks"), so the three-month mark falls on 2026-12-13. Not AMBIGUOUS: the one
+review (CHANGES_REQUESTED, 2026-09-03, five points) asked for changes within this
+design, and the author answered all five on 2026-09-12; no re-review since. GitHub
+reports `mergeable_state: dirty` (it conflicts with `develop`, which now carries the
+tokenizer-mode change to `initEventIndex`, #33048). 18 conversation comments, 5 review
+comments, labels unchanged. Entries 2, 3 and 4 stay unfiled; re-evaluate on
+2026-12-01 or at the next tag bump, whichever comes first.
+
 **Baseline as of 2026-09-01** (so drift is measurable, not remembered):
 
 - #34718 open, not draft, not merged. Opened 2026-08-15, last activity
@@ -188,7 +203,7 @@ re-litigated each time someone audits the registry.
 | 3 | `honest-qr-disabled-reason` | When "Show QR code" is blocked by **this session's own** crypto state, stop reporting it as the account provider not supporting device link. The stock string is simply false for us and hides the actual remedy. | none |
 | 4 | `offer-verify-current-session` | `DeviceVerificationStatusCard` gave an unverified **current** session a card with no action and no reason, leaving the destructive identity reset as the only visible exit. | none |
 | 5 | `auto-approve-check-code` | MSC4108 QR device-link check-code auto-approves once both digits are typed. The deliberate read-and-type is the security property; the extra confirm click is not. | none |
-| 6 | `browser-eventindex` | A `BrowserEventIndexManager` implementing `BaseEventIndexManager` so E2EE room search works in hosted Element Web, with a **non-blocking** load so a large index cannot delay app start, bounded crawl/memory/disk budgets, a chunked encrypted store, and a streamed cold scan for what is on disk outside the resident window. Upstream PR #34718 plus increments A, B, C, D-core and E, which lead it, and the fifth carry's edit and redaction fixes of the cold tier, and the sixth carry's (a deleted, edited message stays deleted across crawls; the disk budget counts each chunk once). | labs flag `feature_web_event_index` (off unless set; this repository's config sets it) |
+| 6 | `browser-eventindex` | A `BrowserEventIndexManager` implementing `BaseEventIndexManager` so E2EE room search works in hosted Element Web, with a **non-blocking** load so a large index cannot delay app start, bounded crawl/memory/disk budgets, a chunked encrypted store, and a streamed cold scan for what is on disk outside the resident window. Upstream PR #34718 plus increments A, B, C, D-core and E, which lead it, and the fifth carry's edit and redaction fixes of the cold tier, and the sixth carry's (a deleted, edited message stays deleted across crawls; the disk budget counts each chunk once). Carried onto v1.12.32 on 2026-10-18, where Desktop's search tokenizer-mode choice is not offered for this index. | labs flag `feature_web_event_index` (off unless set; this repository's config sets it) |
 | 7 | `show-attested-did` | Shows the provider-attested DID (`io.inblock.did`) under the MXID in the member panel and in All settings -> Account. | none |
 | 8 | `resolve-did-search` | A DID typed into Spotlight or the invite/DM dialog resolves to the user's MXID. Depends on 7. | none |
 | 9 | `sw-versions-no-cache-on-error` | The service worker never caches a failed `/versions` check, retries it anonymously, and shares one check per server. | none |
@@ -325,6 +340,17 @@ A tag bump must try every patch in this file's order.
   section, so it is not our bug. Filing is gated: see "Upstream filing policy" above.
 - **Retirement:** upstream replaces the blanket "not supported" string with a
   crypto-state-aware reason.
+- **Ported to v1.12.32 (2026-10-18).** Retirement condition not met:
+  `LoginWithQRSection.tsx` still shows the blanket `sign_in_with_qr_unsupported` string for
+  every reason, and both source hunks apply unchanged. Only the `en_EN.json` hunk's trailing
+  context moved (upstream's EN string collections, #35115 and #35289, reworded the
+  neighbouring `sign_out_all_other_sessions` from "sessions" to "devices"); the
+  added/removed lines are identical. Wording drift: upstream now says "device" throughout
+  the session manager, and the button key this patch reuses, `settings|sessions|verify_session`,
+  now reads **"Verify device"**. Our own string still says "session" (the PH legs match
+  it). PH-1, and the siwx-oidc legs that click "Verify session" on another session's tile
+  (`ew-journey-add-device.spec.mjs` D1, `ew-verify-sas.spec.mjs`), look for that label and
+  fail on a v1.12.32 build until they also accept "Verify device".
 - **Coverage:** siwx-oidc `e2e/element/ew-patch-honesty.spec.mjs` PH-0 (the served English
   strings carry both honesty-patch keys) and PH-1 (a session whose crypto is not ready sees the
   honest QR reason and a Verify session action). No unit test ships with the patch.
@@ -382,6 +408,15 @@ A tag bump must try every patch in this file's order.
   `MatrixChat.test.tsx`
   "unskippable verification" x2 (forced 4S recovery replaces the Complete Security screen)
   and `LoginWithQR.test.tsx` "reciprocate" x2 (check-code auto-approve changes the props).
+- **Ported to v1.12.32 (2026-10-18).** `DeviceVerificationStatusCard.tsx` is byte-identical
+  at v1.12.29 and v1.12.32, so the component hunk applies unchanged and the
+  `isVerified === null` branch is still upstream's (retirement not met). Two context ports:
+  the `en_EN.json` hunk (its neighbours were reworded "session" -> "device"), and the test
+  hunk, whose upstream assertions now read "Verify your current device ..." and "This device
+  doesn't support encryption ..." (#35115, #35289); the patched test asserts the new stock
+  copy for the current device, so the only added/removed lines that differ from the
+  v1.12.29 patch are those two strings. Upstream's #35204 ("Show but disable unusable
+  verification buttons") and #35211 change `SetupEncryptionBody.tsx`, not this card.
 - **Retirement:** upstream accepts the PR or fixes the null-handling equivalently.
 - **Coverage:** siwx-oidc `e2e/element/ew-patch-honesty.spec.mjs` PH-0 (served strings) and
   PH-2 (the current session with a null verification status gets a verify exit instead of the
@@ -400,6 +435,15 @@ A tag bump must try every patch in this file's order.
   **Searched 2026-09-01: no upstream issue or PR exists** for MSC4108 check-code
   auto-approval, in element-web, element-desktop, the archived matrix-react-sdk, or
   matrix-authentication-service. Filing fresh is safe. See also the keep ruling above.
+- **Ported to v1.12.32 (2026-10-18).** Retirement not met: `LoginWithQRFlow.tsx` is
+  unchanged from v1.12.29 and the check-code step still needs the Continue click.
+  `LoginWithQR.tsx` was refactored for the v2025 version of MSC4108 (#35249: the state field
+  `rendezvous` became `flow`), which moved the context of our one-line `verificationUri`
+  prop hunk; the `en_EN.json` hunk's neighbours were reworded ("sign in" -> "sign-in").
+  Added/removed lines are identical. Re-review (the keep ruling's standing obligation): the
+  auto-approve still goes through upstream's `onClick(Click.Approve, code)` and
+  `approveLogin`, which compares the typed code with `flow.checkCode` under both MSC4108
+  versions, so reading and typing the code remains the gate.
 - **Retirement:** upstream streamlines the check-code step.
 - **Coverage: none.** No leg in `e2e/element/` types a check code. The QR and device-link
   legs (`ew-qr-second-device.spec.mjs`, `ew-h3-second-device-walk.spec.mjs` H3-A and H3-B) stop
@@ -1049,6 +1093,72 @@ A tag bump must try every patch in this file's order.
       is entry 11's and unrelated): 14 files, **1900** tests passed, 0 failed
       (`BrowserEventIndexManager` 281, `EventIndex` 16); `tsc --noEmit` in `apps/web`: 0
       errors in project sources (the 7 known ones in `node_modules/matrix-js-sdk`).
+- **TAG BUMP to v1.12.32, 2026-10-18: the sixth carry's content, plus one port for
+  upstream's tokenizer mode.** Same sanctioned-exception rule (rule 3); this entry is the
+  record it requires. **No schema change** (`EVENTINDEX_DB_VERSION` untouched, existing
+  indexes are kept on upgrade and rollback) and **no i18n string** (the `en_EN.json` hunk is
+  the sixth carry's, byte for byte in its added lines).
+  - **Provenance commit: `97ddf739ec`** on
+    [`inblockio/element-web`](https://github.com/inblockio/element-web/tree/integration/web-event-index-prod-20261018),
+    branch **`integration/web-event-index-prod-20261018`**: the `v1.12.32` tag
+    (`ed0a1239e8`) plus two commits. Supersedes `cf8dde88d2`. `d6ecef89a5` carries the
+    sixth carry's content onto the tag: `BrowserEventIndexManager.ts`, `eventIndexBounds.ts`
+    and its test, `docs/web-event-index.md` and the Playwright spec are byte-identical to
+    `cf8dde88d2`, and the three mechanical ports are the test-helper import (upstream moved
+    `test/test-utils` to `src/test/test-utils` behind the `test-utils` alias, so
+    `BrowserEventIndexManager.test.ts` and `EventIndex.test.ts` import it from there) and
+    `docs/labs.md` (our section now follows upstream's new `feature_element_call_react`
+    one). `97ddf739ec` is the port below. Still **not** merged into `feat/web-event-index`
+    (#34718's branch, now `mergeable_state: dirty` against `develop`).
+  - **The port: Desktop's tokenizer mode is not offered for this index.** v1.12.30 added a
+    search tokenizer mode (#33048, language-based or N-gram) as a third, optional
+    `initEventIndex` argument, a `tokenizerMode` device setting and a radio group in the
+    Manage dialog, whose confirmation says the index will be deleted and rebuilt and then
+    re-runs `EventIndexPeg.initEventIndex()`. It is a Seshat setting. This index has one
+    fixed tokenizer and ignores the argument, so offering the choice promised a rebuild that
+    changes nothing, and confirming it re-initialised a running index from the dialog.
+    `BaseEventIndexManager` gains `supportsTokenizerModes()` (true, so Seshat and any other
+    backend keep the choice), `BrowserEventIndexManager` returns false, and the Manage
+    dialog shows the tokenizer section only where it applies. The rest of #33048 needs
+    nothing from us: the index never reports `wasRecreated`, and `EventIndexPeg` now also
+    sets `forceAddInitialCheckpoints` on an empty index, which only repeats what
+    `EventIndex.init()` already decides from the same `isEventIndexEmpty()` answer (the
+    honest disk read the sixth carry documents). The sixth carry's semantics (redaction
+    tombstones, each chunk counted once by the disk budget) are untouched.
+  - **Base-drift re-check (the `indexing/EventIndex.ts` hazard):** upstream changed the file
+    between v1.12.29 and v1.12.32 only for #33048 (the `forceAddInitialCheckpoints` flag in
+    `onSync`, which our `addInitialCheckpoints` and its `shouldCrawl` call serve unchanged)
+    and an unused loop index. Our delta in the file has exactly the sixth carry's
+    added/removed lines (+96/-3), applied without `--3way`.
+  - **How it was regenerated (the 2026-09-25 method, at the new tag):** pristine `v1.12.32`
+    with ported entries 1-5 committed as the base, then `git diff v1.12.32 97ddf739ec`
+    applied on top **without** `--3way` (clean), then re-exported with
+    `git diff --abbrev=7 -O<the old patch's file order>`; the two newly touched files
+    (`ManageEventIndexDialog.tsx` and its test) come last.
+  - **Verification:**
+    - **Patch size: twenty-one files, 19853 lines** (was 19 and 19662). Old -> new
+      added/removed lines are identical for `EventIndex.ts`, `Settings.tsx`,
+      `WebPlatform.ts`, `SearchWarning.tsx`, `en_EN.json` and the rest; they differ only in
+      the files of the two commits above (`BaseEventIndexManager.ts`,
+      `BrowserEventIndexManager.ts` and its test, `EventIndex.test.ts`, `docs/labs.md`,
+      `docs/web-event-index.md`) and the two new sections.
+    - **Apply check:** eleven `OK` lines, one per entry, in Dockerfile order on a pristine
+      `v1.12.32` (`ed0a1239e8`), `git apply` without `--3way`.
+    - **On the fork branch:** vitest 456/456 across the 13 EventIndex-related files
+      (`BrowserEventIndexManager` 282, `ElectronPlatform` 49, `SearchWarning` 34,
+      `WebPlatform` 29, `EventIndex` 16, `eventIndexBounds` 15, `EventIndexPanel` 10,
+      `ManageEventIndexDialog` 6, `EventIndexPeg` 5, `RoomSearchAuxPanel` 4, `PWAPlatform` 4,
+      `ConfirmTokenizerChangeDialog` 1, `SeshatIndexManager` 1). One timing test ("pins the
+      bounded per-query cost ... B-F1", `< 20 ms`) read 29.9 ms in a 13-file parallel run and
+      2 of 3 times alone, on a loaded host; `patch-tests` retries a red vitest case twice.
+      `tsc --noEmit` 0 errors, `oxlint` and `oxfmt` clean on every touched file, `knip`
+      clean, `pnpm run i18n` regenerates to zero diff.
+    - **On v1.12.32 with all eleven patches applied:** `tsc --noEmit` in `apps/web` 0 errors;
+      the repository checks (`check-patch-registry.sh`, `check-patch-hunks.py`,
+      `check-copy-markdown-vectors.py`, `browser-eventindex-invariants.mjs` 12/12) pass;
+      the `patch-tests` result is under the v1.12.32 bump record below.
+    - **Not run here:** the in-patch Playwright spec (upstream's harness needs a Synapse
+      container) and the siwx-oidc UX1-UX8 leg, which run against a built image.
 - **Upstream status: FILED AND ACTIVELY TRACKED — we are trying to get this
   merged.** [element-hq/element-web#34718](https://github.com/element-hq/element-web/pull/34718)
   "Add a browser EventIndex so encrypted-room search works on the web"
@@ -1191,6 +1301,12 @@ A tag bump must try every patch in this file's order.
   upstream would need a generic custom-profile-field UI (or MSC4133 field registration)
   before anything like this could land. If upstream ships generic custom-field
   rendering, this patch should be **dropped**, not ported.
+- **Ported to v1.12.32 (2026-10-18).** `UserProfileSettings.tsx` context only: upstream
+  removed the legacy customisation API (#33941), so the `UserIdentifierCustomisations`
+  import and the `userIdentifier` memo are gone and the username box is rendered
+  unconditionally with `client.getSafeUserId()`. The `useAttestedDid` import now follows
+  `CopyableText`, and the `AttestedDidBox` still sits directly under the username box.
+  Added/removed lines are identical to the v1.12.29 patch.
 - **Retirement:** upstream renders custom profile fields generically, OR the
   `io.inblock.did` contract is retired.
 - **Order:** applied SEVENTH in `Dockerfile.element` (it was last until entries 8-10
@@ -1366,6 +1482,15 @@ A tag bump must try every patch in this file's order.
   `tests/localpart_vectors.rs` (siwx-oidc), the patch's test embeds that file verbatim
   and asserts `didLocalpart.ts` reproduces it, and `scripts/check-did-localpart-vectors.sh`
   proves the embedded copy is byte-identical to the fixture.
+- **Ported to v1.12.32 (2026-10-18).** Two ports, no behaviour change. `DMRoomTile.tsx`:
+  #33941 removed `UserIdentifierCustomisations`, so `userIdentifier` is now the bare user id;
+  the DID marker is still appended to the caption. The Spotlight test hunks: upstream moved
+  `test/unit-tests/components/views/dialogs/SpotlightDialog-test.tsx` to vitest at
+  `src/components/views/dialogs/spotlight/SpotlightDialog.test.tsx` (#35079); the import,
+  the `resolveDid` mock and the six DID cases now target that file, with `jest.mock` /
+  `jest.requireActual` / `mocked` / `jest.advanceTimersByTime` -> `vi.mock` /
+  `vi.importActual` / `vi.mocked` / `vi.advanceTimersByTime`. Every other added/removed line
+  is identical.
 - **Retirement:** the `io.inblock.did` contract is retired. (The previous retirement
   condition, "siwx-oidc grows `/resolve`", is met, and the answer was to put the resolver
   in front, not to delete the formula: deleting it would drop DID search on federated
@@ -1422,7 +1547,7 @@ A tag bump must try every patch in this file's order.
   account's DID or a proof that no longer verifies; a DID search for that user corrects
   it. 9 vitest cases (mock client modelled on js-sdk's cache-first read); disabling the
   fresh read fails 8, the proof overwrite 1, the reject eviction 1, the 404 eviction 2.
-- **Spotlight coverage (2026-09-29):** 6 jest cases in `SpotlightDialog-test.tsx`
+- **Spotlight coverage (2026-09-29; vitest since the v1.12.32 port, see above):** 6 jest cases in `SpotlightDialog-test.tsx`
   (verified hit with no filter and with People, unverified marker with no filter, no
   other Suggestions leak in with no filter, existing DM shown, no-results). The Spotlight
   jest suite does not load at v1.12.29 as shipped (`content-type@3` is ESM and missing
@@ -1532,6 +1657,18 @@ A tag bump must try every patch in this file's order.
   then equals the full PR diff again), or when the patch retires. While it is in effect,
   the rule 4b drift check prints exactly that hunk's removed and added mock line, and
   nothing else.
+- **At the v1.12.32 bump (2026-10-18).** Applies unchanged; retirement not met (stock
+  `index.ts` still caches whatever `/versions` returns, with no `response.ok` check). No
+  drift: the rule 4b check prints nothing. #35242's head is still `246724f407`; it has not
+  picked up #34955, so the approved deviation above never took effect, and v1.12.31, the
+  first release with #34955, meets its closing condition (c). One consequence to know:
+  upstream's `apps/web/src/serviceworker/index.test.ts` now exists at our tag and fails 2/4
+  with entry 9 applied (verified 2026-10-18 on v1.12.32 with all eleven patches: the two
+  token tests, for the reason given above; `serverSupport.test.ts` 7/7 and
+  `mediaTokenRetry.test.ts` 6/6 pass). No patch carries that file, so the `patch-tests` job
+  does not run it and it is not a known-red line. It turns green once #35242 merges
+  `develop` with the one-line mock change; entry 9 is then re-vendored from the PR with its
+  `index.test.ts` hunk, which needs no deviation now that the file exists at our tag.
 - **Retirement:** a tag bump where upstream checks `response.ok` (or otherwise stops
   caching a failed `/versions`), i.e. our PR or an equivalent merged. The patch then
   fails to apply: check, and drop it (and rebase entry 10 onto the upstream code).
@@ -1795,7 +1932,7 @@ A tag bump must try every patch in this file's order.
 
 | Delta | Where | Why |
 |---|---|---|
-| `index.html` served no-cache | `config/element-nginx.conf` | stale-bundle TDZ crash prevention ("Your Element is misconfigured") |
+| `index.html` served no-cache | `config/element-nginx.conf` | stale-bundle TDZ crash prevention ("Your Element is misconfigured"); the same rule covers the other unhashed entry documents, among them the whole `usercontent/` prefix since 2026-10-18 (v1.12.31 added the PDF viewer's `usercontent/pdf/index.html`; upstream's template sets no-cache on that prefix too, #35237) |
 | Security headers include | `config/element-nginx-security-headers.inc` | S1 hardening checklist |
 | `sw-boot.js` head shim | `config/element-sw-boot.js` + build-time `sed` (fail-loud grep) | service-worker media-auth boot ordering (2026-07-31 download RCA); guard (E)'s canary waits for the app to be `SYNCING` since 2026-09-28, because its probe hit the SW with an expired stored token and triggered the entry-9 poisoning; after 120 s without `SYNCING` it warns and runs anyway (safe with entries 9 and 10). The gate needs `window.mxMatrixClientPeg` in the bundle, which the Dockerfile greps for. Its 8 s timer is coupled to entry 10's 5 s wait |
 | Per-build `sw.js` stamp | Dockerfile `RUN` (bundle hash + build UTC) | byte-identical sw.js across deploys let a wedged SW survive every deploy (2026-07-31 incident); stamp forces eviction |
@@ -1826,6 +1963,33 @@ against a pristine tree, in Dockerfile order):
 Verified afterwards in BOTH apply orders against a pristine v1.12.26 tree: the
 all-six order and the then-`main` subset (1, 5, 6). Only the all-six order still
 exists; the subset is kept here as the record of what was checked.
+
+**v1.12.29 -> v1.12.32 bump (2026-10-18), per-patch outcome** (rule 4 against a pristine
+`v1.12.32`, `ed0a1239e8`, in Dockerfile order; every failing entry's retirement condition
+was checked before it was ported, and none is met):
+
+| # | Patch | Outcome at v1.12.32 |
+|---|---|---|
+| 1 | `force-first-device-recovery` | applies unchanged |
+| 2 | `setup-encryption-busy-wedge` | applies unchanged; `SetupEncryptionStore.ts` unchanged upstream, Busy handling unfixed, **carried** |
+| 3 | `honest-qr-disabled-reason` | **ported**, `en_EN.json` context only (see entry 3) |
+| 4 | `offer-verify-current-session` | **ported**, `en_EN.json` context and the test hunk's stock strings (see entry 4) |
+| 5 | `auto-approve-check-code` | **ported**, `LoginWithQR.tsx` and `en_EN.json` context (see entry 5) |
+| 6 | `browser-eventindex` | **regenerated** from the fork at the new tag, with the tokenizer-mode port (see entry 6) |
+| 7 | `show-attested-did` | **ported**, `UserProfileSettings.tsx` context (see entry 7) |
+| 8 | `resolve-did-search` | **ported**, `DMRoomTile.tsx` context and the Spotlight test moved to vitest (see entry 8) |
+| 9 | `sw-versions-no-cache-on-error` | applies unchanged; no drift from #35242 (see entry 9) |
+| 10 | `sw-media-401-token-retry` | applies unchanged |
+| 11 | `copy-markdown` | applies unchanged |
+
+Gates on the patched v1.12.32 tree: the `patch-tests` stage (`podman build --target
+patch-tests`): 16 runs, **2156 tests passed**, 0 failed, 0 flaky, no known-red row, vitest
+only (upstream removed jest in v1.12.31; the script now handles a tree without it and the
+`[project]` prefix of `vitest list`), entry 11's Chromium suite included; the stage moved
+to a pinned bookworm base because Playwright 1.63 refuses Debian 11. `tsc --noEmit` in
+`apps/web` 0 errors and `oxlint` clean on every file the patches touch. A local test build
+of the whole image (`podman build`, not a deployed artefact) passes the builder's version
+stamp and marker loop.
 
 ## Marker discrimination record
 
@@ -1896,6 +2060,15 @@ What the table does not say, and the choices behind it:
   baseline 0, stock 0) is not a row; it becomes one once every build to be checked carries it.
 - **Entry 3's old row was wrong.** `Not supported by your account provider` is Element's own
   string and is present in stock; the key `sign_in_with_qr_unverified_session` is ours.
+- **Re-proof at v1.12.32 (2026-10-18).** Candidate: a local test build of this registry's
+  state at the bump (`podman build -f dockerfiles/Dockerfile.element`, entries 1-11; the
+  Dockerfile's loop reported 17 rows present). Stock: `docker.io/vectorim/element-web:v1.12.32`
+  (index `sha256:f8700633d4336258af7a05b53865a4f479e0d628cf2d9ca83d28b5939314d4ce`, revision
+  label `ed0a1239e853`, `/version` `1.12.32`). Every row counts exactly as in the candidate
+  column of the table above in the candidate, and 0 in stock; the named files (`init.js`,
+  `element-web-app.js`, `sw.js`, `i18n/en_EN.<hash>.json`) still exist at this tag. Served
+  from loopback, `element-patch-markers.sh` passes all 11 entries on the candidate, fails
+  all 11 on stock, and passes all 11 on stock with `--absent 1,...,11`.
 - **To re-prove after a tag bump or a new entry:** extract `/app` of the new build and of the stock
   image for the new tag, serve each from a loopback static server, and run
   `scripts/element-patch-markers.sh --absent <every entry> http://127.0.0.1:<port>` against stock

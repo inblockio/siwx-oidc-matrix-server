@@ -23,9 +23,9 @@
 # The test must be red there for the reason stated. A row whose test turns green
 # or disappears is reported as STALE by the script: delete it.
 #
-# At v1.12.29 (2026-10-08) no carried test is red on the unpatched tag, so there are
-# no rows. One suite looks like one: test/unit-tests/components/views/dialogs/
-# SpotlightDialog-test.tsx does not load at this tag (content-type@3 is ESM and
-# missing from jest's transformIgnorePatterns). The script runs it with that package
-# added to the allowlist on the command line instead of listing it, because listing
-# it would leave entry 8's six Spotlight cases running nowhere.
+# At v1.12.32 (2026-10-18) every carried test is green with all eleven patches
+# (16 files, 2156 tests, vitest only: upstream removed jest in v1.12.31), so there
+# are no rows. At v1.12.29 (2026-10-08) there were none either; the one suite that
+# looked like one there, the jest SpotlightDialog-test.tsx that needed the
+# content-type fixup, is now src/components/views/dialogs/spotlight/
+# SpotlightDialog.test.tsx under vitest and loads without help.

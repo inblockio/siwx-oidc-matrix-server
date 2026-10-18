@@ -77,10 +77,10 @@ index f7f73b9..1b0f11a 100644
          </SettingsSubsection>
      );
 diff --git a/apps/web/src/components/views/settings/tabs/user/SessionManagerTab.tsx b/apps/web/src/components/views/settings/tabs/user/SessionManagerTab.tsx
-index 01aba5c..19493ce 100644
+index d07070f..ba3897b 100644
 --- a/apps/web/src/components/views/settings/tabs/user/SessionManagerTab.tsx
 +++ b/apps/web/src/components/views/settings/tabs/user/SessionManagerTab.tsx
-@@ -164,7 +164,12 @@ const SessionManagerTab: React.FC<{
+@@ -165,7 +165,12 @@ const SessionManagerTab: React.FC<{
      const currentUserMember = (userId && matrixClient?.getUser(userId)) || undefined;
      const isCrossSigningReady = useAsyncMemo(
          async () => matrixClient.getCrypto()?.isCrossSigningReady() ?? false,
@@ -94,7 +94,7 @@ index 01aba5c..19493ce 100644
      );
  
      const onDeviceExpandToggle = (deviceId: ExtendedDevice["device_id"]): void => {
-@@ -271,7 +276,11 @@ const SessionManagerTab: React.FC<{
+@@ -277,7 +282,11 @@ const SessionManagerTab: React.FC<{
      return (
          <SettingsTab>
              <SettingsSection>
@@ -108,14 +108,14 @@ index 01aba5c..19493ce 100644
                      devices={devices}
                      goToFilteredList={onGoToFilteredList}
 diff --git a/apps/web/src/i18n/strings/en_EN.json b/apps/web/src/i18n/strings/en_EN.json
-index 4ed51db..64938cb 100644
+index 4dec06d..fdeddf0 100644
 --- a/apps/web/src/i18n/strings/en_EN.json
 +++ b/apps/web/src/i18n/strings/en_EN.json
-@@ -2960,6 +2960,7 @@
+@@ -2943,6 +2943,7 @@
              "sign_in_with_qr_button": "Show QR code",
              "sign_in_with_qr_description": "Use a QR code to sign in to another device and set up secure messaging.",
              "sign_in_with_qr_unsupported": "Not supported by your account provider",
 +            "sign_in_with_qr_unverified_session": "This session isn't verified yet, so it can't set up another device. Verify this session first.",
              "sign_out": "Remove this session",
-             "sign_out_all_other_sessions": "Remove all other sessions (%(otherSessionsCount)s)",
+             "sign_out_all_other_sessions": "Remove all other devices (%(otherSessionsCount)s)",
              "sign_out_confirm_description": {

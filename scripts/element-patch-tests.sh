@@ -37,10 +37,11 @@
 #
 # WHO OWNS A FILE. Asked of the runners, not guessed from the name: a file is
 # vitest's when `vitest list --filesOnly --config vitest.config.ts` names it, and
-# jest's when `jest --listTests` does (apps/web at this tag: vitest takes
-# src/**/*.test.{ts,tsx}, jest takes test/**/*-test.*). A test file neither
-# runner would execute is an ERROR, not a skip: a silently unrun test is the
-# failure this harness exists to prevent. A vitest config a patch ADDS
+# jest's when `jest --listTests` does (apps/web at v1.12.29: vitest takes
+# src/**/*.test.{ts,tsx}, jest takes test/**/*-test.*). From v1.12.31 upstream
+# runs every unit test under vitest and jest is not installed at all; the script
+# then asks vitest alone. A test file no runner would execute is an ERROR, not a
+# skip: a silently unrun test is the failure this harness exists to prevent. A vitest config a patch ADDS
 # (apps/web/vitest*.config.ts, e.g. Copy Markdown's real-Chromium
 # vitest.browser.copy-md.config.ts) is run as its own runner, with the
 # `-t "<name>"` filter its header comment names.
@@ -56,6 +57,7 @@
 # `content-type` to the allowlist on the command line (jest --showConfig gives the
 # effective pattern; nothing in the tree is edited). It does nothing once
 # upstream lists the package itself, and warns if the pattern's shape changed.
+# Unused from v1.12.31, which has no jest.
 set -euo pipefail
 export LC_ALL=C
 
@@ -171,14 +173,27 @@ say "element-patch-tests: tree=$TREE"
 say "element-patch-tests: ${#CARRIED[@]} test file(s) derived from ${#patch_files[@]} patch(es) in $PATCHES_DIR"
 
 VITEST_OWNS="$WORK/vitest-owns.txt"; JEST_OWNS="$WORK/jest-owns.txt"
-( cd "$WEB" && pnpm exec vitest list --filesOnly --config vitest.config.ts 2>"$WORK/vitest-list.err" ) >"$VITEST_OWNS" \
+# A config with `projects` (v1.12.31 onwards: "unit" and "browser") prefixes each path
+# with its project, "[unit] src/x.test.ts"; the prefix is dropped, the path is what counts.
+( cd "$WEB" && pnpm exec vitest list --filesOnly --config vitest.config.ts 2>"$WORK/vitest-list.err" ) \
+  | sed -E 's/^\[[^]]*\] //' >"$VITEST_OWNS" \
   || { cat "$WORK/vitest-list.err" >&2; die "vitest list failed in $WEB"; }
 # jest lists absolute paths; strip "$WEB/" as a literal prefix (a sed pattern would read
 # `*`, `[` or the delimiter in a tree path as syntax and leave the paths absolute).
-( cd "$WEB" && pnpm exec jest --listTests 2>"$WORK/jest-list.err" ) \
-  | while IFS= read -r p; do printf '%s\n' "${p#"$WEB/"}"; done >"$JEST_OWNS" \
-  || { cat "$WORK/jest-list.err" >&2; die "jest --listTests failed in $WEB"; }
-[ -s "$VITEST_OWNS" ] && [ -s "$JEST_OWNS" ] || die "a runner listed no test files; is $WEB installed?"
+# A tree without jest (Element Web v1.12.31 onwards) leaves the list empty, so every
+# carried test must be vitest's.
+HAVE_JEST=0
+[ -e "$WEB/node_modules/.bin/jest" ] && HAVE_JEST=1
+if [ "$HAVE_JEST" = 1 ]; then
+  ( cd "$WEB" && pnpm exec jest --listTests 2>"$WORK/jest-list.err" ) \
+    | while IFS= read -r p; do printf '%s\n' "${p#"$WEB/"}"; done >"$JEST_OWNS" \
+    || { cat "$WORK/jest-list.err" >&2; die "jest --listTests failed in $WEB"; }
+else
+  : >"$JEST_OWNS"
+  say "element-patch-tests: jest is not installed in $WEB; vitest is the only runner"
+fi
+[ -s "$VITEST_OWNS" ] || die "vitest listed no test files; is $WEB installed?"
+[ "$HAVE_JEST" = 0 ] || [ -s "$JEST_OWNS" ] || die "jest listed no test files; is $WEB installed?"
 
 declare -a VITEST_FILES=() JEST_FILES=()
 ORPHANS=0

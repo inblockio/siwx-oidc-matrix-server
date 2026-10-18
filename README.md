@@ -50,7 +50,7 @@ The Synapse and Element Web images built here are **not stock**: see
   its [Matrix integration guide](https://github.com/inblockio/siwx-oidc/blob/main/docs/matrix-integration.md).
 - **Clients must implement the Matrix OAuth 2.0 authentication API.** Clients that only
   know password login cannot sign in.
-- **Element Web is built from source** at `v1.12.29` with 11 vendored patches and a runtime
+- **Element Web is built from source** at `v1.12.32` with 11 vendored patches and a runtime
   overlay (configuration, theme, branding, a service-worker boot shim).
 - **Element X is used unmodified**, as distributed through the app stores. This repository
   does not patch it.
@@ -158,10 +158,10 @@ deployment is known to run a different version.
 |---|---|---|---|
 | Synapse | `v1.163.0` (`matrixdotorg/synapse:v1.163.0@sha256:e98ab72138d9…`, index digest) | `dockerfiles/Dockerfile` (`FROM`) | **Patched**: 1 source patch, plus config written by `entrypoints/matrix_server.sh`. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/synapse` |
 | Synapse image the stack runs | default `…/synapse:sha-70b897e@sha256:986294c6147b…` (CI build of main at 70b897e, v1.162.0) | `docker-compose.yml` (`SYNAPSE_IMAGE_REF`); `real-stack/Dockerfile.synapse` (`ARG SYNAPSE_IMAGE`, same default, for the local real stack) | Built here |
-| Element Web | `v1.12.29` (git tag of element-hq/element-web; the build fails unless it resolves to commit `2d90d6b7b601…`) | `dockerfiles/Dockerfile.element` (`ARG ELEMENT_WEB_TAG`, `ARG ELEMENT_WEB_COMMIT`) | **Built from source and patched**: 10 source patches, plus a runtime overlay |
+| Element Web | `v1.12.32` (git tag of element-hq/element-web; the build fails unless it resolves to commit `ed0a1239e853…`) | `dockerfiles/Dockerfile.element` (`ARG ELEMENT_WEB_TAG`, `ARG ELEMENT_WEB_COMMIT`) | **Built from source and patched**: 11 source patches, plus a runtime overlay |
 | Element Web image the stack runs | default `…/element-web:sha-33a0c95@sha256:1761832069bd…` (CI build of main at 33a0c95) | `docker-compose.yml` (`ELEMENT_IMAGE_REF`) | Built here |
-| Element Call | `0.24.0` (`@element-hq/element-call-embedded`) | Not pinned here: Element Web `v1.12.29`'s `apps/web/package.json` and `pnpm-lock.yaml` | Stock, embedded in the Element Web bundle (`element_call.use_exclusively` in `config/element-config.json`). Moves only with the Element Web tag |
-| matrix-js-sdk | `42.4.0` | Not pinned here: same, via the Element Web tag | Stock, bundled |
+| Element Call | `0.26.0` (`@element-hq/element-call-embedded`) | Not pinned here: Element Web `v1.12.32`'s `apps/web/package.json` and `pnpm-lock.yaml` | Stock, embedded in the Element Web bundle (`element_call.use_exclusively` in `config/element-config.json`). Moves only with the Element Web tag. Since `v1.12.31` the bundle also carries `@element-hq/element-call-component` (element-call commit `9b3c3569`, pinned by the lockfile) for the labs flag `feature_element_call_react`, which `config/element-config.json` does not set |
+| matrix-js-sdk | `44.0.0` | Not pinned here: same, via the Element Web tag | Stock, bundled |
 | Element Web build toolchain | `node:24.20.0-bullseye@sha256:25f3016fcdae…`; pnpm `11.23.0` (upstream `devEngines`, via corepack); `pnpm install --frozen-lockfile` | `dockerfiles/Dockerfile.element` (builder `FROM`, `corepack enable` step) | Stock |
 | Element Web serving base | `nginxinc/nginx-unprivileged:1.31.6-alpine-slim@sha256:c81a27f28bc2…` | `dockerfiles/Dockerfile.element` (runtime `FROM`) | Stock, with our `config/element-nginx.conf` and security headers |
 | siwx-oidc | default `ghcr.io/inblockio/siwx-oidc:sha-40efae9@sha256:54739f4813bf…` (CI build of siwx-oidc main at 40efae9) | `docker-compose.yml` (`SIWX_OIDC_IMAGE_REF`) | First-party, built in [inblockio/siwx-oidc](https://github.com/inblockio/siwx-oidc) |

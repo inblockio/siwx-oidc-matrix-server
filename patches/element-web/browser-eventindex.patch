@@ -532,10 +532,10 @@ index 091a32e..71965de 100644
      }
  
 diff --git a/apps/web/src/i18n/strings/en_EN.json b/apps/web/src/i18n/strings/en_EN.json
-index 84dcab5..0ff72dd 100644
+index 732d2cd..92c2893 100644
 --- a/apps/web/src/i18n/strings/en_EN.json
 +++ b/apps/web/src/i18n/strings/en_EN.json
-@@ -1577,6 +1577,8 @@
+@@ -1593,6 +1593,8 @@
          "video_rooms_faq2_answer": "Yes, the chat timeline is displayed alongside the video.",
          "video_rooms_faq2_question": "Can I use text chat alongside the video call?",
          "video_rooms_feedbackSubheading": "Thank you for trying the beta, please go into as much detail as you can so we can improve it.",
@@ -544,7 +544,7 @@ index 84dcab5..0ff72dd 100644
          "wysiwyg_composer": "Rich text editor"
      },
      "labs_mjolnir": {
-@@ -2427,9 +2429,11 @@
+@@ -2452,9 +2454,11 @@
          "reset_title": "Reset event store?",
          "warning_kind_files": "This version of %(brand)s does not support viewing some encrypted files",
          "warning_kind_files_app": "Use the <a>Desktop app</a> to see all encrypted files",
@@ -558,10 +558,10 @@ index 84dcab5..0ff72dd 100644
      "setting": {
          "help_about": {
 diff --git a/apps/web/src/indexing/BaseEventIndexManager.ts b/apps/web/src/indexing/BaseEventIndexManager.ts
-index 8a1c85d..32a5a77 100644
+index 4c100f4..58202ab 100644
 --- a/apps/web/src/indexing/BaseEventIndexManager.ts
 +++ b/apps/web/src/indexing/BaseEventIndexManager.ts
-@@ -60,6 +60,84 @@ export interface IIndexStats {
+@@ -62,6 +62,84 @@ export interface IIndexStats {
      size: number;
      eventCount: number;
      roomCount: number;
@@ -646,7 +646,25 @@ index 8a1c85d..32a5a77 100644
  }
  
  /**
-@@ -222,6 +300,49 @@ export default abstract class BaseEventIndexManager {
+@@ -83,6 +161,17 @@ export default abstract class BaseEventIndexManager {
+     public async supportsEventIndexing(): Promise<boolean> {
+         return true;
+     }
++
++    /**
++     * Whether this backend honours the `tokenizerMode` argument of {@link initEventIndex}, so that the settings UI
++     * should offer the choice. A backend with one fixed tokenizer returns false and the choice is not shown: changing
++     * it there would promise a rebuild of the index that changes nothing.
++     *
++     * @returns {boolean} True if the tokenizer mode setting applies to this backend.
++     */
++    public supportsTokenizerModes(): boolean {
++        return true;
++    }
+     /**
+      * Initialize the event index for the given user.
+      *
+@@ -216,6 +305,49 @@ export default abstract class BaseEventIndexManager {
          throw new Error("Unimplemented");
      }
  
@@ -697,7 +715,7 @@ index 8a1c85d..32a5a77 100644
       * Add a new crawler checkpoint to the index.
       *
 diff --git a/apps/web/src/indexing/EventIndex.test.ts b/apps/web/src/indexing/EventIndex.test.ts
-index 3b284cd..6f40a31 100644
+index 2debbbc..42b1446 100644
 --- a/apps/web/src/indexing/EventIndex.test.ts
 +++ b/apps/web/src/indexing/EventIndex.test.ts
 @@ -16,9 +16,13 @@ limitations under the License.
@@ -714,16 +732,14 @@ index 3b284cd..6f40a31 100644
      type MatrixClient,
      type IEvent,
      MatrixEvent,
-@@ -27,6 +31,8 @@ import {
+@@ -26,12 +30,14 @@ import {
+     ClientEvent,
      SyncState,
  } from "matrix-js-sdk/src/matrix";
- 
 +import * as sdkUtils from "matrix-js-sdk/src/utils";
-+
+ import { emitPromise, getMockClientWithEventEmitter, mockClientMethodsRooms, mockPlatformPeg } from "test-utils";
+ 
  import EventIndex from "./EventIndex.ts";
- import {
-     emitPromise,
-@@ -37,6 +43,7 @@ import {
  import type BaseEventIndexManager from "./BaseEventIndexManager.ts";
  import { type ICrawlerCheckpoint } from "./BaseEventIndexManager.ts";
  import SettingsStore from "../settings/SettingsStore.ts";
@@ -731,7 +747,7 @@ index 3b284cd..6f40a31 100644
  
  afterEach(() => {
      vi.restoreAllMocks();
-@@ -48,6 +55,7 @@ describe("EventIndex", () => {
+@@ -43,6 +49,7 @@ describe("EventIndex", () => {
              loadCheckpoints: vi.fn(),
              removeCrawlerCheckpoint: vi.fn(),
              isEventIndexEmpty: vi.fn().mockResolvedValue(false),
@@ -739,7 +755,7 @@ index 3b284cd..6f40a31 100644
          } as any as Mocked<BaseEventIndexManager>;
          mockPlatformPeg({ getEventIndexingManager: () => mockIndexingManager });
  
-@@ -102,6 +110,7 @@ describe("EventIndex", () => {
+@@ -97,6 +104,7 @@ describe("EventIndex", () => {
              addCrawlerCheckpoint: vi.fn(),
              removeCrawlerCheckpoint: vi.fn(),
              commitLiveEvents: vi.fn(),
@@ -747,7 +763,7 @@ index 3b284cd..6f40a31 100644
          } as any as Mocked<BaseEventIndexManager>;
          mockPlatformPeg({ getEventIndexingManager: () => mockIndexingManager });
  
-@@ -110,12 +119,14 @@ describe("EventIndex", () => {
+@@ -105,12 +113,14 @@ describe("EventIndex", () => {
              getLiveTimeline: () => ({
                  getPaginationToken: () => "token1",
              }),
@@ -762,7 +778,7 @@ index 3b284cd..6f40a31 100644
          } as any as Room;
          const mockCrypto = {
              isEncryptionEnabledInRoom: vi.fn().mockResolvedValue(true),
-@@ -167,6 +178,621 @@ describe("EventIndex", () => {
+@@ -162,6 +172,621 @@ describe("EventIndex", () => {
              direction: Direction.Forward,
          });
      });
@@ -1385,7 +1401,7 @@ index 3b284cd..6f40a31 100644
  
  /**
 diff --git a/apps/web/src/indexing/EventIndex.ts b/apps/web/src/indexing/EventIndex.ts
-index 73a855a..2d3dbfc 100644
+index d272911..c58df38 100644
 --- a/apps/web/src/indexing/EventIndex.ts
 +++ b/apps/web/src/indexing/EventIndex.ts
 @@ -68,6 +68,17 @@ export default class EventIndex extends EventEmitter {
@@ -1406,7 +1422,7 @@ index 73a855a..2d3dbfc 100644
       */
      private crawlerCheckpoints: ICrawlerCheckpoint[] = [];
  
-@@ -149,12 +160,18 @@ export default class EventIndex extends EventEmitter {
+@@ -159,12 +170,18 @@ export default class EventIndex extends EventEmitter {
              Boolean(await client.getCrypto()?.isEncryptionEnabledInRoom(room.roomId)),
          );
  
@@ -1426,7 +1442,7 @@ index 73a855a..2d3dbfc 100644
                  const timeline = room.getLiveTimeline();
                  const token = timeline.getPaginationToken(Direction.Backward);
  
-@@ -164,6 +181,18 @@ export default class EventIndex extends EventEmitter {
+@@ -174,6 +191,18 @@ export default class EventIndex extends EventEmitter {
                  }
                  this.logger.debug(`addInitialCheckpoints: Adding initial checkpoints for room ${room.roomId}`);
  
@@ -1445,7 +1461,7 @@ index 73a855a..2d3dbfc 100644
                  const backCheckpoint: ICrawlerCheckpoint = {
                      roomId: room.roomId,
                      token: token,
-@@ -391,6 +420,29 @@ export default class EventIndex extends EventEmitter {
+@@ -403,6 +432,29 @@ export default class EventIndex extends EventEmitter {
  
      private async addEventsFromLiveTimeline(timeline: EventTimeline): Promise<void> {
          const events = timeline.getEvents();
@@ -1475,7 +1491,7 @@ index 73a855a..2d3dbfc 100644
  
          for (let i = 0; i < events.length; i++) {
              const ev = events[i];
-@@ -475,14 +527,29 @@ export default class EventIndex extends EventEmitter {
+@@ -487,14 +539,29 @@ export default class EventIndex extends EventEmitter {
                  this.emitNewCheckpoint();
              }
  
@@ -1507,7 +1523,7 @@ index 73a855a..2d3dbfc 100644
              /// There is no checkpoint available currently, one may appear if
              // a sync with limited room timelines happens, so go back to sleep.
              if (checkpoint === undefined) {
-@@ -630,6 +697,32 @@ export default class EventIndex extends EventEmitter {
+@@ -642,6 +709,32 @@ export default class EventIndex extends EventEmitter {
  
                  const eventsAlreadyAdded = await indexManager.addHistoricEvents(events, newCheckpoint, checkpoint);
  
@@ -1541,10 +1557,10 @@ index 73a855a..2d3dbfc 100644
                  // to do here anymore.
                  if (!newCheckpoint) {
 diff --git a/apps/web/src/settings/Settings.tsx b/apps/web/src/settings/Settings.tsx
-index fe75a94..f9aedf6 100644
+index 8e0135e..fa809bd 100644
 --- a/apps/web/src/settings/Settings.tsx
 +++ b/apps/web/src/settings/Settings.tsx
-@@ -214,6 +214,7 @@ export interface Settings {
+@@ -216,6 +216,7 @@ export interface Settings {
      [Features.NotificationSettings2]: IFeature;
      "feature_msc3531_hide_messages_pending_moderation": IFeature;
      "feature_latex_maths": IFeature;
@@ -1552,7 +1568,7 @@ index fe75a94..f9aedf6 100644
      "feature_wysiwyg_composer": IFeature;
      "feature_mjolnir": IFeature;
      "feature_exclude_insecure_devices": IFeature;
-@@ -476,6 +477,15 @@ export const SETTINGS: Settings = {
+@@ -485,6 +486,15 @@ export const SETTINGS: Settings = {
          supportedLevelsAreOrdered: true,
          default: false,
      },
@@ -1570,10 +1586,10 @@ index fe75a94..f9aedf6 100644
          labsGroup: LabGroup.Messaging,
 diff --git a/apps/web/src/vector/platform/BrowserEventIndexManager.test.ts b/apps/web/src/vector/platform/BrowserEventIndexManager.test.ts
 new file mode 100644
-index 0000000..151e9ee
+index 0000000..4f4a437
 --- /dev/null
 +++ b/apps/web/src/vector/platform/BrowserEventIndexManager.test.ts
-@@ -0,0 +1,9234 @@
+@@ -0,0 +1,9238 @@
 +/*
 +Copyright 2026 inblock.io
 +
@@ -1588,8 +1604,8 @@ index 0000000..151e9ee
 +import { vi, describe, it, expect, afterEach, beforeEach } from "vitest";
 +import { IDBFactory } from "fake-indexeddb";
 +import { decodeBase64, Direction, encodeBase64 } from "matrix-js-sdk/src/matrix";
++import { mockPlatformPeg } from "test-utils";
 +
-+import { mockPlatformPeg } from "../../../test/test-utils";
 +import SettingsStore from "../../settings/SettingsStore";
 +import {
 +    BrowserEventIndexManager,
@@ -2485,6 +2501,10 @@ index 0000000..151e9ee
 +        const manager = new BrowserEventIndexManager();
 +        vi.spyOn(SettingsStore, "getValue").mockReturnValue(true);
 +        expect(await manager.supportsEventIndexing()).toBe(true);
++    });
++
++    it("does not offer tokenizer modes: it has one fixed tokenizer", () => {
++        expect(new BrowserEventIndexManager().supportsTokenizerModes()).toBe(false);
 +    });
 +});
 +
@@ -10810,10 +10830,10 @@ index 0000000..151e9ee
 +});
 diff --git a/apps/web/src/vector/platform/BrowserEventIndexManager.ts b/apps/web/src/vector/platform/BrowserEventIndexManager.ts
 new file mode 100644
-index 0000000..190e6be
+index 0000000..b38aa1e
 --- /dev/null
 +++ b/apps/web/src/vector/platform/BrowserEventIndexManager.ts
-@@ -0,0 +1,6573 @@
+@@ -0,0 +1,6583 @@
 +/*
 +Copyright 2026 inblock.io
 +
@@ -12968,6 +12988,16 @@ index 0000000..190e6be
 +     */
 +    public async supportsEventIndexing(): Promise<boolean> {
 +        return isBrowserEventIndexEnabled();
++    }
++
++    /**
++     * Always false: this index has one tokenizer ({@link tokenize}, with {@link substringHits} catching scripts that do
++     * not separate words), so the `tokenizerMode` setting does not apply here, {@link initEventIndex} ignores the
++     * argument, and the settings dialog does not offer the choice; see {@link
++     * BaseEventIndexManager.supportsTokenizerModes}.
++     */
++    public supportsTokenizerModes(): boolean {
++        return false;
 +    }
 +
 +    /**
@@ -17520,7 +17550,7 @@ index 02fa172..7a81a52 100644
 +    });
  });
 diff --git a/apps/web/src/vector/platform/WebPlatform.ts b/apps/web/src/vector/platform/WebPlatform.ts
-index a546ad5..6fb0525 100644
+index 1f271e6..ea60c5e 100644
 --- a/apps/web/src/vector/platform/WebPlatform.ts
 +++ b/apps/web/src/vector/platform/WebPlatform.ts
 @@ -12,6 +12,12 @@ import { logger } from "matrix-js-sdk/src/logger";
@@ -18610,10 +18640,10 @@ index 6fa8152..addd7c0 100644
  
      describe("with no event index (web build)", () => {
 diff --git a/docs/.vitepress/config.ts b/docs/.vitepress/config.ts
-index 7af3aa1..b3d4646 100644
+index deecafa..360cc60 100644
 --- a/docs/.vitepress/config.ts
 +++ b/docs/.vitepress/config.ts
-@@ -157,6 +157,7 @@ export default withMermaid({
+@@ -150,6 +150,7 @@ export default withMermaid({
                      { text: "Cider editor", link: "/ciderEditor" },
                      { text: "Iconography", link: "/icons" },
                      { text: "Local echo", link: "/local-echo-dev" },
@@ -18622,13 +18652,13 @@ index 7af3aa1..b3d4646 100644
                      { text: "Room List", link: "/room-list" },
                      { text: "Scrolling", link: "/scrolling" },
 diff --git a/docs/labs.md b/docs/labs.md
-index af21c90..d4c1751 100644
+index 2dac219..1046857 100644
 --- a/docs/labs.md
 +++ b/docs/labs.md
-@@ -125,3 +125,17 @@ Note, this does not affect the existing `Link new device` flow using the same MS
- ## URL Preview Bundle (MSC4095) (`feature_msc4095_url_preview_bundle`)
+@@ -129,3 +129,17 @@ Attaches URL preview information generated by the homeserver on messages sent.
+ ## Element Call React Component (`feature_element_call_react`)
  
- Attaches URL preview information generated by the homeserver on messages sent.
+ Renders Element Call as a React component instead of a widget.
 +
 +## Encrypted message search in the browser (`feature_web_event_index`)
 +
@@ -18636,7 +18666,7 @@ index af21c90..d4c1751 100644
 +
 +Message content is encrypted at rest under a key tied to the current session, which is discarded on logout. The index covers message bodies, filenames and caption text, but not the contents of media or other attachments. It is populated by a background crawler, so search results may be incomplete until crawling has finished. This flag can be set via `config.json` to enable the feature for a whole deployment.
 +
-+Two limits are worth stating plainly. The index is a **recency window**, not your whole history: the background crawler works backwards from the newest messages and stops at the window below, so messages older than that stay outside its reach. And because the tokeniser splits on characters that CJK text does not use, **CJK text is matched by a substring scan only**, which is slower than the term index and gets slower as the index grows.
++Two limits are worth stating plainly. The index is a **recency window**, not your whole history: the background crawler works backwards from the newest messages and stops at the window below, so messages older than that stay outside its reach. And because the tokeniser splits on characters that CJK text does not use, **CJK text is matched by a substring scan only**, which is slower than the term index and gets slower as the index grows. Desktop's search tokenizer mode does not apply to this index, so it is not offered for it.
 +
 +The crawler and the amount kept in memory are both bounded: history older than 90 days, and rooms past the most-recently-active 100 (desktop) or 20 (memory-constrained devices), are not crawled, and once the on-disk budget for a device's tier is reached, older content is left un-indexed for now rather than searched; Search states the covered date when this applies. Content past the smaller in-memory budget is not left behind in the same way: it stays on disk and is still found, just by a slower streamed scan, newest first, in pages, rather than instantly from memory.
 +
@@ -18645,10 +18675,10 @@ index af21c90..d4c1751 100644
 +See [Encrypted message search in the browser](web-event-index.md) for the design, the browser limits it works within, and the performance measurements behind it.
 diff --git a/docs/web-event-index.md b/docs/web-event-index.md
 new file mode 100644
-index 0000000..6416d49
+index 0000000..f2ee63e
 --- /dev/null
 +++ b/docs/web-event-index.md
-@@ -0,0 +1,1011 @@
+@@ -0,0 +1,1017 @@
 +# Encrypted message search in the browser
 +
 +The browser `EventIndex` is the web implementation of `BaseEventIndexManager`, the interface Element
@@ -19539,6 +19569,12 @@ index 0000000..6416d49
 +named in section 5, since an absent `navigator.deviceMemory` currently sends every Firefox and Safari
 +desktop user down this step; correcting that is E's first item.
 +
++**Tokenizer mode does not apply.** Desktop's search tokenizer mode (language-based or N-gram, element-web
++#33048) is a Seshat setting. This index has one tokenizer, so `supportsTokenizerModes()` returns false,
++`initEventIndex` ignores the mode it is passed, and the Manage dialog does not offer the choice, which
++there would promise a rebuild that changes nothing. CJK text stays on step 5's substring scan; CJK bigrams
++remain roadmap item F.
++
 +## 9. Constants
 +
 +These are the values the code ships, read from
@@ -19660,3 +19696,158 @@ index 0000000..6416d49
 +harnesses are not comparable. And **an empty long-task list outside Chromium proves nothing**, because
 +neither Firefox nor WebKit throws on `observe({type: "longtask"})` and neither ever emits an entry; use the
 +timer watchdog's upper bound there and say which of the two a figure came from.
+diff --git a/apps/web/src/async-components/views/dialogs/eventindex/ManageEventIndexDialog.test.tsx b/apps/web/src/async-components/views/dialogs/eventindex/ManageEventIndexDialog.test.tsx
+index 0dee663..b412ebc 100644
+--- a/apps/web/src/async-components/views/dialogs/eventindex/ManageEventIndexDialog.test.tsx
++++ b/apps/web/src/async-components/views/dialogs/eventindex/ManageEventIndexDialog.test.tsx
+@@ -11,7 +11,7 @@ Please see LICENSE files in the repository root for full details.
+ import React from "react";
+ import { afterEach, describe, expect, it, vi } from "vitest";
+ import { fireEvent, render, screen, waitFor } from "test-utils-rtl";
+-import { flushPromises } from "test-utils";
++import { flushPromises, mockPlatformPeg } from "test-utils";
+ 
+ import ManageEventIndexDialog from "./ManageEventIndexDialog";
+ import Modal from "../../../../Modal";
+@@ -125,4 +125,36 @@ describe("<ManageEventIndexDialog />", () => {
+         );
+         expect(onFinished).toHaveBeenCalled();
+     });
++
++    it("offers the tokenizer mode when the index backend honours it", async () => {
++        setUpDefaults("language");
++        mockPlatformPeg({ getEventIndexingManager: () => ({ supportsTokenizerModes: () => true }) as any });
++
++        render(<ManageEventIndexDialog onFinished={vi.fn()} />);
++        await flushPromises();
++
++        expect(screen.getByRole("heading", { name: "Search tokenizer mode" })).toBeInTheDocument();
++        expect(screen.getByRole("radio", { name: "N-gram" })).toBeInTheDocument();
++    });
++
++    it("does not offer the tokenizer mode when the index backend has a single fixed tokenizer", async () => {
++        setUpDefaults("language");
++        mockPlatformPeg({ getEventIndexingManager: () => ({ supportsTokenizerModes: () => false }) as any });
++        const onFinished = vi.fn();
++        const createDialogSpy = vi.spyOn(Modal, "createDialog").mockReturnValue({} as any);
++        const initEventIndexSpy = vi.spyOn(EventIndexPeg, "initEventIndex").mockResolvedValue(true);
++
++        render(<ManageEventIndexDialog onFinished={onFinished} />);
++        await flushPromises();
++
++        expect(screen.queryByRole("heading", { name: "Search tokenizer mode" })).not.toBeInTheDocument();
++        expect(screen.queryByRole("radio", { name: "N-gram" })).not.toBeInTheDocument();
++        expect(screen.queryByRole("radio", { name: "Language-based" })).not.toBeInTheDocument();
++
++        fireEvent.click(screen.getByRole("button", { name: /done/i }));
++
++        expect(createDialogSpy).not.toHaveBeenCalled();
++        expect(initEventIndexSpy).not.toHaveBeenCalled();
++        expect(onFinished).toHaveBeenCalled();
++    });
+ });
+diff --git a/apps/web/src/async-components/views/dialogs/eventindex/ManageEventIndexDialog.tsx b/apps/web/src/async-components/views/dialogs/eventindex/ManageEventIndexDialog.tsx
+index 2a16f49..d7654c9 100644
+--- a/apps/web/src/async-components/views/dialogs/eventindex/ManageEventIndexDialog.tsx
++++ b/apps/web/src/async-components/views/dialogs/eventindex/ManageEventIndexDialog.tsx
+@@ -16,6 +16,7 @@ import SettingsStore from "../../../../settings/SettingsStore";
+ import Modal from "../../../../Modal";
+ import { formatBytes, formatCountLong } from "../../../../utils/FormattingUtils";
+ import EventIndexPeg from "../../../../indexing/EventIndexPeg";
++import PlatformPeg from "../../../../PlatformPeg";
+ import { SettingLevel } from "../../../../settings/SettingLevel";
+ import Field from "../../../../components/views/elements/Field";
+ import BaseDialog from "../../../../components/views/dialogs/BaseDialog";
+@@ -60,9 +61,17 @@ interface IState {
+  * Allows the user to introspect the event index state and disable it.
+  */
+ export default class ManageEventIndexDialog extends React.Component<IProps, IState> {
++    /**
++     * Whether the index backend honours the tokenizer mode. Only a backend that says it does not (one with a single,
++     * fixed tokenizer) hides the choice; every other backend, Seshat included, keeps it.
++     */
++    private readonly offerTokenizerMode: boolean;
++
+     public constructor(props: IProps) {
+         super(props);
+ 
++        this.offerTokenizerMode = PlatformPeg.get()?.getEventIndexingManager()?.supportsTokenizerModes() !== false;
++
+         const initialTokenizerMode = SettingsStore.getValueAt(SettingLevel.DEVICE, "tokenizerMode");
+         this.state = {
+             eventIndexSize: 0,
+@@ -218,37 +227,45 @@ export default class ManageEventIndexDialog extends React.Component<IProps, ISta
+                         value={this.state.crawlerSleepTime.toString()}
+                         onChange={this.onCrawlerSleepTimeChange}
+                     />
+-                    <h3>{_t("settings|security|tokenizer_mode")}</h3>
+-                    <Root>
+-                        <InlineField
+-                            name="tokenizerMode"
+-                            control={
+-                                <RadioControl
++                    {this.offerTokenizerMode && (
++                        <>
++                            <h3>{_t("settings|security|tokenizer_mode")}</h3>
++                            <Root>
++                                <InlineField
+                                     name="tokenizerMode"
+-                                    value={TokenizerMode.Ngram}
+-                                    checked={this.state.tokenizerMode === TokenizerMode.Ngram}
+-                                    onChange={this.onTokenizerModeChange}
+-                                />
+-                            }
+-                        >
+-                            <Label>{_t("settings|security|tokenizer_mode_ngram")}</Label>
+-                            <HelpMessage>{_t("settings|security|tokenizer_mode_ngram_description")}</HelpMessage>
+-                        </InlineField>
+-                        <InlineField
+-                            name="tokenizerMode"
+-                            control={
+-                                <RadioControl
++                                    control={
++                                        <RadioControl
++                                            name="tokenizerMode"
++                                            value={TokenizerMode.Ngram}
++                                            checked={this.state.tokenizerMode === TokenizerMode.Ngram}
++                                            onChange={this.onTokenizerModeChange}
++                                        />
++                                    }
++                                >
++                                    <Label>{_t("settings|security|tokenizer_mode_ngram")}</Label>
++                                    <HelpMessage>
++                                        {_t("settings|security|tokenizer_mode_ngram_description")}
++                                    </HelpMessage>
++                                </InlineField>
++                                <InlineField
+                                     name="tokenizerMode"
+-                                    value={TokenizerMode.Language}
+-                                    checked={this.state.tokenizerMode === TokenizerMode.Language}
+-                                    onChange={this.onTokenizerModeChange}
+-                                />
+-                            }
+-                        >
+-                            <Label>{_t("settings|security|tokenizer_mode_language")}</Label>
+-                            <HelpMessage>{_t("settings|security|tokenizer_mode_language_description")}</HelpMessage>
+-                        </InlineField>
+-                    </Root>
++                                    control={
++                                        <RadioControl
++                                            name="tokenizerMode"
++                                            value={TokenizerMode.Language}
++                                            checked={this.state.tokenizerMode === TokenizerMode.Language}
++                                            onChange={this.onTokenizerModeChange}
++                                        />
++                                    }
++                                >
++                                    <Label>{_t("settings|security|tokenizer_mode_language")}</Label>
++                                    <HelpMessage>
++                                        {_t("settings|security|tokenizer_mode_language_description")}
++                                    </HelpMessage>
++                                </InlineField>
++                            </Root>
++                        </>
++                    )}
+                 </div>
+             </div>
+         );
