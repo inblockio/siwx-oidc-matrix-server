@@ -299,10 +299,10 @@ index 0000000..82c41eb
 +}
 diff --git a/pkg/service/relaypolicy_test.go b/pkg/service/relaypolicy_test.go
 new file mode 100644
-index 0000000..d72aa0d
+index 0000000..156f45d
 --- /dev/null
 +++ b/pkg/service/relaypolicy_test.go
-@@ -0,0 +1,253 @@
+@@ -0,0 +1,283 @@
 +// Copyright 2026 inblock.io
 +//
 +// Licensed under the Apache License, Version 2.0 (the "License");
@@ -530,16 +530,46 @@ index 0000000..d72aa0d
 +	participant.GetLoggerReturns(logger.GetLogger())
 +
 +	participant.GetClientInfoReturns(&livekit.ClientInfo{Address: "192.0.2.17"})
-+	iceConfig := r.getIceConfig("room", participant)
++	iceConfig := r.getIceConfig("room", participant, "")
 +	require.Equal(t, livekit.ICECandidateType_ICT_TLS, iceConfig.PreferenceSubscriber)
 +	require.Equal(t, livekit.ICECandidateType_ICT_TLS, iceConfig.PreferencePublisher)
 +
 +	participant.GetClientInfoReturns(&livekit.ClientInfo{Address: "203.0.113.1"})
-+	require.Equal(t, livekit.ICECandidateType_ICT_TCP, r.getIceConfig("room", participant).PreferenceSubscriber)
++	require.Equal(t, livekit.ICECandidateType_ICT_TCP, r.getIceConfig("room", participant, "").PreferenceSubscriber)
++
++	// An explicit address (the one a resume comes from) wins over the join address.
++	participant.GetClientInfoReturns(&livekit.ClientInfo{Address: "203.0.113.1"})
++	require.Equal(t, livekit.ICECandidateType_ICT_TLS, r.getIceConfig("room", participant, "192.0.2.17").PreferenceSubscriber)
++	participant.GetClientInfoReturns(&livekit.ClientInfo{Address: "192.0.2.17"})
++	require.Equal(t, livekit.ICECandidateType_ICT_TCP, r.getIceConfig("room", participant, "203.0.113.1").PreferenceSubscriber)
 +
 +	r.relayPolicy = nil
 +	participant.GetClientInfoReturns(&livekit.ClientInfo{Address: "192.0.2.17"})
-+	require.Equal(t, livekit.ICECandidateType_ICT_TCP, r.getIceConfig("room", participant).PreferenceSubscriber)
++	require.Equal(t, livekit.ICECandidateType_ICT_TCP, r.getIceConfig("room", participant, "").PreferenceSubscriber)
++}
++
++func TestResumeIceConfigRelayPolicy(t *testing.T) {
++	p, _, _ := newTestRelayPolicy(t, map[string]string{"test.yaml": testRelayPolicy})
++	r := &RoomManager{
++		relayPolicy:    p,
++		iceConfigCache: sutils.NewIceConfigCache[iceConfigCacheKey](0),
++	}
++	participant := &typesfakes.FakeLocalParticipant{}
++	participant.IdentityReturns("alice")
++	participant.GetLoggerReturns(logger.GetLogger())
++	participant.GetClientInfoReturns(&livekit.ClientInfo{Address: "203.0.113.1"})
++
++	// Joined from outside the policy, resumes from inside it: the TLS config is
++	// applied (so ForceRelay is set) before the ReconnectResponse is built.
++	iceConfig := r.resumeIceConfig("room", participant, "192.0.2.17")
++	require.Equal(t, livekit.ICECandidateType_ICT_TLS, iceConfig.PreferenceSubscriber)
++	require.Equal(t, 1, participant.SetICEConfigCallCount())
++	require.Equal(t, iceConfig, participant.SetICEConfigArgsForCall(0))
++
++	// No policy: upstream behaviour, nothing applied before the response.
++	r.relayPolicy = nil
++	r.resumeIceConfig("room", participant, "192.0.2.17")
++	require.Equal(t, 1, participant.SetICEConfigCallCount())
 +}
 +
 +// TestRelayPolicyValidateDir loads a real policy directory, so a broken file
@@ -557,7 +587,7 @@ index 0000000..d72aa0d
 +	}
 +}
 diff --git a/pkg/service/roommanager.go b/pkg/service/roommanager.go
-index 7b38c82..3ce4f08 100644
+index 7b38c82..a36c916 100644
 --- a/pkg/service/roommanager.go
 +++ b/pkg/service/roommanager.go
 @@ -100,6 +100,7 @@ type RoomManager struct {
@@ -587,13 +617,46 @@ index 7b38c82..3ce4f08 100644
  
  		serverInfo: &livekit.ServerInfo{
  			Edition:       livekit.ServerInfo_Standard,
-@@ -1197,6 +1203,15 @@ func (r *RoomManager) setIceConfig(roomName livekit.RoomName, participant types.
+@@ -369,7 +375,7 @@ func (r *RoomManager) StartSession(
+ 				"participantInit", &pi,
+ 				"numParticipants", room.GetParticipantCount(),
+ 			)
+-			iceConfig := r.getIceConfig(room.Name(), participant)
++			iceConfig := r.resumeIceConfig(room.Name(), participant, pi.Client.GetAddress())
+ 			if err = room.ResumeParticipant(
+ 				participant,
+ 				requestSource,
+@@ -1191,12 +1197,37 @@ func (r *RoomManager) refreshToken(participant types.LocalParticipant) error {
  }
  
- func (r *RoomManager) getIceConfig(roomName livekit.RoomName, participant types.LocalParticipant) *livekit.ICEConfig {
+ func (r *RoomManager) setIceConfig(roomName livekit.RoomName, participant types.LocalParticipant) *livekit.ICEConfig {
+-	iceConfig := r.getIceConfig(roomName, participant)
++	iceConfig := r.getIceConfig(roomName, participant, "")
+ 	participant.SetICEConfig(iceConfig)
+ 	return iceConfig
+ }
+ 
+-func (r *RoomManager) getIceConfig(roomName livekit.RoomName, participant types.LocalParticipant) *livekit.ICEConfig {
++// resumeIceConfig is getIceConfig for a resume, matched against the address the
++// client resumes from. With a relay policy the config is applied before the
++// ReconnectResponse is built, because that response carries the participant's
++// ClientConfiguration, whose ForceRelay follows the applied ICE config.
++func (r *RoomManager) resumeIceConfig(roomName livekit.RoomName, participant types.LocalParticipant, addr string) *livekit.ICEConfig {
++	iceConfig := r.getIceConfig(roomName, participant, addr)
++	if r.relayPolicy != nil {
++		participant.SetICEConfig(iceConfig)
++	}
++	return iceConfig
++}
++
++// getIceConfig matches addr, or the participant's join address when addr is empty.
++func (r *RoomManager) getIceConfig(roomName livekit.RoomName, participant types.LocalParticipant, addr string) *livekit.ICEConfig {
++	if addr == "" {
++		addr = participant.GetClientInfo().GetAddress()
++	}
 +	// A relay-policy client starts where upstream ends after ICE failures:
 +	// TURN/TLS only, forced relay (see relaypolicy.go).
-+	if name, ok := r.relayPolicy.Match(participant.GetClientInfo().GetAddress()); ok {
++	if name, ok := r.relayPolicy.Match(addr); ok {
 +		participant.GetLogger().Infow("relay policy matched", "policy", name)
 +		return &livekit.ICEConfig{
 +			PreferenceSubscriber: livekit.ICECandidateType_ICT_TLS,

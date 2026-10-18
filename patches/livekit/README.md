@@ -40,14 +40,20 @@ CI build-and-push matrix as `ghcr.io/inblockio/siwx-oidc-matrix-server/livekit-s
 relay-only ICE over TURN/TLS on :443 from the first second of a join or resume. Ranges come
 from a directory of YAML files, one file per policy (a country or a carrier group), named by
 `LIVEKIT_RELAY_POLICY_DIR`. Unset, the server behaves exactly as upstream. The patch adds
-`pkg/service/relaypolicy.go` (loader, matcher, hot reload, TURN guard) and 15 lines in
-`pkg/service/roommanager.go` (the policy at construction, the hook in `getIceConfig`).
+`pkg/service/relaypolicy.go` (loader, matcher, hot reload, TURN guard) and a small change in
+`pkg/service/roommanager.go`: the policy at construction, the match in `getIceConfig`, and
+`resumeIceConfig` for a resume.
 
 **How.** It reuses upstream's own fallback: after ICE failures upstream caches an
 `ICEConfig` with `PreferenceSubscriber = ICT_TLS` for the participant, and on the next join
 `iceServersForParticipant(..., tlsOnly)` hands out only `turns:<turn.domain>:443` and the
 participant's `ClientConfiguration.ForceRelay` becomes `ENABLED`. The patch returns that
-config up front for a matching address. Every livekit-client honours `forceRelay`
+config up front for a matching address. A join matches the address it comes from. A resume
+matches the address the client resumes from (not the join address, so moving onto a listed
+network mid-call counts), and with a policy configured the ICE config is applied before the
+ReconnectResponse is built: that response carries the participant's `ClientConfiguration`,
+whose `ForceRelay` follows the applied config, and upstream would only apply it afterwards
+(`Room.ResumeParticipant` sends the response, then `ICERestart`). Every livekit-client honours `forceRelay`
 (`iceTransportPolicy: 'relay'`) and the server's ICE servers; Element Call (in Element Web,
 in Element X, and as aqua-meet's fork) never overrides either, so one server patch covers
 every client. The address is LiveKit's `ClientInfo.Address` (`GetClientIP`:
@@ -77,7 +83,8 @@ such networks need calls that work from the start. POLICY.
 v1.13.10; livekit-client 2.22.3 `src/room/RTCEngine.ts` (iceServers, forceRelay). Tests:
 `pkg/service/relaypolicy_test.go` (matching for IPv4, IPv6, mapped, zones, ports and
 forwarded lists; startup errors; reload on added, changed, broken, fixed and removed
-files; the TURN/TLS guard; `getIceConfig` with and without a match), run by the Dockerfile,
+files; the TURN/TLS guard; `getIceConfig` with and without a match and with the resume
+address; `resumeIceConfig` applying the config before the response), run by the Dockerfile,
 which also loads this repository's `config/relay-policy/` (`TestRelayPolicyValidateDir`), so a
 broken policy file fails CI instead of stopping LiveKit.
 
