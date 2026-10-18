@@ -27,7 +27,7 @@ The rules are the same as `patches/element-web/README.md`, and for the same reas
 
    ```bash
    # Fetch the two files at the new tag and dry-run every patch against them.
-   TAG=v1.162.0
+   TAG=v1.163.0
    d=$(mktemp -d); mkdir -p "$d/synapse/config" "$d/synapse/handlers"
    for f in config/experimental handlers/profile; do
      curl -sSf "https://raw.githubusercontent.com/element-hq/synapse/$TAG/synapse/$f.py" \
@@ -275,6 +275,23 @@ at 1.161.0 and 1.162.0, and the two tags' `schema/main/delta/94/` listings are i
 so 1.162 queues no background update of its own and a rollback to 1.161.0 is
 schema-compatible without a check.
 
+**Bump to v1.163.0 (2026-10-18).** Reason: routine upstream bump (1.163.0 is 1.163.0rc1 plus a
+fix for starting with Redis enabled under pip). The patch applies unchanged with `--fuzz=0`
+(hunk 2 of `config/experimental.py` moves by 3 lines, the other four hunks land at their
+recorded positions), and the built image carries it. All seven tests of this entry pass
+in the built image and fail (3 failures) on the stock image; with upstream's profile suites
+(`tests.rest.client.test_profile`, `tests.handlers.test_profile`, `tests.storage.test_profile`,
+`tests.config.test_experimental`, `tests.rest.synapse.mas`) 200 tests pass. 1.163 changes
+nothing in the guarded methods: its only edit to `handlers/profile.py` is a docstring, and
+the profile-updates stream (MSC4429) rework in `storage/databases/main/profile.py` sits
+below `set_profile_field` / `delete_profile_field`. Two upgrade notes concern this
+bundle: Synapse refuses to start when `limit_profile_requests_to_users_who_share_rooms` is
+true without `require_auth_for_profile_requests` (this bundle sets neither), and the
+Admin API refuses to create a user under MAS delegation (`PUT /_synapse/admin/v2/users/<id>`
+for an unknown user answers 403). Nothing in this repository creates users that way: the
+admin routes it uses are existing-user and media routes, and siwx-oidc provisions
+through `/_synapse/mas/provision_user`.
+
 **Rollback (1.161.0 to 1.159.0).** Schema-compatible: `SCHEMA_VERSION` 94 and
 `SCHEMA_COMPAT_VERSION` 84 at both tags. But 1.161 queues three background updates
 that 1.159 has no handler for (`device_lists_changes_in_room_unconverted_idx`,
@@ -285,6 +302,13 @@ logs `Error doing update` five times and stops running background updates altoge
 the image has no `sqlite3` CLI, so
 `docker compose exec matrix_synapse python -c "import sqlite3; print(sqlite3.connect('/data/homeserver.db').execute('SELECT update_name FROM background_updates').fetchall())"`
 must not list any of the three.
+
+**Rollback (1.163.0 to 1.162.0).** Schema-compatible without a check: `SCHEMA_VERSION` 94 and
+`SCHEMA_COMPAT_VERSION` 84 at both tags. 1.163 adds one table,
+`destination_rooms_sticky_events_backlog` (delta `94/11`: a per-destination, per-room backlog of
+unsent MSC4354 sticky events, with a foreign key to `rooms` that cascades on delete), and queues
+no background update. 1.162 ignores the extra table. Sticky events are experimental
+(`msc4354_enabled`, off by default and not set here), so the table stays empty on this bundle.
 
 **Retirement condition.** #19980 (or a successor implementing issue #18525) merges
 and ships in a Synapse release we have adopted, with the guard still exempting

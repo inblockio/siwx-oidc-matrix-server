@@ -58,7 +58,7 @@ Read-only check against Synapse's database (SQLite: `sqlite3 -readonly /data/hom
 SELECT as_id, count(*) FROM application_services_txns GROUP BY as_id;
 ```
 
-(columns `as_id`, `txn_id`, `event_ids`, schema unchanged in Synapse 1.162). Expect no row
+(columns `as_id`, `txn_id`, `event_ids`, schema unchanged in Synapse 1.163). Expect no row
 for `lk-jwt-service`. A count that grows means Synapse is queueing events for it and never
 delivering them, because the registration gained a `url` or something else changed its
 delivery; the table, and the disk it sits on, grow without bound until that is fixed.

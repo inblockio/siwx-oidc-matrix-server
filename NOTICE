@@ -18,7 +18,7 @@ adds is licensed as stated below. The registries patches/synapse/README.md,
 patches/element-web/README.md and patches/lk-jwt/README.md are this
 project's own documentation
 and fall under the Apache License. The upstream licenses below were read
-from Synapse v1.162.0, Element Web v1.12.29 and lk-jwt-service v0.9.0.
+from Synapse v1.163.0, Element Web v1.12.29 and lk-jwt-service v0.9.0.
 
 patches/synapse/msc4133-profile-field-write-policy.patch
     AGPL-3.0-or-later. It changes synapse/config/experimental.py and

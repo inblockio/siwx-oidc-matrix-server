@@ -30,13 +30,25 @@
 # to; see patches/synapse/README.md. Rollback to v1.161.0 stays schema-compatible
 # only after 1.162's background updates have finished, see "Rollback" there.
 #
+# Bumped to v1.163.0 (2026-10-18; released 2026-10-14, a Redis-on-pip fix over
+# 1.163.0rc1). Upgrade note: Synapse now refuses to start when
+# limit_profile_requests_to_users_who_share_rooms is true without
+# require_auth_for_profile_requests; this bundle sets neither. It also rejects
+# user creation through PUT /_synapse/admin/v2/users/<id> under MAS delegation
+# (element-hq/synapse#20241); nothing here creates users that way. The MSC4133
+# patch applies unchanged (hunk 2 of config/experimental.py moves by 3 lines).
+# Rollback to v1.162.0 is schema-compatible: SCHEMA_VERSION 94 and
+# SCHEMA_COMPAT_VERSION 84 at both tags, and 1.163 adds one table
+# (destination_rooms_sticky_events_backlog, delta 94/11) and queues no
+# background update. See patches/synapse/README.md "Rollback".
+#
 # Pinned by tag AND by the multi-arch index digest: the tag says which release,
 # the digest fixes the bytes (a re-pushed tag cannot change what we build on),
 # and it also fixes the Debian release the apt step below resolves against. A
 # bump changes both; resolve the digest with
 #   skopeo inspect --raw docker://docker.io/matrixdotorg/synapse:vX.Y.Z | sha256sum
 # and run the bump procedure in patches/synapse/README.md first.
-FROM matrixdotorg/synapse:v1.162.0@sha256:6b84a7bbac36f080b2d2e51e0289cf1b08b349598ea44a558df38d558f2c2311
+FROM matrixdotorg/synapse:v1.163.0@sha256:e98ab72138d90fa8b8876c6421fe78a9fdb181c0d7cc690ad740e5173e0c65e6
 # yq, pinned by version and SHA-256 (was `.../releases/latest/download/...`,
 # which re-resolved to whatever was newest on every rebuild). Bump deliberately:
 # the version, the binary's checksum and the LICENSE's (below) change together.
