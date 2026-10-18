@@ -128,9 +128,10 @@ clients behind symmetric NAT or strict firewalls cannot join a call. Enabling it
 edge that splits `:443` by SNI (the `caddy-l4` image), a DNS record for the TURN host,
 3478/udp open, and `turn.enabled: true` with your `turn.domain` in `config/livekit.yaml`;
 the `/siwx-matrix-setup` skill has the steps. With TURN on, our LiveKit image
-(`dockerfiles/Dockerfile.livekit`) can force relay over TURN/TLS from the first second for
-clients on networks that filter UDP media, by IP range: the relay policy in
-[`config/relay-policy/`](config/relay-policy/README.md).
+(`dockerfiles/Dockerfile.livekit`) can force relay over TURN/TLS from the first second,
+by IP range: the relay policy in
+[`config/relay-policy/`](config/relay-policy/README.md), which ships a catch-all
+(`all.yaml`) so every client gets it by default.
 
 ## Services
 
@@ -140,7 +141,7 @@ clients on networks that filter UDP media, by IP range: the relay policy in
 | `siwx-oidc` | `ghcr.io/inblockio/siwx-oidc` | OIDC provider (passkey, wallet and agent-key sign-in); takes the place of MAS as Synapse's auth service |
 | `redis` | `redis:8.10.2` | Session and token store for siwx-oidc |
 | `element-web` | `ghcr.io/inblockio/siwx-oidc-matrix-server/element-web`, built from source by `dockerfiles/Dockerfile.element` (Element Web + 11 patches) | Web client |
-| `livekit` | `livekit/livekit-server` | MatrixRTC SFU for Element Call; embedded TURN is off by default |
+| `livekit` | `ghcr.io/inblockio/siwx-oidc-matrix-server/livekit-server`, built from upstream v1.13.10 by `dockerfiles/Dockerfile.livekit` (+ relay-policy patch) | MatrixRTC SFU for Element Call; embedded TURN is off by default |
 | `lk-jwt-service` | `ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service`, built by `dockerfiles/Dockerfile.lk-jwt` (upstream v0.9.0, no patch) | Issues LiveKit access tokens to Matrix users, only to members of the room (MSC4502 check) |
 
 The reverse proxy is not a service in `docker-compose.yml`. The maintainers' deployments
