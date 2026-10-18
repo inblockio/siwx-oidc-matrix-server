@@ -225,15 +225,17 @@ Guides and scripts here must not contradict it:
 - **The UDP media range 20100–20200 stays below the Linux ephemeral range** in
   `config/livekit.yaml`; it names what the SFU binds inside the container
   (embedded TURN relays to this host's own addresses only on those ports).
-  `docker-compose.yml` publishes no media ports: under the catch-all relay policy
-  every client is relay-only over TURN/TLS through the edge, direct ICE
-  (7881/tcp) and the plain TURN UDP listener 3478 are unused, and the media
-  range itself is still carried by relayed calls but delivered locally
-  (livekit patch 0003, `localDelivery`: a relayed write to this host's mapped
-  address on a media port goes to an interface address, not through the host's
-  published port; without that patch the range MUST be published again or
-  relayed joins fail). Closing the ports means removing the `ports:`
-  publishes, never a ufw rule (Docker publishes bypass the host firewall).
+  Under the catch-all relay policy every client is relay-only over TURN/TLS
+  through the edge, direct ICE (7881/tcp) and the plain TURN UDP listener 3478
+  are unused and closed, but the media range itself is still carried by
+  relayed calls: a client's relayed ICE checks address the SFU's advertised
+  candidate (mapped IP, media port) and hairpin through the docker-proxy
+  publish, so `docker-compose.yml` still publishes 20100-20200/udp. LiveKit
+  patch 0003 tries to deliver those writes on an interface address instead; it
+  is NOT qualified (three revisions each broke relayed joins on dev - see the
+  registry entry), so the publish stays until local delivery is re-qualified.
+  Closing a port means removing the `ports:` publish, never a ufw rule (Docker
+  publishes bypass the host firewall).
 - **`LIVEKIT_URL` stays the public `wss://` URL.** lk-jwt-service (verified through
   0.6.0) uses it both for the SFU URL it hands out and for its own room-creation call,
   which therefore comes back in through the proxy; the proxy admits
