@@ -540,6 +540,31 @@ action needed here:
 - Carrier-grade NAT (`100.64.0.0/10`), NAT64 and a few reserved ranges join the restricted
   peer ranges, so a peer on such an address (a tailnet address, for example) is not relayed.
 
+### Relay policy (forced TURN/TLS by client IP range)
+
+For networks that filter UDP media, our LiveKit image (`dockerfiles/Dockerfile.livekit`,
+patch `patches/livekit/0001-relay-policy.patch`) gives clients from listed IP ranges
+relay-only ICE over `turns:<turn.domain>:443` from the first second, instead of after
+ICE failures. It reuses upstream's own fallback (`ICEConfig` with `ICT_TLS`: TLS-only ICE
+servers plus `ClientConfiguration.forceRelay`), which livekit-client applies, so Element
+Web, Element X (embedded Element Call) and other Element Call builds are all covered
+with no client change.
+
+- **Ranges:** `config/relay-policy/*.yaml`, one file per policy, mounted as a directory at
+  `LIVEKIT_RELAY_POLICY_DIR`. Format, adding a country and the refresh tool:
+  [config/relay-policy/README.md](../config/relay-policy/README.md).
+- **Address:** LiveKit's `ClientInfo.Address` (CF-Connecting-IP, then the first
+  X-Forwarded-For element, then X-Real-IP, then the peer). Behind Caddy without
+  `trusted_proxies`, X-Forwarded-For is the real peer. Check that LiveKit logs the
+  client's public address on join, not the proxy's.
+- **Needs the TLS leg:** without `turn.enabled`, `turn.domain` and `tls_port` LiveKit
+  ignores the policy and warns at startup (forced relay without TURN/TLS would leave a
+  matching client with no candidate).
+- **Verify:** on a join from a listed range LiveKit logs `relay policy matched` with the
+  policy name and `setting ICE config` with `ICT_TLS`; the client's selected candidate
+  pair is `relay` over TCP/TLS. On dev, a temporary extra file with the tester's own
+  egress address as `manual_prefixes` exercises the path; delete it afterwards.
+
 ## Known limitations
 
 - **LiveKit built-in TURN** needs the caddy-l4 edge (see "Embedded TURN"

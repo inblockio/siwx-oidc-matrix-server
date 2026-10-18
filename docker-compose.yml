@@ -188,6 +188,14 @@ services:
     command: --config /etc/livekit.yaml
     environment:
       LIVEKIT_KEYS: "${LIVEKIT_KEY}: ${LIVEKIT_SECRET}"
+      # Relay policy (patches/livekit/0001-relay-policy.patch, so only in our
+      # livekit-server image built by dockerfiles/Dockerfile.livekit; the stock
+      # image ignores it): clients from the IP ranges in config/relay-policy/*.yaml
+      # get relay-only ICE over TURN/TLS :443 from the start. Needs embedded TURN
+      # with its TLS leg (`turn.enabled`, `turn.domain`, `tls_port` in
+      # config/livekit.yaml); without one LiveKit ignores the policy and warns.
+      # The policy files reload within 30 s of a change, no restart.
+      LIVEKIT_RELAY_POLICY_DIR: /etc/livekit-relay-policy
       # Signs the webhooks to lk-jwt (`webhook:` in config/livekit.yaml). Must be
       # the key lk-jwt runs with (LIVEKIT_KEY below); the secret is the key's own.
       LIVEKIT_WEBHOOK_API_KEY: "${LIVEKIT_KEY}"
@@ -208,6 +216,9 @@ services:
       - "3478:3478/udp"
     volumes:
       - ./config/livekit.yaml:/etc/livekit.yaml:ro
+      # The DIRECTORY, never a single policy file: a git checkout replaces a
+      # file's inode, and a single-file bind mount keeps showing the old one.
+      - ./config/relay-policy:/etc/livekit-relay-policy:ro
     healthcheck:
       # busybox wget (the image has no curl); GET / is LiveKit's unauthenticated
       # liveness endpoint. It answers 406 until the node publishes its first
