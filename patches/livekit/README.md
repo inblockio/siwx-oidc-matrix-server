@@ -175,14 +175,14 @@ join failure, re-add -> 3-way E2EE call green), root cause docker-proxy
 hairpin. With local delivery the media range stays closed and the traffic
 shape goal holds (no UDP listener answers an external probe). POLICY.
 
-**STATUS: QUALIFICATION IN PROGRESS (2026-10-18, evening).** Revisions 1-3
-(each deployed to dev) broke relayed joins: (1) the rewrite target picked
+**STATUS: QUALIFIED ON DEV (2026-10-18, evening).** Revisions 1-3 (each
+deployed to dev) broke relayed joins: (1) the rewrite target picked
 127.0.0.1, which pion's ICE IP filter drops as a remote peer; (2) after the
 loopback exclusion it picked the `rtc.ips.excludes` proxy-network address,
 where the ICE agent gathers no candidate; (3) with both exclusions the
 rewritten flow reached the SFU and the SFU answered (in-container capture:
 237 checks in, 237 binding responses and 245 triggered checks out) but the
-client completed nothing - no DTLS/RTP ever started. The root cause is now
+client completed nothing - no DTLS/RTP ever started. The root cause is
 PROVEN, not theorized, by the comparison revision 3 never had: an
 in-container capture of a PASSING relayed call (meet.spec 2/2 against the
 last-good image, `pass-live.pcap`, 2026-10-18) against the failing-state
@@ -192,14 +192,33 @@ SFU's answers reach the relay socket FROM THE PUBLIC IP (207.154.209.103:
 media-port, conntrack-restored source), which is what both the client's TURN
 permission and its ICE remote candidate name. Revision 3 rewrote only the
 outbound leg, so the answers arrived from the container's interface address
-(172.21.0.2) and matched neither. Revision 4 (this patch) adds the
-symmetric `ReadFrom` rewrite, making the local-delivery path byte-identical
-at the allocation and client to the docker-proxy path. Until the dev
-qualification (full meet.spec suite, media range closed) is green: DO NOT
-bump `LIVEKIT_IMAGE_REF`'s default (or any deployment's pin) to a build
-containing patch 0003, and keep `20100-20200/udp` published where it is
-published today. The last-good build is `sha-697233b` (patches 1-2 only,
-padding verified on the wire).
+(172.21.0.2) and matched neither. Revision 4 (this patch) adds the symmetric
+`ReadFrom` rewrite, making the local-delivery path byte-identical at the
+allocation and client to the docker-proxy path.
+
+Dev qualification of revision 4 (image
+`livekit-server:sha-94111e8@sha256:dba793badf26…`, dev-aquafire, 2026-10-18):
+meet.spec 2/2 with the range still published (capture: all relay traffic
+already in-container, `172.21.0.2↔172.21.0.2`, ICE in ~110 checks, DTLS+RTP
+flowing, zero hairpin flows); then the `20100-20200/udp` publish REMOVED
+from the dev compose and 2/2 again, twice, with captures showing the same
+fully-local shape (132 DTLS + 15k RTP/RTCP per run, zero packets toward the
+public IP). Host side verified: no docker-proxy listeners, no DNAT rules,
+no ufw allow left for the range, and external UDP probes to 20100/20150/20200
+go unanswered. One behavioral note for the closed state: LiveKit's
+`use_external_ip` STUN *validation* needs the publish's return path, so with
+the range closed the startup log shows `could not validate external IP` and
+falls back to `no external IPs found, using node IP for NAT1To1Ips` with the
+STUN-discovered `207.154.209.103` - the same advertised candidates; the old
+"grep 'using external IPs' must show one entry" check no longer applies in a
+port-closed deployment.
+
+The compose DEFAULT pin and the `docker-compose.yml` media-range publish
+stay as they are (default `sha-697233b`, patches 1-2 only; range published)
+until the v4 build is promoted deliberately: removing the publish from a
+deployment whose image predates revision 4 breaks every relayed join, so the
+default-image bump and the publish removal travel together, and prod (still
+on the morning item's `sha-f343840`, media range open) needs Tim's go.
 
 **Evidence.** Live bisect on dev-aquafire (2026-10-18): no publishes ->
 `Failed to connect to Livekit server` on join, media range republished ->
