@@ -177,7 +177,8 @@ services:
     # Pinned: an unpinned :latest jumps SFU versions on any `docker compose pull`
     # (start-matrix.sh pulls on every start), which can change call behavior
     # unannounced. Bump deliberately. Default (2026-10-18) = our CI build of
-    # v1.13.10 (livekit-server + the relay-policy patch, f343840); set
+    # v1.13.10 (livekit-server + relay-policy and downlink-padding patches, and
+    # the pion/turn patch they build against, 697233b); set
     # LIVEKIT_IMAGE_REF in .env to pin a deployment by digest. OUR build, not
     # stock: the relay policy below (LIVEKIT_RELAY_POLICY_DIR) exists only in
     # dockerfiles/Dockerfile.livekit, and the stock image silently ignores it.
@@ -187,7 +188,7 @@ services:
     # TURN relay to this host's own addresses only on the RTC media UDP ports
     # (rtc.port_range_start/end), which is where an SFU candidate lives; see
     # skills/matrix-rtc-transport-specialist.md.
-    image: ${LIVEKIT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/livekit-server:sha-f343840@sha256:5235f64a8dafef3d4497bd9dc9e8bd1163135949e2905c16b6a281ba47845bba}
+    image: ${LIVEKIT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/livekit-server:sha-697233b@sha256:b65a2b22a5ce9995f0bde502babbe3e8a609d4609537c389c02ee3b8d7b15541}
     restart: unless-stopped
     command: --config /etc/livekit.yaml
     environment:
