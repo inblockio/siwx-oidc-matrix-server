@@ -266,7 +266,7 @@ These are in addition to 80 and 443 for the reverse proxy.
 ### Synapse version
 
 Synapse v1.140.0+ is required for `matrix_rtc` config and `/rtc/transports`.
-The stack pins `matrixdotorg/synapse:v1.162.0` (`dockerfiles/Dockerfile`); 1.162.0 is also
+The stack pins `matrixdotorg/synapse:v1.163.0` (`dockerfiles/Dockerfile`); 1.162.0 is also
 the minimum for the lk-jwt membership check (MSC4502).
 
 ## Verification checklist
