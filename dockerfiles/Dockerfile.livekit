@@ -1,0 +1,52 @@
+# livekit-server with our patches (registry: patches/livekit/README.md). The
+# upstream source is fetched at a pinned commit, each patch is applied with
+# `git apply` (no --3way, no fuzz) in file name order, so one that stops applying
+# fails the build instead of shipping silently. The patches' own tests run in the
+# builder stage. The build flags, the toolchain image and the runtime stage follow
+# upstream's own Dockerfile at the same commit; bump the two FROM lines with it.
+#
+# Published by the build-and-push matrix of .github/workflows/docker.yml as
+# ghcr.io/inblockio/siwx-oidc-matrix-server/livekit-server.
+FROM docker.io/library/golang:1.27.1-alpine3.24@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS builder
+
+ARG LIVEKIT_TAG=v1.13.10
+ARG LIVEKIT_COMMIT=e5655ac20267fa5005dccaf3f0e3bfc3ea688c07
+ARG TARGETARCH
+
+# Build with exactly the toolchain in this image, as upstream does.
+ENV GOTOOLCHAIN=local
+
+RUN apk add --no-cache git
+
+WORKDIR /workspace
+# Fetch by commit, then prove the tag still names it, so a moved tag fails.
+RUN git init -q . \
+    && git fetch -q --depth 1 https://github.com/livekit/livekit "refs/tags/${LIVEKIT_TAG}" \
+    && test "$(git rev-parse FETCH_HEAD^{commit})" = "${LIVEKIT_COMMIT}" \
+    && git checkout -q "${LIVEKIT_COMMIT}"
+
+COPY patches/livekit/ /patches/
+RUN for p in /patches/*.patch; do echo "applying $p"; git apply "$p" || exit 1; done
+
+RUN go mod download
+
+# The relay-policy tests (patch 1). -docker=false: pkg/service's TestMain otherwise
+# needs a Docker daemon for its Redis tests, which a build has not got.
+RUN go test -count=1 -run 'RelayPolicy|GetIceConfig' ./pkg/service/ -args -docker=false
+
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH GO111MODULE=on go build -buildvcs=false -a -o livekit-server ./cmd/server
+
+FROM docker.io/library/alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+
+# Upstream pulls the security patches of the pinned Alpine release; this build
+# starts with a cold layer cache too (no buildx cache in docker.yml).
+RUN apk upgrade --no-cache
+
+COPY --from=builder /workspace/livekit-server /livekit-server
+# Like the other images of this repository, it carries our LICENSE and NOTICE,
+# plus upstream's license text.
+COPY --chmod=0644 LICENSE NOTICE /usr/share/licenses/siwx-oidc-matrix-server/
+COPY --from=builder /workspace/LICENSE /usr/share/licenses/livekit-server/LICENSE
+
+# Root, as upstream's image: docker-compose.yml runs it unchanged otherwise.
+ENTRYPOINT ["/livekit-server"]

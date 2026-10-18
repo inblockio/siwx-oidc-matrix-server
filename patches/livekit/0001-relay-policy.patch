@@ -1,0 +1,590 @@
+diff --git a/pkg/service/relaypolicy.go b/pkg/service/relaypolicy.go
+new file mode 100644
+index 0000000..82c41eb
+--- /dev/null
++++ b/pkg/service/relaypolicy.go
+@@ -0,0 +1,293 @@
++// Copyright 2026 inblock.io
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++package service
++
++import (
++	"bytes"
++	"crypto/sha256"
++	"errors"
++	"fmt"
++	"net/netip"
++	"os"
++	"path/filepath"
++	"sort"
++	"strings"
++	"sync"
++	"sync/atomic"
++	"time"
++
++	"gopkg.in/yaml.v3"
++
++	"github.com/livekit/protocol/logger"
++
++	"github.com/livekit/livekit-server/pkg/config"
++)
++
++// The relay policy makes clients that connect from configured IP ranges use
++// relay-only ICE over TURN/TLS from the first second, instead of only after an
++// ICE failure. It exists for networks that filter UDP media (VoIP blocking).
++// The ranges live in a directory of YAML files, one file per policy:
++//
++//	name: ae-carriers          # required, unique across files
++//	description: ...           # free text
++//	asns: [5384]               # input for the refresh tool, not matched here
++//	manual_prefixes: []        # hand-maintained CIDRs
++//	prefixes: [2.48.0.0/14]    # generated CIDRs
++//
++// Unset LIVEKIT_RELAY_POLICY_DIR means no policy and upstream behaviour.
++const (
++	relayPolicyDirEnv          = "LIVEKIT_RELAY_POLICY_DIR"
++	relayPolicyRecheckInterval = 30 * time.Second
++)
++
++type relayPolicyFile struct {
++	Name           string   `yaml:"name"`
++	Description    string   `yaml:"description"`
++	ASNs           []uint32 `yaml:"asns"`
++	ManualPrefixes []string `yaml:"manual_prefixes"`
++	Prefixes       []string `yaml:"prefixes"`
++}
++
++type relayPolicyEntry struct {
++	name     string
++	prefixes []netip.Prefix
++}
++
++// relayPolicySnapshot is immutable once stored.
++type relayPolicySnapshot struct {
++	fingerprint string
++	entries     []relayPolicyEntry
++}
++
++type RelayPolicy struct {
++	dir string
++	now func() time.Time
++
++	snapshot  atomic.Pointer[relayPolicySnapshot]
++	nextCheck atomic.Int64 // unix nanoseconds
++
++	reloadMu          sync.Mutex
++	failedFingerprint string // guarded by reloadMu
++}
++
++// NewRelayPolicyFromEnv returns nil (no policy) when LIVEKIT_RELAY_POLICY_DIR
++// is unset or empty. A set but unusable directory is a startup error.
++func NewRelayPolicyFromEnv() (*RelayPolicy, error) {
++	dir := strings.TrimSpace(os.Getenv(relayPolicyDirEnv))
++	if dir == "" {
++		return nil, nil
++	}
++	return NewRelayPolicy(dir)
++}
++
++// newRelayPolicyForConfig is NewRelayPolicyFromEnv for a server that can honour
++// the policy: forcing relay without a TURN/TLS leg would leave a matching client
++// with no candidate at all, so without one the policy is ignored, loudly.
++func newRelayPolicyForConfig(conf *config.Config) (*RelayPolicy, error) {
++	p, err := NewRelayPolicyFromEnv()
++	if err != nil || p == nil {
++		return nil, err
++	}
++	if !conf.TURN.Enabled || conf.TURN.TLSPort == 0 || conf.TURN.Domain == "" {
++		logger.Warnw("relay policy ignored: it needs embedded TURN with a TLS leg (turn.enabled, turn.domain, turn.tls_port)", nil, "dir", p.dir)
++		return nil, nil
++	}
++	return p, nil
++}
++
++func NewRelayPolicy(dir string) (*RelayPolicy, error) {
++	return newRelayPolicy(dir, time.Now)
++}
++
++func newRelayPolicy(dir string, now func() time.Time) (*RelayPolicy, error) {
++	p := &RelayPolicy{dir: dir, now: now}
++	fingerprint, err := relayPolicyFingerprint(dir)
++	if err != nil {
++		return nil, fmt.Errorf("relay policy: %w", err)
++	}
++	snapshot, err := loadRelayPolicy(dir, fingerprint)
++	if err != nil {
++		return nil, fmt.Errorf("relay policy: %w", err)
++	}
++	p.snapshot.Store(snapshot)
++	p.nextCheck.Store(now().Add(relayPolicyRecheckInterval).UnixNano())
++	logRelayPolicy("relay policy loaded", dir, snapshot)
++	return p, nil
++}
++
++// Match reports the name of the first policy whose ranges contain addr, the
++// client address as GetClientIP returns it (an X-Forwarded-For list counts by
++// its first element). A nil policy matches nothing.
++func (p *RelayPolicy) Match(addr string) (string, bool) {
++	if p == nil {
++		return "", false
++	}
++	p.maybeReload()
++
++	ip, ok := parseRelayPolicyAddr(addr)
++	if !ok {
++		return "", false
++	}
++	for _, entry := range p.snapshot.Load().entries {
++		for _, prefix := range entry.prefixes {
++			if prefix.Contains(ip) {
++				return entry.name, true
++			}
++		}
++	}
++	return "", false
++}
++
++// maybeReload re-reads the directory when its file set or file contents
++// changed, at most once per recheck interval. A reload that fails keeps
++// the previous policy.
++func (p *RelayPolicy) maybeReload() {
++	now := p.now()
++	if now.UnixNano() < p.nextCheck.Load() {
++		return
++	}
++	if !p.reloadMu.TryLock() {
++		return
++	}
++	defer p.reloadMu.Unlock()
++	p.nextCheck.Store(now.Add(relayPolicyRecheckInterval).UnixNano())
++
++	fingerprint, err := relayPolicyFingerprint(p.dir)
++	if err != nil {
++		logger.Errorw("relay policy: cannot read directory, keeping the previous policy", err, "dir", p.dir)
++		return
++	}
++	if fingerprint == p.snapshot.Load().fingerprint || fingerprint == p.failedFingerprint {
++		return
++	}
++	snapshot, err := loadRelayPolicy(p.dir, fingerprint)
++	if err != nil {
++		p.failedFingerprint = fingerprint
++		logger.Errorw("relay policy: reload failed, keeping the previous policy", err, "dir", p.dir)
++		return
++	}
++	p.failedFingerprint = ""
++	p.snapshot.Store(snapshot)
++	logRelayPolicy("relay policy reloaded", p.dir, snapshot)
++}
++
++func relayPolicyFiles(dir string) ([]string, error) {
++	files, err := filepath.Glob(filepath.Join(dir, "*.yaml"))
++	if err != nil {
++		return nil, err
++	}
++	if _, err := os.Stat(dir); err != nil {
++		return nil, err
++	}
++	sort.Strings(files)
++	return files, nil
++}
++
++func relayPolicyFingerprint(dir string) (string, error) {
++	files, err := relayPolicyFiles(dir)
++	if err != nil {
++		return "", err
++	}
++	// Content hashes, not modification times: a same-size edit within the
++	// file system's timestamp granularity must not be missed. The files are
++	// small and read at most once per recheck interval.
++	var b strings.Builder
++	for _, file := range files {
++		data, err := os.ReadFile(file)
++		if err != nil {
++			return "", err
++		}
++		fmt.Fprintf(&b, "%s|%x\n", filepath.Base(file), sha256.Sum256(data))
++	}
++	return b.String(), nil
++}
++
++func loadRelayPolicy(dir, fingerprint string) (*relayPolicySnapshot, error) {
++	files, err := relayPolicyFiles(dir)
++	if err != nil {
++		return nil, err
++	}
++	snapshot := &relayPolicySnapshot{fingerprint: fingerprint}
++	names := map[string]string{}
++	for _, file := range files {
++		entry, err := loadRelayPolicyFile(file)
++		if err != nil {
++			return nil, fmt.Errorf("%s: %w", file, err)
++		}
++		if other, ok := names[entry.name]; ok {
++			return nil, fmt.Errorf("%s: policy name %q already used by %s", file, entry.name, other)
++		}
++		names[entry.name] = file
++		snapshot.entries = append(snapshot.entries, entry)
++	}
++	return snapshot, nil
++}
++
++func loadRelayPolicyFile(file string) (relayPolicyEntry, error) {
++	data, err := os.ReadFile(file)
++	if err != nil {
++		return relayPolicyEntry{}, err
++	}
++	var pf relayPolicyFile
++	decoder := yaml.NewDecoder(bytes.NewReader(data))
++	decoder.KnownFields(true)
++	if err := decoder.Decode(&pf); err != nil {
++		return relayPolicyEntry{}, err
++	}
++	name := strings.TrimSpace(pf.Name)
++	if name == "" {
++		return relayPolicyEntry{}, errors.New("missing name")
++	}
++	entry := relayPolicyEntry{name: name}
++	for _, s := range append(append([]string{}, pf.Prefixes...), pf.ManualPrefixes...) {
++		prefix, err := netip.ParsePrefix(strings.TrimSpace(s))
++		if err != nil {
++			return relayPolicyEntry{}, fmt.Errorf("policy %q: %w", name, err)
++		}
++		entry.prefixes = append(entry.prefixes, prefix.Masked())
++	}
++	return entry, nil
++}
++
++func parseRelayPolicyAddr(addr string) (netip.Addr, bool) {
++	first, _, _ := strings.Cut(addr, ",")
++	first = strings.TrimSpace(first)
++	if first == "" {
++		return netip.Addr{}, false
++	}
++	ip, err := netip.ParseAddr(first)
++	if err != nil {
++		addrPort, err := netip.ParseAddrPort(first)
++		if err != nil {
++			return netip.Addr{}, false
++		}
++		ip = addrPort.Addr()
++	}
++	return ip.WithZone("").Unmap(), true
++}
++
++func logRelayPolicy(msg, dir string, snapshot *relayPolicySnapshot) {
++	names := make([]string, 0, len(snapshot.entries))
++	count := 0
++	for _, entry := range snapshot.entries {
++		names = append(names, entry.name)
++		count += len(entry.prefixes)
++	}
++	if len(names) == 0 {
++		logger.Warnw(msg+": directory holds no policy", nil, "dir", dir)
++		return
++	}
++	logger.Infow(msg, "dir", dir, "policies", names, "prefixes", count)
++}
+diff --git a/pkg/service/relaypolicy_test.go b/pkg/service/relaypolicy_test.go
+new file mode 100644
+index 0000000..efeb4c5
+--- /dev/null
++++ b/pkg/service/relaypolicy_test.go
+@@ -0,0 +1,238 @@
++// Copyright 2026 inblock.io
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++package service
++
++import (
++	"os"
++	"path/filepath"
++	"testing"
++	"time"
++
++	"github.com/stretchr/testify/require"
++
++	"github.com/livekit/protocol/livekit"
++	"github.com/livekit/protocol/logger"
++
++	"github.com/livekit/livekit-server/pkg/config"
++	"github.com/livekit/livekit-server/pkg/rtc/types/typesfakes"
++	sutils "github.com/livekit/livekit-server/pkg/utils"
++)
++
++const testRelayPolicy = `name: test-carriers
++description: test
++asns: [64500]
++manual_prefixes:
++  - 2001:db8:1::/48
++prefixes:
++  - 192.0.2.0/24
++  - 198.51.100.0/25
++`
++
++func writeRelayPolicyFile(t *testing.T, dir, file, content string) {
++	t.Helper()
++	require.NoError(t, os.WriteFile(filepath.Join(dir, file), []byte(content), 0o644))
++}
++
++type relayPolicyClock struct{ t time.Time }
++
++func (c *relayPolicyClock) now() time.Time { return c.t }
++
++func newTestRelayPolicy(t *testing.T, files map[string]string) (*RelayPolicy, string, *relayPolicyClock) {
++	t.Helper()
++	dir := t.TempDir()
++	for file, content := range files {
++		writeRelayPolicyFile(t, dir, file, content)
++	}
++	clock := &relayPolicyClock{t: time.Unix(1_700_000_000, 0)}
++	p, err := newRelayPolicy(dir, clock.now)
++	require.NoError(t, err)
++	return p, dir, clock
++}
++
++func TestRelayPolicyMatch(t *testing.T) {
++	p, _, _ := newTestRelayPolicy(t, map[string]string{"test.yaml": testRelayPolicy})
++
++	for _, tc := range []struct {
++		addr  string
++		match bool
++	}{
++		{"192.0.2.17", true},
++		{"198.51.100.127", true},
++		{"198.51.100.128", false},
++		{"2001:db8:1::5", true},
++		{"2001:db8:2::5", false},
++		{"::ffff:192.0.2.17", true},
++		{"fe80::1%eth0", false},
++		{"192.0.2.17, 10.0.0.1", true},
++		{"10.0.0.1, 192.0.2.17", false},
++		{"192.0.2.17:4433", true},
++		{"[2001:db8:1::5]:4433", true},
++		{"203.0.113.1", false},
++		{"", false},
++		{"not-an-ip", false},
++	} {
++		name, ok := p.Match(tc.addr)
++		require.Equal(t, tc.match, ok, tc.addr)
++		if tc.match {
++			require.Equal(t, "test-carriers", name, tc.addr)
++		}
++	}
++}
++
++func TestRelayPolicyNilMatchesNothing(t *testing.T) {
++	var p *RelayPolicy
++	_, ok := p.Match("192.0.2.17")
++	require.False(t, ok)
++}
++
++func TestRelayPolicyFromEnv(t *testing.T) {
++	t.Setenv(relayPolicyDirEnv, "")
++	p, err := NewRelayPolicyFromEnv()
++	require.NoError(t, err)
++	require.Nil(t, p)
++
++	dir := t.TempDir()
++	writeRelayPolicyFile(t, dir, "test.yaml", testRelayPolicy)
++	t.Setenv(relayPolicyDirEnv, dir)
++	p, err = NewRelayPolicyFromEnv()
++	require.NoError(t, err)
++	_, ok := p.Match("192.0.2.1")
++	require.True(t, ok)
++}
++
++func TestRelayPolicyNeedsTURNTLS(t *testing.T) {
++	dir := t.TempDir()
++	writeRelayPolicyFile(t, dir, "test.yaml", testRelayPolicy)
++	t.Setenv(relayPolicyDirEnv, dir)
++
++	turnTLS := func() *config.Config {
++		c := &config.Config{}
++		c.TURN.Enabled = true
++		c.TURN.Domain = "turn.example.org"
++		c.TURN.TLSPort = 5349
++		return c
++	}
++	p, err := newRelayPolicyForConfig(turnTLS())
++	require.NoError(t, err)
++	require.NotNil(t, p)
++
++	for name, change := range map[string]func(c *config.Config){
++		"turn off":   func(c *config.Config) { c.TURN.Enabled = false },
++		"no tls leg": func(c *config.Config) { c.TURN.TLSPort = 0 },
++		"no domain":  func(c *config.Config) { c.TURN.Domain = "" },
++	} {
++		c := turnTLS()
++		change(c)
++		p, err := newRelayPolicyForConfig(c)
++		require.NoError(t, err, name)
++		require.Nil(t, p, name)
++	}
++
++	// A broken policy is still a startup error, whatever the TURN config.
++	writeRelayPolicyFile(t, dir, "test.yaml", "name: [\n")
++	_, err = newRelayPolicyForConfig(&config.Config{})
++	require.Error(t, err)
++}
++
++func TestRelayPolicyStartupErrors(t *testing.T) {
++	for name, files := range map[string]map[string]string{
++		"invalid prefix": {"a.yaml": "name: a\nprefixes: [192.0.2.0/33]\n"},
++		"missing name":   {"a.yaml": "prefixes: [192.0.2.0/24]\n"},
++		"unknown field":  {"a.yaml": "name: a\nprefix: [192.0.2.0/24]\n"},
++		"duplicate name": {"a.yaml": "name: a\n", "b.yaml": "name: a\n"},
++		"not yaml":       {"a.yaml": "name: [\n"},
++	} {
++		dir := t.TempDir()
++		for file, content := range files {
++			writeRelayPolicyFile(t, dir, file, content)
++		}
++		_, err := NewRelayPolicy(dir)
++		require.Error(t, err, name)
++	}
++
++	_, err := NewRelayPolicy(filepath.Join(t.TempDir(), "missing"))
++	require.Error(t, err, "missing directory")
++}
++
++func TestRelayPolicyEmptyDirMatchesNothing(t *testing.T) {
++	p, _, _ := newTestRelayPolicy(t, nil)
++	_, ok := p.Match("192.0.2.17")
++	require.False(t, ok)
++}
++
++func TestRelayPolicyReload(t *testing.T) {
++	p, dir, clock := newTestRelayPolicy(t, map[string]string{"test.yaml": testRelayPolicy})
++
++	// A new file is picked up, but only after the recheck interval.
++	writeRelayPolicyFile(t, dir, "other.yaml", "name: other\nprefixes: [203.0.113.0/24]\n")
++	_, ok := p.Match("203.0.113.1")
++	require.False(t, ok)
++	clock.t = clock.t.Add(relayPolicyRecheckInterval)
++	name, ok := p.Match("203.0.113.1")
++	require.True(t, ok)
++	require.Equal(t, "other", name)
++
++	// A changed file is picked up.
++	writeRelayPolicyFile(t, dir, "other.yaml", "name: other\nprefixes: [203.0.113.0/25]\n")
++	clock.t = clock.t.Add(relayPolicyRecheckInterval)
++	_, ok = p.Match("203.0.113.200")
++	require.False(t, ok)
++
++	// A broken file keeps the previous policy.
++	writeRelayPolicyFile(t, dir, "other.yaml", "name: other\nprefixes: [nonsense]\n")
++	clock.t = clock.t.Add(relayPolicyRecheckInterval)
++	_, ok = p.Match("203.0.113.1")
++	require.True(t, ok)
++	_, ok = p.Match("192.0.2.1")
++	require.True(t, ok)
++
++	// A fixed file is picked up again.
++	writeRelayPolicyFile(t, dir, "other.yaml", "name: other\nprefixes: [198.18.0.0/15]\n")
++	clock.t = clock.t.Add(relayPolicyRecheckInterval)
++	_, ok = p.Match("198.18.0.1")
++	require.True(t, ok)
++
++	// A removed file is dropped.
++	require.NoError(t, os.Remove(filepath.Join(dir, "other.yaml")))
++	clock.t = clock.t.Add(relayPolicyRecheckInterval)
++	_, ok = p.Match("198.18.0.1")
++	require.False(t, ok)
++}
++
++func TestGetIceConfigRelayPolicy(t *testing.T) {
++	p, _, _ := newTestRelayPolicy(t, map[string]string{"test.yaml": testRelayPolicy})
++	r := &RoomManager{
++		relayPolicy:    p,
++		iceConfigCache: sutils.NewIceConfigCache[iceConfigCacheKey](0),
++	}
++	cached := &livekit.ICEConfig{PreferenceSubscriber: livekit.ICECandidateType_ICT_TCP}
++	r.iceConfigCache.Put(iceConfigCacheKey{"room", "alice"}, cached)
++
++	participant := &typesfakes.FakeLocalParticipant{}
++	participant.IdentityReturns("alice")
++	participant.GetLoggerReturns(logger.GetLogger())
++
++	participant.GetClientInfoReturns(&livekit.ClientInfo{Address: "192.0.2.17"})
++	iceConfig := r.getIceConfig("room", participant)
++	require.Equal(t, livekit.ICECandidateType_ICT_TLS, iceConfig.PreferenceSubscriber)
++	require.Equal(t, livekit.ICECandidateType_ICT_TLS, iceConfig.PreferencePublisher)
++
++	participant.GetClientInfoReturns(&livekit.ClientInfo{Address: "203.0.113.1"})
++	require.Equal(t, livekit.ICECandidateType_ICT_TCP, r.getIceConfig("room", participant).PreferenceSubscriber)
++
++	r.relayPolicy = nil
++	participant.GetClientInfoReturns(&livekit.ClientInfo{Address: "192.0.2.17"})
++	require.Equal(t, livekit.ICECandidateType_ICT_TCP, r.getIceConfig("room", participant).PreferenceSubscriber)
++}
+diff --git a/pkg/service/roommanager.go b/pkg/service/roommanager.go
+index 7b38c82..3ce4f08 100644
+--- a/pkg/service/roommanager.go
++++ b/pkg/service/roommanager.go
+@@ -100,6 +100,7 @@ type RoomManager struct {
+ 	whipParticipantServers       utils.MultitonService[rpc.ParticipantTopic]
+ 
+ 	iceConfigCache *sutils.IceConfigCache[iceConfigCacheKey]
++	relayPolicy    *RelayPolicy
+ 
+ 	forwardStats *sfu.ForwardStats
+ 
+@@ -127,6 +128,10 @@ func NewLocalRoomManager(
+ 	if err != nil {
+ 		return nil, err
+ 	}
++	relayPolicy, err := newRelayPolicyForConfig(conf)
++	if err != nil {
++		return nil, err
++	}
+ 
+ 	r := &RoomManager{
+ 		config:            conf,
+@@ -148,6 +153,7 @@ func NewLocalRoomManager(
+ 		rooms: make(map[livekit.RoomName]*rtc.Room),
+ 
+ 		iceConfigCache: sutils.NewIceConfigCache[iceConfigCacheKey](0),
++		relayPolicy:    relayPolicy,
+ 
+ 		serverInfo: &livekit.ServerInfo{
+ 			Edition:       livekit.ServerInfo_Standard,
+@@ -1197,6 +1203,15 @@ func (r *RoomManager) setIceConfig(roomName livekit.RoomName, participant types.
+ }
+ 
+ func (r *RoomManager) getIceConfig(roomName livekit.RoomName, participant types.LocalParticipant) *livekit.ICEConfig {
++	// A relay-policy client starts where upstream ends after ICE failures:
++	// TURN/TLS only, forced relay (see relaypolicy.go).
++	if name, ok := r.relayPolicy.Match(participant.GetClientInfo().GetAddress()); ok {
++		participant.GetLogger().Infow("relay policy matched", "policy", name)
++		return &livekit.ICEConfig{
++			PreferenceSubscriber: livekit.ICECandidateType_ICT_TLS,
++			PreferencePublisher:  livekit.ICECandidateType_ICT_TLS,
++		}
++	}
+ 	return r.iceConfigCache.Get(iceConfigCacheKey{roomName, participant.Identity()})
+ }
+ 
