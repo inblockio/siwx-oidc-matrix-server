@@ -27,10 +27,11 @@ prefixes:                      # generated from asns; must stay the LAST key
 ```
 
 LiveKit matches `prefixes` and `manual_prefixes`. Unknown keys, a bad CIDR or a missing or
-duplicate name stop LiveKit at startup, so check a new file before it is deployed (CI builds
-the image, not the config). A running LiveKit re-checks this directory at most every 30 s
-and loads a changed or added file without a restart; a broken change keeps the previous
-policy and logs an error.
+duplicate name stop LiveKit at startup. CI loads this directory with the same code on every
+pull request (job "LiveKit patch tests and relay policy", `TestRelayPolicyValidateDir`) and
+again in the image build, so a broken file fails CI before it reaches a deployment. A
+running LiveKit re-checks this directory at most every 30 s and loads a changed or added
+file without a restart; a broken change keeps the previous policy and logs an error.
 
 ## Adding a country or carrier
 

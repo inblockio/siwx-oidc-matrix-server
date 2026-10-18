@@ -30,9 +30,13 @@ RUN for p in /patches/*.patch; do echo "applying $p"; git apply "$p" || exit 1; 
 
 RUN go mod download
 
-# The relay-policy tests (patch 1). -docker=false: pkg/service's TestMain otherwise
-# needs a Docker daemon for its Redis tests, which a build has not got.
-RUN go test -count=1 -run 'RelayPolicy|GetIceConfig' ./pkg/service/ -args -docker=false
+# The relay-policy tests (patch 1), including a load of this repository's own
+# config/relay-policy/, so a broken policy file fails the build, not a LiveKit
+# start. -docker=false: pkg/service's TestMain otherwise needs a Docker daemon for
+# its Redis tests, which a build has not got.
+COPY config/relay-policy/ /relay-policy/
+RUN RELAY_POLICY_VALIDATE_DIR=/relay-policy \
+    go test -count=1 -run 'RelayPolicy|GetIceConfig' ./pkg/service/ -args -docker=false
 
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH GO111MODULE=on go build -buildvcs=false -a -o livekit-server ./cmd/server
 

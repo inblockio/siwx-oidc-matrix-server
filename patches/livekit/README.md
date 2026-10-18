@@ -77,7 +77,9 @@ such networks need calls that work from the start. POLICY.
 v1.13.10; livekit-client 2.22.3 `src/room/RTCEngine.ts` (iceServers, forceRelay). Tests:
 `pkg/service/relaypolicy_test.go` (matching for IPv4, IPv6, mapped, zones, ports and
 forwarded lists; startup errors; reload on added, changed, broken, fixed and removed
-files; the TURN/TLS guard; `getIceConfig` with and without a match), run by the Dockerfile.
+files; the TURN/TLS guard; `getIceConfig` with and without a match), run by the Dockerfile,
+which also loads this repository's `config/relay-policy/` (`TestRelayPolicyValidateDir`), so a
+broken policy file fails CI instead of stopping LiveKit.
 
 **Upstream status.** Not filed. Upstream has no per-address client configuration
 (`clientconfiguration.StaticConfigurations` is compiled in and matches client metadata).

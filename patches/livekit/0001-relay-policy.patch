@@ -299,10 +299,10 @@ index 0000000..82c41eb
 +}
 diff --git a/pkg/service/relaypolicy_test.go b/pkg/service/relaypolicy_test.go
 new file mode 100644
-index 0000000..efeb4c5
+index 0000000..d72aa0d
 --- /dev/null
 +++ b/pkg/service/relaypolicy_test.go
-@@ -0,0 +1,238 @@
+@@ -0,0 +1,253 @@
 +// Copyright 2026 inblock.io
 +//
 +// Licensed under the Apache License, Version 2.0 (the "License");
@@ -540,6 +540,21 @@ index 0000000..efeb4c5
 +	r.relayPolicy = nil
 +	participant.GetClientInfoReturns(&livekit.ClientInfo{Address: "192.0.2.17"})
 +	require.Equal(t, livekit.ICECandidateType_ICT_TCP, r.getIceConfig("room", participant).PreferenceSubscriber)
++}
++
++// TestRelayPolicyValidateDir loads a real policy directory, so a broken file
++// fails an image build instead of a LiveKit start. Skipped unless
++// RELAY_POLICY_VALIDATE_DIR is set (dockerfiles/Dockerfile.livekit sets it).
++func TestRelayPolicyValidateDir(t *testing.T) {
++	dir := os.Getenv("RELAY_POLICY_VALIDATE_DIR")
++	if dir == "" {
++		t.Skip("RELAY_POLICY_VALIDATE_DIR not set")
++	}
++	p, err := NewRelayPolicy(dir)
++	require.NoError(t, err)
++	for _, entry := range p.snapshot.Load().entries {
++		require.NotEmpty(t, entry.prefixes, "policy %q has no prefix", entry.name)
++	}
 +}
 diff --git a/pkg/service/roommanager.go b/pkg/service/roommanager.go
 index 7b38c82..3ce4f08 100644
