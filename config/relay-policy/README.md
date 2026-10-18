@@ -44,6 +44,12 @@ file without a restart; a broken change keeps the previous policy and logs an er
    pins).
 4. Commit and deploy the file. No restart is needed.
 
+## Updating a deployment's copy
+
+A running LiveKit may reload this directory at any moment, so never rewrite a policy file in place on a
+deployment (a reload could read half a list, which still parses): write the new file under a name that does not
+end in `.yaml` in the same directory and `mv` it over the old one. `scripts/relay-policy-refresh` does the same.
+
 ## Keeping the lists current
 
 Carriers announce new ranges over time. `go run scripts/relay-policy-refresh/main.go
