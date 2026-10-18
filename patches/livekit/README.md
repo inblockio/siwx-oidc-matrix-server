@@ -94,3 +94,30 @@ broken policy file fails CI instead of stopping LiveKit.
 
 **Retirement condition.** Upstream gains a configurable way to force relay or TLS-only
 ICE for clients by address range; then move the policy files to it and drop the patch.
+
+## 2. `0002-turn-downlink-padding.patch`
+
+**What.** The knob for fixed-size TURN downlink padding: `LIVEKIT_TURN_DOWNLINK_PAD_BYTES`
+is the size, in bytes, that every server-to-client TURN media message is padded up to.
+Unset or empty disables it (upstream behaviour). The behaviour itself lives in the
+pion/turn module the server embeds, patched by the same image build
+([`patches/pion-turn/`](../pion-turn/README.md), entry 1 there); this patch only parses
+and applies the value, at `NewTurnServer` before the TURN server is created, because the
+patched module reads the target server-wide. A set but invalid value (not a number,
+outside 64-60000) stops the server at startup, so a typo can never half-enable padding.
+
+**How.** `pkg/service/turnpad.go` (`parseTurnDownlinkPadEnv`, `applyTurnDownlinkPad`,
+called from `NewTurnServer` in `pkg/service/turn.go`, which also logs
+`turn.downlink_pad_bytes` in the startup summary).
+
+**Why.** Traffic-shape parity for relayed call media; see the pion/turn registry entry
+for the full reasoning. POLICY.
+
+**Evidence.** Tests: `pkg/service/turnpad_test.go` (`TestParseTurnDownlinkPadEnv`:
+unset/whitespace disable, floor and ceiling, every invalid form rejected), run by the
+Dockerfile beside the relay-policy tests.
+
+**Upstream status.** Not filed. Upstream has no such setting.
+
+**Retirement condition.** The pion/turn padding patch is retired (see its entry); then
+this knob goes with it.

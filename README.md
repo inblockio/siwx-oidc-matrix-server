@@ -125,13 +125,19 @@ siwx-oidc. The Element Web upgrade-continuity suite in siwx-oidc
 
 Calls go through LiveKit. Its embedded TURN is **off** in `config/livekit.yaml`, so
 clients behind symmetric NAT or strict firewalls cannot join a call. Enabling it needs an
-edge that splits `:443` by SNI (the `caddy-l4` image), a DNS record for the TURN host,
-3478/udp open, and `turn.enabled: true` with your `turn.domain` in `config/livekit.yaml`;
-the `/siwx-matrix-setup` skill has the steps. With TURN on, our LiveKit image
+edge that splits `:443` by SNI (the `caddy-l4` image), a DNS record for the TURN host, and
+`turn.enabled: true` with your `turn.domain` in `config/livekit.yaml`; the
+`/siwx-matrix-setup` skill has the steps. With TURN on, our LiveKit image
 (`dockerfiles/Dockerfile.livekit`) can force relay over TURN/TLS from the first second,
 by IP range: the relay policy in
 [`config/relay-policy/`](config/relay-policy/README.md), which ships a catch-all
-(`all.yaml`) so every client gets it by default.
+(`all.yaml`) so every client gets it by default. A relayed call then needs no
+host-published media ports: `docker-compose.yml` publishes none, because Docker
+publishes bypass the host firewall and every media path (signaling, TURN, relays)
+terminates at the edge or stays container-internal. The same image pads the
+server-to-client TURN media messages to a fixed size
+(`LIVEKIT_TURN_DOWNLINK_PAD_BYTES`, see `patches/pion-turn/README.md`), so a relayed
+call's message sizes do not name it as real-time media.
 
 ## Services
 
@@ -170,7 +176,8 @@ deployment is known to run a different version.
 | Element Web serving base | `nginxinc/nginx-unprivileged:1.31.6-alpine-slim@sha256:c81a27f28bc2…` | `dockerfiles/Dockerfile.element` (runtime `FROM`) | Stock, with our `config/element-nginx.conf` and security headers |
 | siwx-oidc | default `ghcr.io/inblockio/siwx-oidc:sha-40efae9@sha256:54739f4813bf…` (CI build of siwx-oidc main at 40efae9) | `docker-compose.yml` (`SIWX_OIDC_IMAGE_REF`) | First-party, built in [inblockio/siwx-oidc](https://github.com/inblockio/siwx-oidc) |
 | Redis | `8.10.2` (`redis:8.10.2@sha256:d5ac52db24d4…`) | `docker-compose.yml` (`REDIS_IMAGE_REF`) | Stock, run with `--appendonly yes` and a password ([docs/redis-password.md](docs/redis-password.md)) |
-| LiveKit server | `v1.13.10` (`livekit/livekit-server:v1.13.10@sha256:89ca9ce0791e…`) | `docker-compose.yml` (`LIVEKIT_IMAGE_REF`) | Stock, configured by `config/livekit.yaml` (embedded TURN, off by default). Our patched build (`dockerfiles/Dockerfile.livekit`, `ARG LIVEKIT_TAG`/`LIVEKIT_COMMIT`, same tag, [relay policy](patches/livekit/README.md)) is published by CI as `…/livekit-server`; the default moves to it after its first CI build |
+| LiveKit server | `v1.13.10` (`livekit/livekit-server:v1.13.10@sha256:89ca9ce0791e…`) | `docker-compose.yml` (`LIVEKIT_IMAGE_REF`) | **Own patched build** (`dockerfiles/Dockerfile.livekit`, `ARG LIVEKIT_TAG`/`LIVEKIT_COMMIT`, same tag; the [relay policy and downlink padding](patches/livekit/README.md)), published by CI as `…/livekit-server` and the compose default. A deployment that pins `LIVEKIT_IMAGE_REF` to the stock image runs that instead (both settings are then silently ignored) |
+| pion/turn | `v5.0.13` (commit `6ab77aaaf620…`) | `dockerfiles/Dockerfile.livekit` (`ARG PION_TURN_TAG`/`PION_TURN_COMMIT`) | **Patched copy** ([downlink padding](patches/pion-turn/README.md)); the module replaces the requirement for that build only. Upstream unmodified |
 | lk-jwt-service | upstream `v0.9.0` (commit `0e176b1eca44…`), unmodified; default image `…/lk-jwt-service:sha-5190a44@sha256:c4f9d1ebde0e…` (CI build of main at 5190a44, the first build without the retired `restrict-screen-share.patch`) | `dockerfiles/Dockerfile.lk-jwt` (`ARG LK_JWT_TAG`, `ARG LK_JWT_COMMIT`); `docker-compose.yml` (`LK_JWT_IMAGE_REF`) | **Own build, no patch.** Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service`, non-root (65532). A deployment that pins `LK_JWT_IMAGE_REF` to an upstream image runs that instead |
 | Caddy | `v2.11.7` (`caddy:2.11.7-builder@sha256:d842facfd63b…`, `caddy:2.11.7@sha256:685ae3d7c34d…`) | `dockerfiles/Dockerfile.caddy-l4` (builder and final `FROM`) | **Custom build** with xcaddy and the two modules below. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/caddy-l4` |
 | Caddy module `layer4` (mholt/caddy-l4) | commit `77044b47bccf` (2026-10-14, requires Caddy `v2.11.7`; the latest release, `v0.1.2`, requires `v2.11.4`) | `dockerfiles/Dockerfile.caddy-l4` (`xcaddy build`) | Stock module (TURN-TLS SNI split on :443) |
@@ -293,6 +300,22 @@ applied with `git apply`, their tests run in the build); the image is published 
    address is in a range of `config/relay-policy/*.yaml` get relay-only ICE over
    TURN/TLS on :443 from the start of a call, for networks that filter UDP media.
    POLICY.
+
+2. [`0002-turn-downlink-padding.patch`](patches/livekit/0002-turn-downlink-padding.patch):
+   `LIVEKIT_TURN_DOWNLINK_PAD_BYTES` sets the fixed size that server-to-client TURN
+   media messages are padded up to, so a relayed call's message sizes do not reveal
+   real-time media. The behaviour lives in the patched pion/turn module (below).
+   POLICY.
+
+**pion/turn (LiveKit dependency).** Registry:
+[`patches/pion-turn/README.md`](patches/pion-turn/README.md). The same
+`dockerfiles/Dockerfile.livekit` fetches the module at a pinned commit, applies these
+patches and builds the server against the patched copy.
+
+1. [`0001-downlink-padding.patch`](patches/pion-turn/0001-downlink-padding.patch):
+   relayed server-to-client media is sent as a STUN Data indication padded to a fixed
+   size (an ignored comprehension-optional attribute), never as size-revealing
+   ChannelData. POLICY.
 
 Element Web also carries runtime deltas that are not `.patch` files: nginx caching
 and security headers, the service-worker boot shim, a per-build `sw.js` stamp, the

@@ -1,5 +1,6 @@
-# livekit-server with our patches (registry: patches/livekit/README.md). The
-# upstream source is fetched at a pinned commit, each patch is applied with
+# livekit-server with our patches (registry: patches/livekit/README.md) and the
+# pion/turn patches it is built against (registry: patches/pion-turn/README.md).
+# The upstream sources are fetched at a pinned commit, each patch is applied with
 # `git apply` (no --3way, no fuzz) in file name order, so one that stops applying
 # fails the build instead of shipping silently. The patches' own tests run in the
 # builder stage. The build flags, the toolchain image and the runtime stage follow
@@ -11,6 +12,11 @@ FROM docker.io/library/golang:1.27.1-alpine3.24@sha256:8a5910f31396cd4d89662f56c
 
 ARG LIVEKIT_TAG=v1.13.10
 ARG LIVEKIT_COMMIT=e5655ac20267fa5005dccaf3f0e3bfc3ea688c07
+# pion/turn is the embedded TURN server livekit-server builds against; the
+# downlink padding (patches/pion-turn/) lives there, next to the allocation
+# code it changes.
+ARG PION_TURN_TAG=v5.0.13
+ARG PION_TURN_COMMIT=6ab77aaaf62008ccb5b5ba731a65cdedf2e2487b
 ARG TARGETARCH
 
 # Build with exactly the toolchain in this image, as upstream does.
@@ -28,15 +34,34 @@ RUN git init -q . \
 COPY patches/livekit/ /patches/
 RUN for p in /patches/*.patch; do echo "applying $p"; git apply "$p" || exit 1; done
 
+# pion/turn, fetched and proven the same way, then patched. The patch's own
+# tests run in the patched tree before the build consumes it.
+RUN git init -q /pion-turn \
+    && git -C /pion-turn fetch -q --depth 1 https://github.com/pion/turn "refs/tags/${PION_TURN_TAG}" \
+    && test "$(git -C /pion-turn rev-parse FETCH_HEAD^{commit})" = "${PION_TURN_COMMIT}" \
+    && git -C /pion-turn checkout -q FETCH_HEAD
+COPY patches/pion-turn/ /pion-turn-patches/
+RUN cd /pion-turn && for p in /pion-turn-patches/*.patch; do echo "applying $p"; git apply "$p" || exit 1; done
+RUN cd /pion-turn && go test -count=1 ./internal/allocation/
+
+# Replace the go.mod requirement with the patched tree for this build only (a
+# filesystem replace needs no go.sum entry). Must run before `go mod download`
+# resolves it below.
+RUN mkdir -p third_party/pion-turn \
+    && cp -a /pion-turn/. third_party/pion-turn/ \
+    && rm -rf third_party/pion-turn/.git \
+    && go mod edit -replace github.com/pion/turn/v5=./third_party/pion-turn
+
 RUN go mod download
 
-# The relay-policy tests (patch 1), including a load of this repository's own
-# config/relay-policy/, so a broken policy file fails the build, not a LiveKit
-# start. -docker=false: pkg/service's TestMain otherwise needs a Docker daemon for
-# its Redis tests, which a build has not got.
+# The relay-policy and downlink-padding tests (livekit patches 1 and 2),
+# including a load of this repository's own config/relay-policy/, so a broken
+# policy file fails the build, not a LiveKit start. -docker=false:
+# pkg/service's TestMain otherwise needs a Docker daemon for its Redis tests,
+# which a build has not got.
 COPY config/relay-policy/ /relay-policy/
 RUN RELAY_POLICY_VALIDATE_DIR=/relay-policy \
-    go test -count=1 -run 'RelayPolicy|GetIceConfig' ./pkg/service/ -args -docker=false
+    go test -count=1 -run 'RelayPolicy|GetIceConfig|TurnDownlinkPad' ./pkg/service/ -args -docker=false
 
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH GO111MODULE=on go build -buildvcs=false -a -o livekit-server ./cmd/server
 

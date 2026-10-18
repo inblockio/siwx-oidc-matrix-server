@@ -142,10 +142,9 @@ element.example.com {
 ## Step 3: Calls (LiveKit and TURN)
 
 Calls need the `/livekit/jwt` and `/livekit/sfu` routes from `Caddyfile.local` in the
-proxy, and 7881/tcp and 20100-20200/udp open in the host firewall; the
-`/matrix-rtc-transport-specialist` skill has the rest. `config/livekit.yaml` ships with
-LiveKit's embedded TURN **off**, so clients behind symmetric NAT or strict firewalls
-cannot connect. To enable TURN:
+proxy; no media ports are published by `docker-compose.yml`. `config/livekit.yaml`
+ships with LiveKit's embedded TURN **off**, so clients behind symmetric NAT or strict
+firewalls cannot connect. To enable TURN:
 
 1. Run the edge on the `caddy-l4` image built here, with the `layer4` SNI split on `:443`
    and a certificate site for the TURN host (the `/matrix-rtc-transport-specialist` skill,
@@ -209,8 +208,8 @@ docker compose pull && docker compose up -d
 - [ ] `.env` generated (check with `ls -la .env`)
 - [ ] Reverse proxy routes configured (especially login/logout/refresh to siwx-oidc, and
       `/_synapse/admin/*` and `/_synapse/mas/*` not exposed)
-- [ ] Calls: firewall open for 7881/tcp and 20100-20200/udp; TURN enabled only with the
-      caddy-l4 edge (3478/udp open)
+- [ ] Calls: no media ports published (relay-only over TURN/TLS through the caddy-l4
+      edge); TURN enabled only with that edge
 - [ ] OIDC discovery returns valid JSON
 - [ ] `.well-known/matrix/client` returns `m.authentication.issuer`
 - [ ] Element loads and redirects to OIDC login

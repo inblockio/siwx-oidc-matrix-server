@@ -46,6 +46,9 @@ declare -A OWNER=(
   [element-web]=dockerfiles/Dockerfile.element
   [lk-jwt]=dockerfiles/Dockerfile.lk-jwt
   [livekit]=dockerfiles/Dockerfile.livekit
+  # pion/turn patches are applied by the livekit-server build, which is the
+  # only image that consumes the module.
+  [pion-turn]=dockerfiles/Dockerfile.livekit
 )
 
 # Directories whose patches must be provable in the built artifact: each needs a
