@@ -140,14 +140,17 @@ allocation relay write) keeps the upstream policy check and then hands the
 address to `localDelivery`: a UDP destination that is one of `localIPs` but not
 an interface address, on a media port, is rewritten to a deterministic
 interface address of the same address family (port kept). The rewrite target
-is NEVER the loopback: the ICE stack's IP filter drops loopback remote peers,
-so a check delivered via 127.0.0.1 reaches the media socket and is silently
-discarded - observed live (rewritten checks arrived on 127.0.0.1, 16-answer
-retransmit storms, every join still failed until the exclusion). Destinations
-that are already interface addresses (the loopback is one: delivering to a
-service bound on it is local delivery and stays untouched), other hosts'
-addresses, and non-media ports pass through unchanged, and an empty (or
-loopback-only) interface set disables the rewrite (fail-open to upstream
+must be an address the ICE stack actually gathers a candidate on, so it is
+NEVER the loopback (pion's IP filter drops loopback remote peers - observed
+live: rewritten checks arrived on 127.0.0.1 and were never answered) and
+NEVER inside `rtc.ips.excludes` (observed live: checks delivered on the proxy
+network's subnet 172.18.0.4, sorted lowest, were read by the media socket and
+silently dropped, no candidate there; `NewTurnServer` mirrors the excludes
+into the policy, and a malformed entry is a startup error). Destinations that
+are already interface addresses (the loopback is one: delivering to a service
+bound on it is local delivery and stays untouched), other hosts' addresses,
+and non-media ports pass through unchanged, and an empty, loopback-only or
+fully excluded interface set disables the rewrite (fail-open to upstream
 behavior). `collectInterfaceIPs` enumerates the candidates at TURN
 construction.
 
@@ -167,11 +170,13 @@ that. Tests:
 `pkg/service/turnrelay_localdelivery_test.go` (a real-socket end to end:
 mapped-IP media-port write delivered on an interface address while the
 loopback sorts lower and must lose; loopback-only interfaces disable the
-rewrite; the same write to a non-media port dropped; unit cases for every
-non-rewrite shape; the interface enumerator's exclusions), run by the
-Dockerfile beside the other livekit patch tests, and upstream's
-`TestTURNRelayPolicy_PacketConn` / `TestNewTurnServer_RelayPolicy` (loopback
-delivery) still pass unchanged.
+rewrite; an excluded CIDR is skipped and an all-excluded set disables the
+rewrite, a malformed exclude rejected; the same write to a non-media port
+dropped; unit cases for every non-rewrite shape; the interface enumerator's
+exclusions), run by the Dockerfile beside the other livekit patch tests, and
+upstream's `TestTURNRelayPolicy_PacketConn` / `TestNewTurnServer_RelayPolicy`
+(loopback delivery, NewTurnServer with the excludes wiring) still pass
+unchanged.
 
 **Upstream status.** Not filed. Upstream's embedded TURN relay policy
 (`turnRelayPolicy` in `pkg/service/turnrelay.go`) restricts relays to local

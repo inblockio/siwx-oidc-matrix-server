@@ -1,5 +1,21 @@
+diff --git a/pkg/service/turn.go b/pkg/service/turn.go
+--- a/pkg/service/turn.go
++++ b/pkg/service/turn.go
+@@ -182,6 +182,12 @@
+ 			relayAddrGen = telemetry.NewRelayAddressGenerator(relayAddrGen)
+ 		} else {
+ 			relayAddrGen = newTURNRelayPolicy(relayAddrGen, localIPs, mediaPorts)
++			// Downlink local delivery (inblock.io, patch 0003): its rewrite
++			// target must be an address the ICE stack actually gathers a
++			// candidate on, so mirror rtc.ips.excludes into it.
++			if err := relayAddrGen.(*turnRelayPolicy).setExcludedCIDRs(conf.RTC.IPs.Excludes); err != nil {
++				return nil, err
++			}
+ 		}
+ 
+ 		if turnConf.TLSPort > 0 {
 diff --git a/pkg/service/turnrelay.go b/pkg/service/turnrelay.go
-index 618e66d..165f6b6 100644
+index 618e66d..af37a3d 100644
 --- a/pkg/service/turnrelay.go
 +++ b/pkg/service/turnrelay.go
 @@ -17,6 +17,7 @@ package service
@@ -10,7 +26,7 @@ index 618e66d..165f6b6 100644
  
  	"github.com/pion/turn/v5"
  	"github.com/pkg/errors"
-@@ -92,6 +93,11 @@ type turnRelayPolicy struct {
+@@ -92,6 +93,19 @@ type turnRelayPolicy struct {
  
  	localIPs   map[netip.Addr]struct{}
  	mediaPorts []portRange
@@ -19,10 +35,18 @@ index 618e66d..165f6b6 100644
 +	// subset of localIPs a packet can be delivered to without leaving the
 +	// host. Filled by newTURNRelayPolicy; tests may set it directly.
 +	interfaceIPs map[netip.Addr]struct{}
++
++	// excludedCIDRs (inblock.io) mirrors rtc.ips.excludes (+ the inverse of
++	// rtc.ips.includes): the networks the ICE stack gathers NO candidates on,
++	// so local delivery must not target them either - a check delivered to an
++	// address with no candidate is read by the media socket and silently
++	// dropped (same failure as the loopback, observed on the proxy network's
++	// subnet). Set by NewTurnServer via setExcludedCIDRs.
++	excludedCIDRs []*net.IPNet
  }
  
  func newTURNRelayPolicy(g turn.RelayAddressGenerator, localIPs map[netip.Addr]struct{}, mediaPorts []portRange) *turnRelayPolicy {
-@@ -99,7 +105,37 @@ func newTURNRelayPolicy(g turn.RelayAddressGenerator, localIPs map[netip.Addr]st
+@@ -99,7 +113,37 @@ func newTURNRelayPolicy(g turn.RelayAddressGenerator, localIPs map[netip.Addr]st
  		RelayAddressGenerator: g,
  		localIPs:              localIPs,
  		mediaPorts:            mediaPorts,
@@ -60,7 +84,7 @@ index 618e66d..165f6b6 100644
  }
  
  func (g *turnRelayPolicy) allows(addr net.Addr) bool {
-@@ -111,14 +147,73 @@ func (g *turnRelayPolicy) allows(addr net.Addr) bool {
+@@ -111,8 +155,96 @@ func (g *turnRelayPolicy) allows(addr net.Addr) bool {
  	if _, ok := g.localIPs[ap.Addr().Unmap().WithZone("")]; !ok {
  		return true
  	}
@@ -71,12 +95,12 @@ index 618e66d..165f6b6 100644
  	for _, r := range g.mediaPorts {
 -		if ap.Port() >= r.start && ap.Port() <= r.end {
 +		if port >= r.start && port <= r.end {
- 			return true
- 		}
- 	}
- 	return false
- }
- 
++			return true
++		}
++	}
++	return false
++}
++
 +// localDelivery (inblock.io) rewrites a relayed write that targets this
 +// host's own mapped address (its public or 1:1-NAT IP, what the SFU
 +// advertises with use_external_ip) on an RTC media port to one of this
@@ -109,16 +133,35 @@ index 618e66d..165f6b6 100644
 +	return &net.UDPAddr{IP: net.IP(target.AsSlice()), Port: udpAddr.Port}
 +}
 +
++// setExcludedCIDRs applies rtc.ips.excludes (and the inverse of
++// rtc.ips.includes) to the rewrite target choice. A malformed entry is an
++// error: silently ignoring half the list would let local delivery pick an
++// address the ICE stack ignores.
++func (g *turnRelayPolicy) setExcludedCIDRs(excludes []string) error {
++	cidrs := make([]*net.IPNet, 0, len(excludes))
++	for _, c := range excludes {
++		_, ipnet, err := net.ParseCIDR(c)
++		if err != nil {
++			return errors.Wrapf(err, "invalid CIDR %q in rtc.ips.excludes", c)
++		}
++		cidrs = append(cidrs, ipnet)
++	}
++	g.excludedCIDRs = cidrs
++	return nil
++}
++
 +// interfaceAddrFor picks a deterministic interface address of the same
 +// address family as the mapped destination. The loopback is never a
 +// delivery target: the ICE stack drops remote peers on loopback addresses
 +// (its IP filter), so a check delivered via 127.0.0.1 is received by the
 +// media socket and silently discarded - observed live on dev-aquafire, where
 +// rewritten checks reached the SFU on 127.0.0.1 and every join still failed.
++// Addresses inside rtc.ips.excludes are equally invalid targets: the ICE
++// stack gathers no candidate there either.
 +func (g *turnRelayPolicy) interfaceAddrFor(dst netip.Addr) (netip.Addr, bool) {
 +	var candidates []netip.Addr
 +	for addr := range g.interfaceIPs {
-+		if addr.IsLoopback() || addr.IsLinkLocalUnicast() {
++		if addr.IsLoopback() || addr.IsLinkLocalUnicast() || g.isExcluded(addr) {
 +			continue
 +		}
 +		if addr.Is4() == dst.Is4() {
@@ -132,10 +175,14 @@ index 618e66d..165f6b6 100644
 +	return candidates[0], true
 +}
 +
- func (g *turnRelayPolicy) AllocatePacketConn(c turn.AllocateListenerConfig) (net.PacketConn, net.Addr, error) {
- 	conn, addr, err := g.RelayAddressGenerator.AllocatePacketConn(c)
- 	if err != nil {
-@@ -138,7 +233,7 @@ func (c *turnRelayPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
++func (g *turnRelayPolicy) isExcluded(addr netip.Addr) bool {
++	ip := net.IP(addr.AsSlice())
++	for _, ipnet := range g.excludedCIDRs {
++		if ipnet.Contains(ip) {
+ 			return true
+ 		}
+ 	}
+@@ -138,7 +270,7 @@ func (c *turnRelayPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
  	if !c.policy.allows(addr) {
  		return len(p), nil
  	}
@@ -146,10 +193,10 @@ index 618e66d..165f6b6 100644
  // getTURNLocalIPs returns the addresses that are delivered to this host: its
 diff --git a/pkg/service/turnrelay_localdelivery_test.go b/pkg/service/turnrelay_localdelivery_test.go
 new file mode 100644
-index 0000000..cb8db01
+index 0000000..b9d1a66
 --- /dev/null
 +++ b/pkg/service/turnrelay_localdelivery_test.go
-@@ -0,0 +1,146 @@
+@@ -0,0 +1,173 @@
 +// Copyright 2026 inblock.io
 +//
 +// Licensed under the Apache License, Version 2.0 (the "License");
@@ -241,6 +288,33 @@ index 0000000..cb8db01
 +	}
 +	dst := &net.UDPAddr{IP: net.IP(mapped.AsSlice()), Port: 20100}
 +	require.Same(t, dst, policy.localDelivery(dst))
++}
++
++func TestTURNRelayPolicy_LocalDeliverySkipsExcludedCIDRs(t *testing.T) {
++	// rtc.ips.excludes names networks the ICE stack gathers no candidate on
++	// (on the deployment: the proxy network's subnet). A rewrite there reads
++	// fine at the socket and is dropped by the agent, so the choice must skip
++	// it - observed live when the rewritten checks landed on 172.18.0.4.
++	mapped := netip.MustParseAddr("8.8.8.8")
++	bridge := netip.MustParseAddr("172.21.0.2")
++	proxynet := netip.MustParseAddr("172.18.0.4")
++	policy := &turnRelayPolicy{
++		localIPs:     map[netip.Addr]struct{}{mapped: {}, bridge: {}, proxynet: {}},
++		mediaPorts:   []portRange{{uint16(20100), uint16(20200)}},
++		interfaceIPs: map[netip.Addr]struct{}{bridge: {}, proxynet: {}}, // proxynet sorts lower
++	}
++	require.NoError(t, policy.setExcludedCIDRs([]string{"172.18.0.0/16"}))
++
++	got := policy.localDelivery(&net.UDPAddr{IP: net.IP(mapped.AsSlice()), Port: 20100})
++	require.Equal(t, &net.UDPAddr{IP: net.IP(bridge.AsSlice()), Port: 20100}, got)
++
++	// all candidates excluded: no rewrite
++	require.NoError(t, policy.setExcludedCIDRs([]string{"172.18.0.0/16", "172.21.0.0/16"}))
++	dst := &net.UDPAddr{IP: net.IP(mapped.AsSlice()), Port: 20100}
++	require.Same(t, dst, policy.localDelivery(dst))
++
++	// a malformed exclude is an error, never half a list
++	require.Error(t, policy.setExcludedCIDRs([]string{"172.18.0.0/16", "not-a-cidr"}))
 +}
 +
 +func TestTURNRelayPolicy_LocalDeliveryCases(t *testing.T) {
