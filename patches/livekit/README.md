@@ -160,6 +160,25 @@ join failure, re-add -> 3-way E2EE call green), root cause docker-proxy
 hairpin. With local delivery the media range stays closed and the traffic
 shape goal holds (no UDP listener answers an external probe). POLICY.
 
+**STATUS: NOT QUALIFIED (2026-10-18, end of day).** Every one of this patch's
+three revisions broke relayed joins when actually deployed, and the third
+broke them even with the media range republished: (1) the rewrite target
+picked 127.0.0.1, which pion's ICE IP filter drops as a remote peer; (2)
+after the loopback exclusion it picked the `rtc.ips.excludes` proxy-network
+address, where the ICE agent gathers no candidate; (3) with both exclusions
+the rewritten flow reached the SFU and the SFU answered (in-container capture:
+237 checks in, 482 responses out) but the client never completed ICE - STUN
+checks and responses flow, no DTLS/RTP ever starts, and the join times out.
+The surviving difference against the docker-proxy path is suspected to be in
+how the allocation's peer permission matches the response's source address
+(responses arrive from the SFU's container socket, while the client created
+its TURN permission for the advertised public IP), but that is unproven - the
+next revision must re-evaluate from evidence, not from this theory. Until
+then: DO NOT bump `LIVEKIT_IMAGE_REF`'s default (or any deployment's pin) to
+a build containing patch 0003, and keep `20100-20200/udp` published. The
+last-good build is `sha-697233b` (patches 1-2 only, padding verified on the
+wire); dev runs it.
+
 **Evidence.** Live bisect on dev-aquafire (2026-10-18): no publishes ->
 `Failed to connect to Livekit server` on join, media range republished ->
 suite green twice; the padded module unchanged in both. Second round, in the

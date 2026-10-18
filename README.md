@@ -131,13 +131,14 @@ edge that splits `:443` by SNI (the `caddy-l4` image), a DNS record for the TURN
 (`dockerfiles/Dockerfile.livekit`) can force relay over TURN/TLS from the first second,
 by IP range: the relay policy in
 [`config/relay-policy/`](config/relay-policy/README.md), which ships a catch-all
-(`all.yaml`) so every client gets it by default. A relayed call then needs no
-host-published media ports: `docker-compose.yml` publishes none, because Docker
-publishes bypass the host firewall and every media path (signaling, TURN, relays)
-terminates at the edge or stays container-internal. The same image pads the
-server-to-client TURN media messages to a fixed size
-(`LIVEKIT_TURN_DOWNLINK_PAD_BYTES`, see `patches/pion-turn/README.md`), so a relayed
-call's message sizes do not name it as real-time media.
+(`all.yaml`) so every client gets it by default. A relayed call needs no
+direct-ICE or plain-TURN ports (7881/tcp and 3478/udp are closed), but the UDP
+media range stays published: a client's relayed checks hairpin through it to the
+SFU's advertised candidate, and the local-delivery patch that would remove that
+need is not yet qualified. The same image pads the server-to-client TURN media
+messages to a fixed size (`LIVEKIT_TURN_DOWNLINK_PAD_BYTES`, see
+`patches/pion-turn/README.md`), so a relayed call's message sizes do not name it
+as real-time media.
 
 ## Services
 
