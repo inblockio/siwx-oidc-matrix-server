@@ -107,20 +107,20 @@ index 0000000..1d65dcd
 +    });
 +});
 diff --git a/apps/web/src/components/views/dialogs/invite/DMRoomTile.tsx b/apps/web/src/components/views/dialogs/invite/DMRoomTile.tsx
-index 28a6e6e..7204b4d 100644
+index 84d4b01..ce74685 100644
 --- a/apps/web/src/components/views/dialogs/invite/DMRoomTile.tsx
 +++ b/apps/web/src/components/views/dialogs/invite/DMRoomTile.tsx
-@@ -14,6 +14,7 @@ import BaseAvatar from "../../avatars/BaseAvatar.tsx";
+@@ -13,6 +13,7 @@ import type { ButtonEvent } from "../../elements/AccessibleButton.tsx";
+ import BaseAvatar from "../../avatars/BaseAvatar.tsx";
  import { mediaFromMxc } from "../../../../customisations/Media.ts";
- import UserIdentifierCustomisations from "../../../../customisations/UserIdentifier.ts";
  import { _t } from "../../../../languageHandler";
 +import { DidSearchMember, didMatchMarker } from "../../../../utils/didSearchMember.ts";
  import EmailPillAvatarIcon from "../../../../../res/img/icon-email-pill-avatar.svg?react";
  
  interface IDMRoomTileProps {
-@@ -56,9 +57,15 @@ export class DMRoomTile extends React.PureComponent<IDMRoomTileProps> {
-             withDisplayName: true,
-         });
+@@ -53,9 +54,15 @@ export class DMRoomTile extends React.PureComponent<IDMRoomTileProps> {
+ 
+         const userIdentifier = this.props.member.userId;
  
 -        const caption = (this.props.member as ThreepidMember).isEmail
 +        let caption = (this.props.member as ThreepidMember).isEmail
@@ -136,7 +136,7 @@ index 28a6e6e..7204b4d 100644
          return (
              <RichItem
 diff --git a/apps/web/src/components/views/dialogs/spotlight/SpotlightDialog.tsx b/apps/web/src/components/views/dialogs/spotlight/SpotlightDialog.tsx
-index 0726b93..d9e6776 100644
+index f1d027e..a49b776 100644
 --- a/apps/web/src/components/views/dialogs/spotlight/SpotlightDialog.tsx
 +++ b/apps/web/src/components/views/dialogs/spotlight/SpotlightDialog.tsx
 @@ -55,6 +55,8 @@ import { type ViewRoomPayload } from "../../../../dispatcher/payloads/ViewRoomPa
@@ -421,10 +421,10 @@ index d0cfd4a..995982c 100644
                  return true;
              } catch (e) {
 diff --git a/apps/web/src/i18n/strings/en_EN.json b/apps/web/src/i18n/strings/en_EN.json
-index ef0a821..93fdeec 100644
+index 6f77aec..0d56b20 100644
 --- a/apps/web/src/i18n/strings/en_EN.json
 +++ b/apps/web/src/i18n/strings/en_EN.json
-@@ -3809,6 +3809,9 @@
+@@ -3865,6 +3865,9 @@
          "demote_self_confirm_title": "Demote yourself?",
          "did_label": "DID",
          "did_label_unsigned": "DID (unsigned)",
@@ -2458,34 +2458,34 @@ index 0000000..a7c5e16
 +        ? _t("user_info|did_search_unverified_unpublished")
 +        : _t("user_info|did_search_unverified_unchecked");
 +}
-diff --git a/apps/web/test/unit-tests/components/views/dialogs/SpotlightDialog-test.tsx b/apps/web/test/unit-tests/components/views/dialogs/SpotlightDialog-test.tsx
-index 01b3aea..d54c2dd 100644
---- a/apps/web/test/unit-tests/components/views/dialogs/SpotlightDialog-test.tsx
-+++ b/apps/web/test/unit-tests/components/views/dialogs/SpotlightDialog-test.tsx
-@@ -35,6 +35,7 @@ import SdkConfig from "../../../../../src/SdkConfig";
- import { Action } from "../../../../../src/dispatcher/actions";
- import { MetaSpace } from "../../../../../src/stores/spaces";
- import { SDKContextClass } from "../../../../../src/contexts/SDKContextClass.ts";
-+import { resolveDid } from "../../../../../src/utils/didLocalpart";
+diff --git a/apps/web/src/components/views/dialogs/spotlight/SpotlightDialog.test.tsx b/apps/web/src/components/views/dialogs/spotlight/SpotlightDialog.test.tsx
+index e784e5c..a5b52fb 100644
+--- a/apps/web/src/components/views/dialogs/spotlight/SpotlightDialog.test.tsx
++++ b/apps/web/src/components/views/dialogs/spotlight/SpotlightDialog.test.tsx
+@@ -37,6 +37,7 @@ import SdkConfig from "../../../../SdkConfig";
+ import { Action } from "../../../../dispatcher/actions";
+ import { MetaSpace } from "../../../../stores/spaces";
+ import { SDKContextClass } from "../../../../contexts/SDKContextClass";
++import { resolveDid } from "../../../../utils/didLocalpart";
  
- jest.useFakeTimers();
+ vi.useFakeTimers({ shouldAdvanceTime: true });
  
-@@ -51,6 +52,14 @@ jest.mock("../../../../../src/dispatcher/dispatcher", () => ({
-     dispatch: jest.fn(),
+@@ -55,6 +56,14 @@ vi.mock("../../../../dispatcher/dispatcher", () => ({
+     },
  }));
  
 +// DID search: the lookup itself is covered in utils/didLocalpart.test.ts. Here
 +// it is stubbed so these tests pin only how Spotlight SHOWS a hit.
-+jest.mock("../../../../../src/utils/didLocalpart", () => ({
++vi.mock("../../../../utils/didLocalpart", async () => ({
 +    // @ts-ignore
-+    ...jest.requireActual("../../../../../src/utils/didLocalpart"),
-+    resolveDid: jest.fn(),
++    ...(await vi.importActual("../../../../utils/didLocalpart")),
++    resolveDid: vi.fn(),
 +}));
 +
  interface IUserChunkMember {
      user_id: string;
      display_name?: string;
-@@ -504,6 +513,87 @@ describe("Spotlight Dialog", () => {
+@@ -507,6 +516,87 @@ describe("Spotlight Dialog", () => {
          });
      });
  
@@ -2494,8 +2494,8 @@ index 01b3aea..d54c2dd 100644
 +        const didUserId = "@37rb2h7bdij3o1qm:example.tld";
 +
 +        beforeEach(() => {
-+            mocked(resolveDid).mockReset();
-+            mocked(mockedClient.getProfileInfo).mockImplementation(async (userId) =>
++            vi.mocked(resolveDid).mockReset();
++            vi.mocked(mockedClient.getProfileInfo).mockImplementation(async (userId) =>
 +                userId === didUserId || userId === testDMUserId
 +                    ? { displayname: "Dora Did", avatar_url: undefined }
 +                    : Promise.reject(new Error("M_NOT_FOUND")),
@@ -2505,7 +2505,7 @@ index 01b3aea..d54c2dd 100644
 +        async function renderAndSettle(props: { initialFilter?: Filter }): Promise<Element> {
 +            render(<SpotlightDialog initialText={did} onFinished={() => null} {...props} />);
 +            // search is debounced
-+            jest.advanceTimersByTime(200);
++            vi.advanceTimersByTime(200);
 +            await flushPromisesWithFakeTimers();
 +            return document.querySelector("#mx_SpotlightDialog_content")!;
 +        }
@@ -2514,7 +2514,7 @@ index 01b3aea..d54c2dd 100644
 +            ["with no filter selected", {}],
 +            ["with the people filter", { initialFilter: Filter.People }],
 +        ])("shows a verified hit %s", async (_label, props) => {
-+            mocked(resolveDid).mockResolvedValue({ userId: didUserId, verification: "verified" });
++            vi.mocked(resolveDid).mockResolvedValue({ userId: didUserId, verification: "verified" });
 +            const content = await renderAndSettle(props);
 +            await waitFor(() => {
 +                const hit = [...content.querySelectorAll("li.mx_SpotlightDialog_option")].find((o) =>
@@ -2529,7 +2529,7 @@ index 01b3aea..d54c2dd 100644
 +        });
 +
 +        it("marks an unverified hit with no filter selected", async () => {
-+            mocked(resolveDid).mockResolvedValue({
++            vi.mocked(resolveDid).mockResolvedValue({
 +                userId: didUserId,
 +                verification: "unverified",
 +                reason: "unpublished",
@@ -2548,23 +2548,23 @@ index 01b3aea..d54c2dd 100644
 +            // the DID hit.
 +            const member = new RoomMember(testRoom.roomId, "@lookalike:example.tld");
 +            member.name = member.rawDisplayName = did;
-+            mocked(testRoom.getJoinedMembers).mockReturnValue([member]);
-+            mocked(resolveDid).mockResolvedValue({ userId: didUserId, verification: "verified" });
++            vi.mocked(testRoom.getJoinedMembers).mockReturnValue([member]);
++            vi.mocked(resolveDid).mockResolvedValue({ userId: didUserId, verification: "verified" });
 +            const content = await renderAndSettle({});
 +            await waitFor(() => expect(content).toHaveTextContent("Dora Did"));
 +            expect(content).not.toHaveTextContent("@lookalike:example.tld");
 +        });
 +
 +        it("shows the existing DM when the DID names someone we already have a DM with", async () => {
-+            mocked(testDM.getJoinedMemberCount).mockReturnValue(2);
-+            mocked(resolveDid).mockResolvedValue({ userId: testDMUserId, verification: "verified" });
++            vi.mocked(testDM.getJoinedMemberCount).mockReturnValue(2);
++            vi.mocked(resolveDid).mockResolvedValue({ userId: testDMUserId, verification: "verified" });
 +            const content = await renderAndSettle({});
 +            await waitFor(() => expect(content).toHaveTextContent(testDM.name));
 +            expect(content.querySelector("#mx_SpotlightDialog_button_noResults")).toBeNull();
 +        });
 +
 +        it("shows no results when the DID names nobody", async () => {
-+            mocked(resolveDid).mockResolvedValue(null);
++            vi.mocked(resolveDid).mockResolvedValue(null);
 +            const content = await renderAndSettle({});
 +            await waitFor(() => expect(content.querySelector("#mx_SpotlightDialog_button_noResults")).not.toBeNull());
 +        });

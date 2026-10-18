@@ -26,10 +26,10 @@ index a8a4ef7..5fb692d 100644
              height: 20px;
          }
 diff --git a/apps/web/res/css/views/settings/_UserProfileSettings.pcss b/apps/web/res/css/views/settings/_UserProfileSettings.pcss
-index 67750b9..b10c4b3 100644
+index a257477..b21780c 100644
 --- a/apps/web/res/css/views/settings/_UserProfileSettings.pcss
 +++ b/apps/web/res/css/views/settings/_UserProfileSettings.pcss
-@@ -43,6 +43,19 @@ Please see LICENSE files in the repository root for full details.
+@@ -45,6 +45,19 @@ Please see LICENSE files in the repository root for full details.
          }
      }
  
@@ -94,18 +94,18 @@ index 1e21422..3ea1028 100644
                  {!hideVerificationSection && <UserInfoHeaderVerificationView member={member} devices={devices} />}
              </Container>
 diff --git a/apps/web/src/components/views/settings/UserProfileSettings.tsx b/apps/web/src/components/views/settings/UserProfileSettings.tsx
-index d2280c3..32d1bdd 100644
+index e6d261b..59af373 100644
 --- a/apps/web/src/components/views/settings/UserProfileSettings.tsx
 +++ b/apps/web/src/components/views/settings/UserProfileSettings.tsx
-@@ -26,6 +26,7 @@ import { formatBytes } from "../../../utils/FormattingUtils";
+@@ -25,6 +25,7 @@ import PosthogTrackers from "../../../PosthogTrackers";
+ import { formatBytes } from "../../../utils/FormattingUtils";
  import InlineSpinner from "../elements/InlineSpinner";
- import UserIdentifierCustomisations from "../../../customisations/UserIdentifier";
  import CopyableText from "../elements/CopyableText";
 +import { useAttestedDid } from "../../../hooks/useAttestedDid";
  import { useMatrixClientContext } from "../../../contexts/MatrixClientContext";
  import AccessibleButton from "../elements/AccessibleButton";
  import LogoutDialog, { shouldShowLogoutDialog } from "../dialogs/LogoutDialog";
-@@ -60,6 +61,43 @@ const UsernameBox: React.FC<UsernameBoxProps> = ({ username }) => {
+@@ -59,6 +60,43 @@ const UsernameBox: React.FC<UsernameBoxProps> = ({ username }) => {
      );
  };
  
@@ -149,10 +149,10 @@ index d2280c3..32d1bdd 100644
  interface ManageAccountButtonProps {
      externalAccountManagementUrl: string;
  }
-@@ -254,6 +292,7 @@ const UserProfileSettings: React.FC<UserProfileSettingsProps> = ({
+@@ -248,6 +286,7 @@ const UserProfileSettings: React.FC<UserProfileSettingsProps> = ({
                      </Alert>
                  )}
-                 {userIdentifier && <UsernameBox username={userIdentifier} />}
+                 <UsernameBox username={client.getSafeUserId()} />
 +                <AttestedDidBox userId={client.getSafeUserId()} />
                  <Flex gap="var(--cpd-space-4x)" className="mx_UserProfileSettings_profile_buttons">
                      {externalAccountManagementUrl && (
@@ -271,10 +271,10 @@ index 0000000..22a15bb
 +    return `${did.slice(0, head)}…${did.slice(-tail)}`;
 +}
 diff --git a/apps/web/src/i18n/strings/en_EN.json b/apps/web/src/i18n/strings/en_EN.json
-index a99f4bf..d59f7aa 100644
+index 92c2893..6f77aec 100644
 --- a/apps/web/src/i18n/strings/en_EN.json
 +++ b/apps/web/src/i18n/strings/en_EN.json
-@@ -3759,6 +3759,8 @@
+@@ -3863,6 +3863,8 @@
          "demote_self_confirm_description_space": "You will not be able to undo this change as you are demoting yourself, if you are the last privileged user in the space it will be impossible to regain privileges.",
          "demote_self_confirm_room": "You will not be able to undo this change as you are demoting yourself, if you are the last privileged user in the room it will be impossible to regain privileges.",
          "demote_self_confirm_title": "Demote yourself?",

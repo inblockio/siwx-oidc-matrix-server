@@ -1,9 +1,9 @@
 diff --git a/apps/web/src/components/views/auth/LoginWithQR.tsx b/apps/web/src/components/views/auth/LoginWithQR.tsx
-index 257d2af..d779da8 100644
+index 3f9c193..5d8def3 100644
 --- a/apps/web/src/components/views/auth/LoginWithQR.tsx
 +++ b/apps/web/src/components/views/auth/LoginWithQR.tsx
-@@ -423,6 +423,7 @@ export default class LoginWithQR extends React.Component<Props, IState> {
-                 code={this.state.phase === Phase.ShowingQR ? this.state.rendezvous?.code : undefined}
+@@ -432,6 +432,7 @@ export default class LoginWithQR extends React.Component<Props, IState> {
+                 code={this.state.phase === Phase.ShowingQR ? this.state.flow?.code : undefined}
                  failureReason={this.state.failureReason}
                  userCode={this.state.userCode}
 +                verificationUri={this.state.verificationUri}
@@ -11,7 +11,7 @@ index 257d2af..d779da8 100644
              />
          );
 diff --git a/apps/web/src/components/views/auth/LoginWithQRFlow.tsx b/apps/web/src/components/views/auth/LoginWithQRFlow.tsx
-index 6b5a213..1566a35 100644
+index 399aa2d..4c20774 100644
 --- a/apps/web/src/components/views/auth/LoginWithQRFlow.tsx
 +++ b/apps/web/src/components/views/auth/LoginWithQRFlow.tsx
 @@ -51,6 +51,16 @@ interface Props {
@@ -129,7 +129,7 @@ index 6b5a213..1566a35 100644
          };
      };
  
-@@ -340,7 +436,16 @@ export default class LoginWithQRFlow extends React.Component<Props> {
+@@ -352,7 +448,16 @@ export default class LoginWithQRFlow extends React.Component<Props> {
                              {this.simpleSpinner(_t("auth|qr_code_login|waiting_for_device"))}
                          </>
                      ) : (
@@ -148,12 +148,12 @@ index 6b5a213..1566a35 100644
                  buttons = this.cancelButton();
                  break;
 diff --git a/apps/web/src/i18n/strings/en_EN.json b/apps/web/src/i18n/strings/en_EN.json
-index 1671f79..7670072 100644
+index c204bbb..732d2cd 100644
 --- a/apps/web/src/i18n/strings/en_EN.json
 +++ b/apps/web/src/i18n/strings/en_EN.json
 @@ -261,6 +261,7 @@
-             "error_user_declined": "You or the account provider declined the sign in request.",
-             "error_user_declined_title": "Sign in declined",
+             "error_user_declined": "You or the account provider declined the sign-in request.",
+             "error_user_declined_title": "Sign-in declined",
              "follow_remaining_instructions": "Follow the remaining instructions",
 +            "open_approval_page": "If the approval page did not open in a new tab, open it here.",
              "open_element_mobile_device": "Open %(brand)s on your mobile device",
