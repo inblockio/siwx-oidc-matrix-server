@@ -1,0 +1,9 @@
+# Outside the CodeRabbit allow-list. Auto-review is off so the org quota
+# stays on the trust boundary. One pull request can still ask with the label
+# review-ready, or a comment: @coderabbitai review
+reviews:
+  auto_review:
+    enabled: false
+    drafts: false
+    labels:
+      - review-ready
