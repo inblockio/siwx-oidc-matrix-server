@@ -40,42 +40,72 @@
 # capability.
 #
 # This is also why Caddyfile.local and Caddyfile.e2e carry NEITHER block —
-# both run stock `caddy:2.11.4-alpine` (docker-compose.local.yml,
-# docker-compose.e2e.yml), so adding one would break local dev and the e2e
-# harness.
+# both run stock `caddy:2.11.7-alpine` (docker-compose.local.yml,
+# docker-compose.e2e.yml, e2e-harness/up.sh), so adding one would break local
+# dev and the e2e harness. Those stock pins follow the Caddy version below.
 #
-# VERSION-LOCK RATIONALE — caddy-l4 (verified 2026-08-03 against upstream):
-#   caddy-l4 v0.1.2's go.mod pins `github.com/caddyserver/caddy/v2 v2.11.4`
-#   EXACTLY (not >=, not a range) — https://github.com/mholt/caddy-l4/blob/
-#   v0.1.2/go.mod. xcaddy statically links whatever `caddy` module version is
-#   resolved at build time, so the builder base image's Caddy version and the
-#   plugin's pinned Caddy version must match, or `xcaddy build` either fails
-#   to resolve or silently pulls in a second, inconsistent copy of caddy/v2.
-#   `caddy:2.11.4-builder` is therefore not an arbitrary "latest stable" pick;
-#   it is the specific tag that satisfies caddy-l4 v0.1.2's exact pin.
+# VERSION-LOCK RATIONALE — caddy-l4 (verified 2026-10-18 against upstream):
+#   caddy-l4's go.mod pins `github.com/caddyserver/caddy/v2` at ONE exact
+#   version (not >=, not a range). xcaddy statically links whatever `caddy`
+#   module version is resolved at build time, so the builder base image's
+#   Caddy version and the plugin's pinned Caddy version must match, or
+#   `xcaddy build` either fails to resolve or silently pulls in a second,
+#   inconsistent copy of caddy/v2.
+#
+#   caddy-l4 is pinned to a COMMIT, not a release, on purpose:
+#   * Its latest release, v0.1.2, requires caddy/v2 v2.11.4, which carries two
+#     advisories fixed in Caddy 2.11.6 (GHSA-6365-7ppr-5r92, a request sent on
+#     the wrong upstream connection when a route uses both `forward_auth` and
+#     `reverse_proxy`; GHSA-8qx7-j2v2-x6q5, hop-by-hop headers). caddy-l4 has
+#     published no release since v0.1.2, so no release can pair with a fixed
+#     Caddy.
+#   * Commit 77044b47bccf03b57610bb303851ab31259779bd (master, 2026-10-14,
+#     "deps: Bump Caddy to v2.11.7, as well as x/crypto and x/net (#476)") is
+#     the first commit whose go.mod requires caddy/v2 v2.11.7 (`go 1.26.0`),
+#     which is the builder tag below. Only five commits separate it from
+#     v0.1.2: the Go 1.26 bump, two dependency-group bumps, a proxy_protocol
+#     fix (#475) and the Caddy bump. Outside go.mod/go.sum their source
+#     changes are the proxy_protocol handler, two style-only edits (l4http,
+#     l4wireguard) and l4proxy's metrics registration; the `tls` matcher, the
+#     `tls` handler and the `proxy` data path, which is all the TURN-TLS split
+#     uses, are untouched.
+#   * Later master commits are deliberately NOT taken: they change the very
+#     connection path the TURN split uses (a `tls` handshake_timeout, `proxy`
+#     half_close_timeout, a TCP FIN after close_notify when half-closing TLS,
+#     the upstream address kept during active health checks). Take them in a
+#     change that also tests TURN-TLS, not as a side effect of a Caddy
+#     security bump.
+#   * Go back to a RELEASE as soon as one exists whose go.mod requires the
+#     builder's caddy/v2 version, and replace the commit here and in the
+#     README's Dependencies table with that tag.
+#   xcaddy's `--with module@<40-hex SHA>` resolves to a Go pseudo-version, and
+#   the checksum database checks it like any other module version; the built
+#   binary reports it in `caddy build-info` as
+#   v0.1.3-0.20261014083334-77044b47bccf.
 #
 # VERSION-LOCK RATIONALE — caddy-ratelimit (verified 2026-09-13 BY BUILDING,
-# not by reading):
+# not by reading; re-verified by building on Caddy 2.11.7 on 2026-10-18, the
+# pin unchanged):
 #   Pinned to the COMMIT 5625512f24f6f59d6f64fb3aafe5eecff0b286db (master
 #   head, 2026-06-12), deliberately NOT to the only existing tag.
 #
 #   * The repo's ONLY tag is v0.1.0 (2024-08-28); its go.mod requires
 #     caddy/v2 v2.8.0. The pinned commit's go.mod requires v2.10.0. BOTH are
-#     LOWER than the builder's 2.11.4, and Go's minimal-version-selection
+#     LOWER than the builder's 2.11.7, and Go's minimal-version-selection
 #     resolves the MAXIMUM of all requirements, so caddy/v2 stays at exactly
-#     2.11.4 and caddy-l4's exact requirement is unaffected. The skew this
+#     2.11.7 and caddy-l4's exact requirement is unaffected. The skew this
 #     file exists to prevent is a module requiring a caddy/v2 HIGHER than the
 #     builder ships (that silently upgrades Caddy under the other plugin);
 #     neither candidate does. Proven in the built binary:
-#         dep github.com/caddyserver/caddy/v2  v2.11.4
-#         dep github.com/mholt/caddy-l4        v0.1.2
+#         dep github.com/caddyserver/caddy/v2  v2.11.7
+#         dep github.com/mholt/caddy-l4        v0.1.3-0.20261014083334-77044b47bccf
 #         dep github.com/mholt/caddy-ratelimit v0.1.1-0.20260612195517-5625512f24f6
 #     (`docker run --rm <image> caddy build-info | grep caddy-`), and
-#     `caddy version` reports v2.11.4.
+#     `caddy version` reports v2.11.7.
 #
-#   * Both candidates BUILD and RUN against caddy 2.11.4 — each was built
-#     against caddy-l4 v0.1.2 on caddy:2.11.4-builder and each produced a
-#     working binary listing `layer4` AND `http.handlers.rate_limit`. The
+#   * Both candidates BUILD and RUN against Caddy 2.11.x — each produced a
+#     working binary listing `layer4` AND `http.handlers.rate_limit` (on
+#     2.11.4 with caddy-l4 v0.1.2, and the pinned commit on 2.11.7). The
 #     tag is therefore NOT rejected for incompatibility; it compiles fine.
 #
 #   * The commit is taken anyway because v0.1.0's Caddyfile parser has no
@@ -98,13 +128,18 @@
 #     tag before switching.
 #
 # BUMP WARNING: if you bump any version here, you MUST re-check the pin
-# pairing first (read the target caddy-l4 tag's go.mod for its
+# pairing first (read the target caddy-l4 tag's or commit's go.mod for its
 # `caddyserver/caddy/v2` requirement, and the target caddy-ratelimit tag's)
 # and update BOTH the builder tag below and the final-stage tag to match,
-# each with its new index digest.
-# Bumping just one, or bumping to a plugin tag whose go.mod requires a
-# different Caddy version than the builder ships, reintroduces the exact skew
-# this pin exists to prevent.
+# each with its new index digest. The stock `caddy:<version>-alpine` pins of
+# the local and e2e stacks move with them.
+# Bumping just one, or bumping to a plugin tag or commit whose go.mod requires
+# a different Caddy version than the builder ships, reintroduces the exact
+# skew this pin exists to prevent. A Caddy minor or patch bump can also change
+# the edge's default behavior (Caddy 2.11.6 limits request headers and adds
+# idle timeouts): read the Caddy release notes against the edge Caddyfiles
+# and run `caddy validate` on each of them with the new image before an edge
+# adopts it.
 #
 # PROOF COMMAND (both modules present in the binary):
 #   docker build -f dockerfiles/Dockerfile.caddy-l4 -t caddy-l4-rl:test .
@@ -121,12 +156,12 @@
 # checksum database, sum.golang.org, and always resolves to the same source.
 
 # ---- build stage ----
-FROM caddy:2.11.4-builder@sha256:369218c81ca6d6af249981221b3a5c764d886dd5b058f51d144066de13f2418d AS builder
+FROM caddy:2.11.7-builder@sha256:d842facfd63b960922e57444ff76fd8f0793a66dfdcf481af8026e1f4e6a39b4 AS builder
 RUN xcaddy build \
-    --with github.com/mholt/caddy-l4@v0.1.2 \
+    --with github.com/mholt/caddy-l4@77044b47bccf03b57610bb303851ab31259779bd \
     --with github.com/mholt/caddy-ratelimit@5625512f24f6f59d6f64fb3aafe5eecff0b286db
 # ---------------------------------------------------------------------------
-# License texts for the Alpine packages of the caddy:2.11.4 base below
+# License texts for the Alpine packages of the caddy:2.11.7 base below
 # (Alpine 3.23.6), busybox's GPL-2.0-only among them. Canonical texts from SPDX
 # license-list-data v3.29.0, each checked against its SHA-256 as it is
 # downloaded. The set is not chosen here: dockerfiles/check-alpine-licenses.sh,
@@ -151,7 +186,7 @@ ADD --chmod=0644 --checksum=sha256:66a3107d5ad6a058aab753eaac2047ccb2ed0e39465dd
 ADD --chmod=0644 --checksum=sha256:bfb1112d49db5b1daecdfef24bd7e2f3ea0bafb33aa67aa0ab51e2bf8407c03d ${SPDX_TEXT}/Zlib.txt /alpine/Zlib.txt
 
 # ---- final stage ----
-FROM caddy:2.11.4@sha256:0c994536bddb66445885237f1a5dcc1916bccea922661c76b4e9fc24061f9b52
+FROM caddy:2.11.7@sha256:685ae3d7c34d9b5f8caeddc5d14051db7bbd88ff1f5a2fa0c16bd8ca328fb7af
 COPY --from=builder /usr/bin/caddy /usr/bin/caddy
 # Published from this repository like the Synapse and Element images, so it
 # carries the same LICENSE and NOTICE at the same path.
