@@ -1,0 +1,251 @@
+diff --git a/pkg/service/turnrelay.go b/pkg/service/turnrelay.go
+index 618e66d..f0da678 100644
+--- a/pkg/service/turnrelay.go
++++ b/pkg/service/turnrelay.go
+@@ -17,6 +17,7 @@ package service
+ import (
+ 	"net"
+ 	"net/netip"
++	"slices"
+ 
+ 	"github.com/pion/turn/v5"
+ 	"github.com/pkg/errors"
+@@ -92,6 +93,11 @@ type turnRelayPolicy struct {
+ 
+ 	localIPs   map[netip.Addr]struct{}
+ 	mediaPorts []portRange
++
++	// interfaceIPs (inblock.io) are this host's own interface addresses: the
++	// subset of localIPs a packet can be delivered to without leaving the
++	// host. Filled by newTURNRelayPolicy; tests may set it directly.
++	interfaceIPs map[netip.Addr]struct{}
+ }
+ 
+ func newTURNRelayPolicy(g turn.RelayAddressGenerator, localIPs map[netip.Addr]struct{}, mediaPorts []portRange) *turnRelayPolicy {
+@@ -99,7 +105,37 @@ func newTURNRelayPolicy(g turn.RelayAddressGenerator, localIPs map[netip.Addr]st
+ 		RelayAddressGenerator: g,
+ 		localIPs:              localIPs,
+ 		mediaPorts:            mediaPorts,
++		interfaceIPs:           collectInterfaceIPs(),
++	}
++}
++
++// collectInterfaceIPs returns this host's routable interface addresses
++// (loopback, link-local and unspecified excluded), the addresses a packet
++// addressed to this very host is actually delivered on.
++func collectInterfaceIPs() map[netip.Addr]struct{} {
++	ips := make(map[netip.Addr]struct{})
++	ifAddrs, err := net.InterfaceAddrs()
++	if err != nil {
++		return ips
++	}
++	for _, ifAddr := range ifAddrs {
++		ipNet, ok := ifAddr.(*net.IPNet)
++		if !ok {
++			continue
++		}
++		addr, ok := netip.AddrFromSlice(ipNet.IP)
++		if !ok {
++			continue
++		}
++		addr = addr.Unmap().WithZone("")
++		// link-local and unspecified addresses are not delivery targets; the
++		// loopback IS one (a service bound to it is on this very host).
++		if addr.IsLinkLocalUnicast() || addr.IsUnspecified() {
++			continue
++		}
++		ips[addr] = struct{}{}
+ 	}
++	return ips
+ }
+ 
+ func (g *turnRelayPolicy) allows(addr net.Addr) bool {
+@@ -111,14 +147,66 @@ func (g *turnRelayPolicy) allows(addr net.Addr) bool {
+ 	if _, ok := g.localIPs[ap.Addr().Unmap().WithZone("")]; !ok {
+ 		return true
+ 	}
++	return g.isMediaPort(ap.Port())
++}
++
++func (g *turnRelayPolicy) isMediaPort(port uint16) bool {
+ 	for _, r := range g.mediaPorts {
+-		if ap.Port() >= r.start && ap.Port() <= r.end {
++		if port >= r.start && port <= r.end {
+ 			return true
+ 		}
+ 	}
+ 	return false
+ }
+ 
++// localDelivery (inblock.io) rewrites a relayed write that targets this
++// host's own mapped address (its public or 1:1-NAT IP, what the SFU
++// advertises with use_external_ip) on an RTC media port to one of this
++// host's interface addresses, so the packet is delivered locally. Without
++// it the write hairpins out of the container to the host's published port
++// for the media range (docker-proxy), which is exactly the publish a
++// relay-only deployment wants closed: a client's relayed ICE checks address
++// the SFU's advertised candidate, and nothing else can carry them once the
++// publish is gone. Own-address writes that already name an interface
++// address, and writes to any other address, pass through unchanged.
++func (g *turnRelayPolicy) localDelivery(addr net.Addr) net.Addr {
++	udpAddr, ok := addr.(*net.UDPAddr)
++	if !ok || len(g.interfaceIPs) == 0 {
++		return addr
++	}
++	dst := udpAddr.AddrPort().Addr().Unmap().WithZone("")
++	if _, ok := g.interfaceIPs[dst]; ok {
++		return addr // already delivered locally
++	}
++	if _, ok := g.localIPs[dst]; !ok {
++		return addr // not this host's mapped address
++	}
++	if !g.isMediaPort(uint16(udpAddr.Port)) {
++		return addr
++	}
++	target, ok := g.interfaceAddrFor(dst)
++	if !ok {
++		return addr // no interface address of the same family to deliver on
++	}
++	return &net.UDPAddr{IP: net.IP(target.AsSlice()), Port: udpAddr.Port}
++}
++
++// interfaceAddrFor picks a deterministic interface address of the same
++// address family as the mapped destination.
++func (g *turnRelayPolicy) interfaceAddrFor(dst netip.Addr) (netip.Addr, bool) {
++	var candidates []netip.Addr
++	for addr := range g.interfaceIPs {
++		if addr.Is4() == dst.Is4() {
++			candidates = append(candidates, addr)
++		}
++	}
++	if len(candidates) == 0 {
++		return netip.Addr{}, false
++	}
++	slices.SortFunc(candidates, func(a, b netip.Addr) int { return a.Compare(b) })
++	return candidates[0], true
++}
++
+ func (g *turnRelayPolicy) AllocatePacketConn(c turn.AllocateListenerConfig) (net.PacketConn, net.Addr, error) {
+ 	conn, addr, err := g.RelayAddressGenerator.AllocatePacketConn(c)
+ 	if err != nil {
+@@ -138,7 +226,7 @@ func (c *turnRelayPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
+ 	if !c.policy.allows(addr) {
+ 		return len(p), nil
+ 	}
+-	return c.PacketConn.WriteTo(p, addr)
++	return c.PacketConn.WriteTo(p, c.policy.localDelivery(addr))
+ }
+ 
+ // getTURNLocalIPs returns the addresses that are delivered to this host: its
+diff --git a/pkg/service/turnrelay_localdelivery_test.go b/pkg/service/turnrelay_localdelivery_test.go
+new file mode 100644
+index 0000000..a96a2e7
+--- /dev/null
++++ b/pkg/service/turnrelay_localdelivery_test.go
+@@ -0,0 +1,106 @@
++// Copyright 2026 inblock.io
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++package service
++
++import (
++	"net"
++	"net/netip"
++	"testing"
++	"time"
++
++	"github.com/pion/turn/v5"
++	"github.com/stretchr/testify/require"
++)
++
++func TestTURNRelayPolicy_LocalDeliveryRewritesMappedMediaPort(t *testing.T) {
++	// A relayed write to this host's mapped (public) address on an RTC media
++	// port is delivered on an interface address instead, so it never needs the
++	// host's published port for the media range.
++	relay := listenUDP(t)
++	mediaPeer := listenUDP(t)
++	mediaPort := uint16(mediaPeer.LocalAddr().(*net.UDPAddr).Port)
++
++	mapped := netip.MustParseAddr("8.8.8.8") // stand-in for the public/NAT IP
++	policy := newTURNRelayPolicy(
++		&fakeRelayAddressGenerator{conn: relay},
++		map[netip.Addr]struct{}{mapped: {}, netip.MustParseAddr("127.0.0.1"): {}},
++		[]portRange{{mediaPort, mediaPort}},
++	)
++	policy.interfaceIPs = map[netip.Addr]struct{}{netip.MustParseAddr("127.0.0.1"): {}}
++
++	conn, _, err := policy.AllocatePacketConn(turn.AllocateListenerConfig{UserID: "PA_ld"})
++	require.NoError(t, err)
++
++	buf := make([]byte, 64)
++	_, err = conn.WriteTo([]byte("delivered"), &net.UDPAddr{IP: net.IP(mapped.AsSlice()), Port: int(mediaPort)})
++	require.NoError(t, err)
++
++	require.NoError(t, mediaPeer.SetReadDeadline(time.Now().Add(2*time.Second)))
++	n, _, err := mediaPeer.ReadFrom(buf)
++	require.NoError(t, err)
++	require.Equal(t, "delivered", string(buf[:n]))
++
++	// The same write to a non-media port on the mapped address is still
++	// dropped by the policy, rewrite or not.
++	require.NoError(t, relay.SetReadDeadline(time.Now().Add(100*time.Millisecond)))
++	_, _, err = relay.ReadFrom(buf)
++	require.Error(t, err) // nothing hairpinned out through the relay socket
++}
++
++func TestTURNRelayPolicy_LocalDeliveryCases(t *testing.T) {
++	mapped := netip.MustParseAddr("8.8.8.8")
++	iface := netip.MustParseAddr("172.21.0.2")
++	other := netip.MustParseAddr("1.2.3.4")
++	policy := &turnRelayPolicy{
++		localIPs:     map[netip.Addr]struct{}{mapped: {}, iface: {}},
++		mediaPorts:   []portRange{{uint16(20100), uint16(20200)}},
++		interfaceIPs: map[netip.Addr]struct{}{iface: {}},
++	}
++
++	// mapped address, media port: rewritten, port kept
++	got := policy.localDelivery(&net.UDPAddr{IP: net.IP(mapped.AsSlice()), Port: 20123})
++	require.Equal(t, &net.UDPAddr{IP: net.IP(iface.AsSlice()), Port: 20123}, got)
++
++	// already an interface address: unchanged
++	same := &net.UDPAddr{IP: net.IP(iface.AsSlice()), Port: 20123}
++	require.Same(t, same, policy.localDelivery(same))
++
++	// another host's address: unchanged
++	ext := &net.UDPAddr{IP: net.IP(other.AsSlice()), Port: 20123}
++	require.Same(t, ext, policy.localDelivery(ext))
++
++	// own mapped address, but not a media port: unchanged
++	nonMedia := &net.UDPAddr{IP: net.IP(mapped.AsSlice()), Port: 20201}
++	require.Same(t, nonMedia, policy.localDelivery(nonMedia))
++
++	// no interface addresses known: unchanged rather than a guess
++	policy.interfaceIPs = nil
++	require.Same(t, nonMedia, policy.localDelivery(nonMedia))
++
++	// no same-family interface address: unchanged
++	v6mapped := netip.MustParseAddr("2001:db8::1")
++	policy.localIPs[v6mapped] = struct{}{}
++	policy.interfaceIPs = map[netip.Addr]struct{}{iface: {}}
++	v6dst := &net.UDPAddr{IP: net.IP(v6mapped.AsSlice()), Port: 20100}
++	require.Same(t, v6dst, policy.localDelivery(v6dst))
++}
++
++func TestCollectInterfaceIPs(t *testing.T) {
++	ips := collectInterfaceIPs()
++	require.NotEmpty(t, ips, "a host has at least one routable interface address")
++	for addr := range ips {
++		require.False(t, addr.IsLinkLocalUnicast() || addr.IsUnspecified())
++	}
++}
