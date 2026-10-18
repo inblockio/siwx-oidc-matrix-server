@@ -45,6 +45,7 @@ declare -A OWNER=(
   [synapse]=dockerfiles/Dockerfile
   [element-web]=dockerfiles/Dockerfile.element
   [lk-jwt]=dockerfiles/Dockerfile.lk-jwt
+  [livekit]=dockerfiles/Dockerfile.livekit
 )
 
 # Directories whose patches must be provable in the built artifact: each needs a

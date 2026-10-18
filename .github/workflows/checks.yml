@@ -72,6 +72,24 @@ jobs:
       - name: Tests carried by the patches, on the patched tag tree
         run: docker build --progress=plain --target patch-tests -f dockerfiles/Dockerfile.element .
 
+  # The builder stage of dockerfiles/Dockerfile.livekit: upstream at the pinned
+  # commit, patches/livekit/ applied, the patch tests run, and this repository's
+  # config/relay-policy/ loaded by the same code LiveKit starts with. The image
+  # itself is built only after a merge (docker.yml), so without this job a broken
+  # policy file would first show up as a LiveKit that refuses to start.
+  livekit-patch-tests:
+    name: LiveKit patch tests and relay policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      # Pinned by commit, not by a movable tag; the comment names the release.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Patch tests and policy load, on the patched tag tree
+        run: docker build --progress=plain --target builder -f dockerfiles/Dockerfile.livekit .
+
   # scripts/lk-jwt-membership-accept.sh extracts apply_lk_jwt_membership from the
   # entrypoint and runs it against fixture homeserver.yaml files: idempotency, the
   # users-namespace regex, and every refusal path.

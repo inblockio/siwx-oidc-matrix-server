@@ -127,7 +127,10 @@ Calls go through LiveKit. Its embedded TURN is **off** in `config/livekit.yaml`,
 clients behind symmetric NAT or strict firewalls cannot join a call. Enabling it needs an
 edge that splits `:443` by SNI (the `caddy-l4` image), a DNS record for the TURN host,
 3478/udp open, and `turn.enabled: true` with your `turn.domain` in `config/livekit.yaml`;
-the `/siwx-matrix-setup` skill has the steps.
+the `/siwx-matrix-setup` skill has the steps. With TURN on, our LiveKit image
+(`dockerfiles/Dockerfile.livekit`) can force relay over TURN/TLS from the first second for
+clients on networks that filter UDP media, by IP range: the relay policy in
+[`config/relay-policy/`](config/relay-policy/README.md).
 
 ## Services
 
@@ -166,7 +169,7 @@ deployment is known to run a different version.
 | Element Web serving base | `nginxinc/nginx-unprivileged:1.31.6-alpine-slim@sha256:c81a27f28bc2…` | `dockerfiles/Dockerfile.element` (runtime `FROM`) | Stock, with our `config/element-nginx.conf` and security headers |
 | siwx-oidc | default `ghcr.io/inblockio/siwx-oidc:sha-40efae9@sha256:54739f4813bf…` (CI build of siwx-oidc main at 40efae9) | `docker-compose.yml` (`SIWX_OIDC_IMAGE_REF`) | First-party, built in [inblockio/siwx-oidc](https://github.com/inblockio/siwx-oidc) |
 | Redis | `8.10.2` (`redis:8.10.2@sha256:d5ac52db24d4…`) | `docker-compose.yml` (`REDIS_IMAGE_REF`) | Stock, run with `--appendonly yes` and a password ([docs/redis-password.md](docs/redis-password.md)) |
-| LiveKit server | `v1.13.10` (`livekit/livekit-server:v1.13.10@sha256:89ca9ce0791e…`) | `docker-compose.yml` (`LIVEKIT_IMAGE_REF`) | Stock, configured by `config/livekit.yaml` (embedded TURN, off by default) |
+| LiveKit server | `v1.13.10` (`livekit/livekit-server:v1.13.10@sha256:89ca9ce0791e…`) | `docker-compose.yml` (`LIVEKIT_IMAGE_REF`) | Stock, configured by `config/livekit.yaml` (embedded TURN, off by default). Our patched build (`dockerfiles/Dockerfile.livekit`, `ARG LIVEKIT_TAG`/`LIVEKIT_COMMIT`, same tag, [relay policy](patches/livekit/README.md)) is published by CI as `…/livekit-server`; the default moves to it after its first CI build |
 | lk-jwt-service | upstream `v0.9.0` (commit `0e176b1eca44…`), unmodified; default image `…/lk-jwt-service:sha-5190a44@sha256:c4f9d1ebde0e…` (CI build of main at 5190a44, the first build without the retired `restrict-screen-share.patch`) | `dockerfiles/Dockerfile.lk-jwt` (`ARG LK_JWT_TAG`, `ARG LK_JWT_COMMIT`); `docker-compose.yml` (`LK_JWT_IMAGE_REF`) | **Own build, no patch.** Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service`, non-root (65532). A deployment that pins `LK_JWT_IMAGE_REF` to an upstream image runs that instead |
 | Caddy | `v2.11.7` (`caddy:2.11.7-builder@sha256:d842facfd63b…`, `caddy:2.11.7@sha256:685ae3d7c34d…`) | `dockerfiles/Dockerfile.caddy-l4` (builder and final `FROM`) | **Custom build** with xcaddy and the two modules below. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/caddy-l4` |
 | Caddy module `layer4` (mholt/caddy-l4) | commit `77044b47bccf` (2026-10-14, requires Caddy `v2.11.7`; the latest release, `v0.1.2`, requires `v2.11.4`) | `dockerfiles/Dockerfile.caddy-l4` (`xcaddy build`) | Stock module (TURN-TLS SNI split on :443) |
@@ -280,6 +283,15 @@ formerly `require-membership.patch`): it is on because lk-jwt runs as an applica
 from `MATRIX_HOST`. It needs Synapse v1.162.0 or later and the application-service tokens
 `LK_JWT_AS_TOKEN`/`LK_JWT_HS_TOKEN` (`env.example`); without them lk-jwt-service refuses to
 start, by design.
+
+**livekit-server.** Registry: [`patches/livekit/README.md`](patches/livekit/README.md).
+Built by `dockerfiles/Dockerfile.livekit` (upstream source at a pinned commit, patches
+applied with `git apply`, their tests run in the build); the image is published by CI.
+
+1. [`0001-relay-policy.patch`](patches/livekit/0001-relay-policy.patch): clients whose
+   address is in a range of `config/relay-policy/*.yaml` get relay-only ICE over
+   TURN/TLS on :443 from the start of a call, for networks that filter UDP media.
+   POLICY.
 
 Element Web also carries runtime deltas that are not `.patch` files: nginx caching
 and security headers, the service-worker boot shim, a per-build `sw.js` stamp, the

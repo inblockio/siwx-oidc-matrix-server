@@ -39,6 +39,7 @@ stores; nothing here can patch it.
 | `dockerfiles/Dockerfile` | The Synapse image: pinned upstream base, pinned `yq`, the Synapse patches, `entrypoints/matrix_server.sh`. |
 | `dockerfiles/Dockerfile.element` | The Element Web image: clones a pinned tag, applies the Element Web patches in order, builds, serves with unprivileged nginx and the runtime overlay. |
 | `dockerfiles/Dockerfile.lk-jwt` | The lk-jwt-service image: upstream at a pinned commit, unmodified (no patches in `patches/lk-jwt/` at present), built `FROM scratch`, runs as 65532. |
+| `dockerfiles/Dockerfile.livekit` | The livekit-server image: upstream at a pinned commit with the patches in `patches/livekit/` (the relay policy), their tests run in the build, upstream's runtime stage. |
 | `dockerfiles/Dockerfile.caddy-l4` | Caddy built with the `layer4` and `rate_limit` modules, for an edge that splits TURN-TLS by SNI and rate-limits `GET /resolve`. |
 | `real-stack/Dockerfile.synapse` | Builds `FROM` the published Synapse image, for siwx-oidc's hand-run real-stack tests. |
 | `entrypoints/matrix_server.sh` | Synapse entrypoint: writes `homeserver.yaml` (see [What runs on every boot](#what-runs-on-every-boot)). Baked into the image, not bind-mounted. |
@@ -53,7 +54,7 @@ stores; nothing here can patch it.
 ## Build and deployment model
 
 - **Deployed images come from CI.** `.github/workflows/docker.yml` builds `synapse`,
-  `element-web` and `caddy-l4` on a push to `main` (and on tags, releases and manual
+  `element-web`, `caddy-l4`, `lk-jwt-service` and `livekit-server` on a push to `main` (and on tags, releases and manual
   dispatch) and publishes them to `ghcr.io/inblockio/siwx-oidc-matrix-server/<image>` with
   the tags `main`, `latest` and `sha-<commit>`. A push that touches only `docs/**` or
   `**.md` builds nothing. Images built locally (`docker-compose.local.yml`, the e2e
@@ -242,6 +243,11 @@ Guides and scripts here must not contradict it:
   and an example domain. It is built for TLS terminated at an edge that splits `:443` by
   SNI; port 5349 is never published on the host. Enable it (`turn.enabled: true`, a real
   `turn.domain`) only on a deployment with that edge.
+- **The relay policy is mounted as a directory** (`config/relay-policy/`, read by our
+  LiveKit image's `LIVEKIT_RELAY_POLICY_DIR`), never as a single file: a git checkout
+  replaces a file's inode and a single-file bind mount keeps serving the old one. A bad
+  policy file stops LiveKit at startup; the policy needs embedded TURN with its TLS leg
+  and is ignored without it. See [config/relay-policy/README.md](config/relay-policy/README.md).
 - **`rtc.ips.excludes` must list the proxy network's subnet** on a host where LiveKit sits
   on two networks, which otherwise makes it advertise a private address as external. The
   subnet is host-specific, so the shipped file sets none; its comment says how to find it.

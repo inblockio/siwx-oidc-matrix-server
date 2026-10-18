@@ -80,6 +80,13 @@ jobs:
           - image: lk-jwt-service
             dockerfile: dockerfiles/Dockerfile.lk-jwt
             licenses: 'AGPL-3.0-only AND Apache-2.0'
+          # livekit-server with our patches (patches/livekit/README.md): the
+          # relay policy. livekit-server, the patches and our Dockerfile are all
+          # Apache-2.0. A patch that stops applying, or a red patch test in the
+          # builder stage, fails this job.
+          - image: livekit-server
+            dockerfile: dockerfiles/Dockerfile.livekit
+            licenses: 'Apache-2.0'
     steps:
       # Pinned by commit, not by a movable tag; the comment names the release.
       # All four run on Node 24 (runs.using in each action.yml).
