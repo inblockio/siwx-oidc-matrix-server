@@ -1,5 +1,5 @@
 diff --git a/pkg/service/turnrelay.go b/pkg/service/turnrelay.go
-index 618e66d..f0da678 100644
+index 618e66d..165f6b6 100644
 --- a/pkg/service/turnrelay.go
 +++ b/pkg/service/turnrelay.go
 @@ -17,6 +17,7 @@ package service
@@ -60,7 +60,7 @@ index 618e66d..f0da678 100644
  }
  
  func (g *turnRelayPolicy) allows(addr net.Addr) bool {
-@@ -111,14 +147,66 @@ func (g *turnRelayPolicy) allows(addr net.Addr) bool {
+@@ -111,14 +147,73 @@ func (g *turnRelayPolicy) allows(addr net.Addr) bool {
  	if _, ok := g.localIPs[ap.Addr().Unmap().WithZone("")]; !ok {
  		return true
  	}
@@ -110,10 +110,17 @@ index 618e66d..f0da678 100644
 +}
 +
 +// interfaceAddrFor picks a deterministic interface address of the same
-+// address family as the mapped destination.
++// address family as the mapped destination. The loopback is never a
++// delivery target: the ICE stack drops remote peers on loopback addresses
++// (its IP filter), so a check delivered via 127.0.0.1 is received by the
++// media socket and silently discarded - observed live on dev-aquafire, where
++// rewritten checks reached the SFU on 127.0.0.1 and every join still failed.
 +func (g *turnRelayPolicy) interfaceAddrFor(dst netip.Addr) (netip.Addr, bool) {
 +	var candidates []netip.Addr
 +	for addr := range g.interfaceIPs {
++		if addr.IsLoopback() || addr.IsLinkLocalUnicast() {
++			continue
++		}
 +		if addr.Is4() == dst.Is4() {
 +			candidates = append(candidates, addr)
 +		}
@@ -128,7 +135,7 @@ index 618e66d..f0da678 100644
  func (g *turnRelayPolicy) AllocatePacketConn(c turn.AllocateListenerConfig) (net.PacketConn, net.Addr, error) {
  	conn, addr, err := g.RelayAddressGenerator.AllocatePacketConn(c)
  	if err != nil {
-@@ -138,7 +226,7 @@ func (c *turnRelayPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
+@@ -138,7 +233,7 @@ func (c *turnRelayPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
  	if !c.policy.allows(addr) {
  		return len(p), nil
  	}
@@ -139,10 +146,10 @@ index 618e66d..f0da678 100644
  // getTURNLocalIPs returns the addresses that are delivered to this host: its
 diff --git a/pkg/service/turnrelay_localdelivery_test.go b/pkg/service/turnrelay_localdelivery_test.go
 new file mode 100644
-index 0000000..a96a2e7
+index 0000000..cb8db01
 --- /dev/null
 +++ b/pkg/service/turnrelay_localdelivery_test.go
-@@ -0,0 +1,106 @@
+@@ -0,0 +1,146 @@
 +// Copyright 2026 inblock.io
 +//
 +// Licensed under the Apache License, Version 2.0 (the "License");
@@ -169,21 +176,37 @@ index 0000000..a96a2e7
 +	"github.com/stretchr/testify/require"
 +)
 +
++func firstNonLoopbackInterfaceIP(t *testing.T) netip.Addr {
++	t.Helper()
++	for addr := range collectInterfaceIPs() {
++		if addr.Is4() && !addr.IsLoopback() && !addr.IsLinkLocalUnicast() {
++			return addr
++		}
++	}
++	t.Fatal("no non-loopback IPv4 interface address available")
++	return netip.Addr{}
++}
++
 +func TestTURNRelayPolicy_LocalDeliveryRewritesMappedMediaPort(t *testing.T) {
 +	// A relayed write to this host's mapped (public) address on an RTC media
 +	// port is delivered on an interface address instead, so it never needs the
 +	// host's published port for the media range.
 +	relay := listenUDP(t)
-+	mediaPeer := listenUDP(t)
++	iface := firstNonLoopbackInterfaceIP(t)
++	mediaPeer, err := net.ListenPacket("udp4", iface.String()+":0")
++	require.NoError(t, err)
++	t.Cleanup(func() { _ = mediaPeer.Close() })
 +	mediaPort := uint16(mediaPeer.LocalAddr().(*net.UDPAddr).Port)
 +
 +	mapped := netip.MustParseAddr("8.8.8.8") // stand-in for the public/NAT IP
 +	policy := newTURNRelayPolicy(
 +		&fakeRelayAddressGenerator{conn: relay},
-+		map[netip.Addr]struct{}{mapped: {}, netip.MustParseAddr("127.0.0.1"): {}},
++		map[netip.Addr]struct{}{mapped: {}, iface: {}},
 +		[]portRange{{mediaPort, mediaPort}},
 +	)
-+	policy.interfaceIPs = map[netip.Addr]struct{}{netip.MustParseAddr("127.0.0.1"): {}}
++	// the loopback is a valid local delivery address but must never be chosen
++	// as the rewrite target: the ICE stack drops loopback remote peers.
++	policy.interfaceIPs = map[netip.Addr]struct{}{netip.MustParseAddr("127.0.0.1"): {}, iface: {}}
 +
 +	conn, _, err := policy.AllocatePacketConn(turn.AllocateListenerConfig{UserID: "PA_ld"})
 +	require.NoError(t, err)
@@ -196,6 +219,8 @@ index 0000000..a96a2e7
 +	n, _, err := mediaPeer.ReadFrom(buf)
 +	require.NoError(t, err)
 +	require.Equal(t, "delivered", string(buf[:n]))
++	// the packet arrived at the media peer listening on the interface address,
++	// i.e. the rewrite chose it over the loopback that sorts lower
 +
 +	// The same write to a non-media port on the mapped address is still
 +	// dropped by the policy, rewrite or not.
@@ -204,10 +229,25 @@ index 0000000..a96a2e7
 +	require.Error(t, err) // nothing hairpinned out through the relay socket
 +}
 +
++func TestTURNRelayPolicy_LocalDeliveryNeverRewritesToLoopback(t *testing.T) {
++	// Only a loopback interface address: no rewrite at all (the ICE stack
++	// drops loopback remote peers, so delivering there would silently break
++	// the join this patch exists to fix).
++	mapped := netip.MustParseAddr("8.8.8.8")
++	policy := &turnRelayPolicy{
++		localIPs:     map[netip.Addr]struct{}{mapped: {}, netip.MustParseAddr("127.0.0.1"): {}},
++		mediaPorts:   []portRange{{uint16(20100), uint16(20200)}},
++		interfaceIPs: map[netip.Addr]struct{}{netip.MustParseAddr("127.0.0.1"): {}},
++	}
++	dst := &net.UDPAddr{IP: net.IP(mapped.AsSlice()), Port: 20100}
++	require.Same(t, dst, policy.localDelivery(dst))
++}
++
 +func TestTURNRelayPolicy_LocalDeliveryCases(t *testing.T) {
 +	mapped := netip.MustParseAddr("8.8.8.8")
 +	iface := netip.MustParseAddr("172.21.0.2")
 +	other := netip.MustParseAddr("1.2.3.4")
++	loAddr := netip.MustParseAddr("127.0.0.1")
 +	policy := &turnRelayPolicy{
 +		localIPs:     map[netip.Addr]struct{}{mapped: {}, iface: {}},
 +		mediaPorts:   []portRange{{uint16(20100), uint16(20200)}},
@@ -222,7 +262,14 @@ index 0000000..a96a2e7
 +	same := &net.UDPAddr{IP: net.IP(iface.AsSlice()), Port: 20123}
 +	require.Same(t, same, policy.localDelivery(same))
 +
++	// the loopback is a local delivery address in its own right: unchanged
++	policy.interfaceIPs = map[netip.Addr]struct{}{iface: {}, loAddr: {}}
++	policy.localIPs[loAddr] = struct{}{}
++	lo := &net.UDPAddr{IP: net.IP(loAddr.AsSlice()), Port: 20123}
++	require.Same(t, lo, policy.localDelivery(lo))
++
 +	// another host's address: unchanged
++	policy.interfaceIPs = map[netip.Addr]struct{}{iface: {}}
 +	ext := &net.UDPAddr{IP: net.IP(other.AsSlice()), Port: 20123}
 +	require.Same(t, ext, policy.localDelivery(ext))
 +
@@ -244,7 +291,7 @@ index 0000000..a96a2e7
 +
 +func TestCollectInterfaceIPs(t *testing.T) {
 +	ips := collectInterfaceIPs()
-+	require.NotEmpty(t, ips, "a host has at least one routable interface address")
++	require.NotEmpty(t, ips, "a host has at least one interface address")
 +	for addr := range ips {
 +		require.False(t, addr.IsLinkLocalUnicast() || addr.IsUnspecified())
 +	}
