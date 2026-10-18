@@ -1,11 +1,19 @@
 # Relay policy
 
 Clients whose address falls in a range listed here get **relay-only ICE over TURN/TLS on
-:443 from the first second** of a LiveKit call, instead of trying UDP first. It is for
-networks that filter UDP media (VoIP blocking), where a call otherwise fails slowly or is
-cut after it connects. One server-side rule covers every call client: Element Web,
-Element X (embedded Element Call) and any other Element Call or livekit-client app all
-apply LiveKit's `forceRelay` and its TURN list.
+:443 from the first second** of a LiveKit call, instead of trying UDP first. One
+server-side rule covers every call client: Element Web, Element X (embedded Element
+Call) and any other Element Call or livekit-client app all apply LiveKit's `forceRelay`
+and its TURN list.
+
+Two reasons put a client here. Networks that filter UDP media (VoIP blocking), where a
+call otherwise fails slowly or is cut after it connects, and privacy: with relay-only
+ICE, call media never leaves the client as plaintext STUN, DTLS or non-443 TURN that
+on-path DPI can flag as VoIP; it rides an ordinary TLS connection through the edge, same
+certificate and same handshake profile as any other site on the host. Since
+`all.yaml` (below) matches every client, that second reason is the default every
+deployment ships. Residual, accepted: packet timing and size statistics still look like
+real-time media; padding or cover traffic would be the fix and is not built.
 
 It needs our LiveKit image (`dockerfiles/Dockerfile.livekit`, patch
 [`patches/livekit/0001-relay-policy.patch`](../../patches/livekit/README.md)) and embedded
@@ -61,4 +69,20 @@ outage cannot switch a policy off.
 
 | File | Networks |
 |---|---|
+| `all.yaml` | Every client (`0.0.0.0/0`, `::/0`): the call-media default, see below |
 | `ae-carriers.yaml` | United Arab Emirates: e& (Etisalat) AS5384, AS8966; du AS15802, AS57187 |
+
+## The catch-all
+
+`all.yaml` is not a carrier list: `/0` matches every client, so relay-only ICE over
+TURN/TLS is the default for every call, everywhere, from the first second. Its purpose is
+the privacy half of the intro, not VoIP-blocking workarounds (though it covers those
+too). It names no ASNs, so `relay-policy-refresh` leaves it alone
+("no asns, left alone"), and its `prefixes` are hand-maintained on purpose: the dir
+validation (`TestRelayPolicyValidateDir`) requires a non-empty `prefixes`, which is why
+the catch-all lives there and not in `manual_prefixes`.
+
+To revert a deployment to carrier-scoped relay (media quality on lossy links is the
+price of the TLS-only default: TCP head-of-line blocking): delete `all.yaml` from that
+deployment's policy directory. The hot reload picks it up within 30 s, no restart; an
+in-flight call keeps its ICE config until it reconnects.
