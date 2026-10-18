@@ -121,3 +121,51 @@ Dockerfile beside the relay-policy tests.
 
 **Retirement condition.** The pion/turn padding patch is retired (see its entry); then
 this knob goes with it.
+
+## 3. `0003-turn-relay-local-delivery.patch`
+
+**What.** A relayed TURN write that targets this host's own mapped address
+(its public or 1:1-NAT IP, what the SFU advertises with `use_external_ip`) on
+an RTC media port is delivered on one of this host's interface addresses
+instead, so it never leaves the host. Without it, such a write hairpins out of
+the container to the host's **published** port for the media range (docker-proxy),
+and that publish cannot be closed while relayed calls must work: a client's
+relayed ICE checks address the SFU's advertised candidate (mapped IP, media
+port), and with the catch-all relay policy every client is relay-only, so
+nothing else can carry them. This is what allows `docker-compose.yml` to
+publish no media ports at all.
+
+**How.** `turnRelayPacketConn.WriteTo` (already the choke point of every
+allocation relay write) keeps the upstream policy check and then hands the
+address to `localDelivery`: a UDP destination that is one of `localIPs` but not
+an interface address, on a media port, is rewritten to a deterministic
+interface address of the same address family (port kept). Destinations that
+are already interface addresses (the loopback included), other hosts'
+addresses, and non-media ports pass through unchanged, and an empty
+interface set disables the rewrite (fail-open to upstream behavior).
+`collectInterfaceIPs` enumerates them at TURN construction.
+
+**Why.** The 2026-10-18 port closure (compose `ports:` removal) broke relayed
+calls on dev until the media range was republished: bisected live (removal ->
+join failure, re-add -> 3-way E2EE call green), root cause docker-proxy
+hairpin. With local delivery the media range stays closed and the traffic
+shape goal holds (no UDP listener answers an external probe). POLICY.
+
+**Evidence.** Live bisect on dev-aquafire (2026-10-18): no publishes ->
+`Failed to connect to Livekit server` on join, media range republished ->
+suite green twice; the padded module unchanged in both. Tests:
+`pkg/service/turnrelay_localdelivery_test.go` (a real-socket end to end:
+mapped-IP media-port write delivered on an interface address; the same write
+to a non-media port dropped; unit cases for every non-rewrite shape; the
+interface enumerator's exclusions), run by the Dockerfile beside the other
+livekit patch tests, and upstream's `TestTURNRelayPolicy_PacketConn` /
+`TestNewTurnServer_RelayPolicy` (loopback delivery) still pass unchanged.
+
+**Upstream status.** Not filed. Upstream's embedded TURN relay policy
+(`turnRelayPolicy` in `pkg/service/turnrelay.go`) restricts relays to local
+media ports but delivers them via the host's own published ports; the rewrite
+fixes that generally and could be filed upstream.
+
+**Retirement condition.** The catch-all relay policy is retired (direct ICE
+returns, the publishes come back with it), or upstream grows its own local
+delivery for own-address relays; then drop the patch.

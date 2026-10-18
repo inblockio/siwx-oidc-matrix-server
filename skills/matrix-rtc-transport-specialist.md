@@ -105,10 +105,15 @@ lk-jwt-service:
 
 **Current state (2026-10-18):** `docker-compose.yml` publishes NONE of these ports.
 Under the catch-all relay policy (`config/relay-policy/all.yaml`) every client is
-relay-only over TURN/TLS through the edge `:443`, so direct ICE (7881/tcp), the UDP
-media range and the plain TURN UDP listener 3478 are unused; TURN relay allocations
-bind container-internal ports (`turn.relay_range` default 30000-40000). Everything
-below is the historical rationale for when a deployment still publishes them.
+relay-only over TURN/TLS through the edge `:443`, so direct ICE (7881/tcp) and the
+plain TURN UDP listener 3478 are unused, and TURN relay allocations bind
+container-internal ports (`turn.relay_range` default 30000-40000). The UDP media
+range is still USED by relayed calls (a client's relayed checks address the SFU's
+advertised candidate, mapped IP on a media port), but livekit patch 0003
+(`localDelivery`) delivers those writes on an interface address, so the publish is
+not needed; republishing the range without it would still hairpin, so the ports stay
+closed either way. Everything below is the historical rationale for when a
+deployment still publishes them.
 
 - **7881/tcp**: LiveKit WebRTC-over-TCP fallback (for clients behind strict UDP firewalls)
 - **20100-20200/udp**: WebRTC media. Must sit BELOW the Linux ephemeral range

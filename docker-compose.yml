@@ -214,14 +214,17 @@ services:
     # No host-published ports (2026-10-18). Under the catch-all relay policy
     # (config/relay-policy/all.yaml) every client is relay-only over TURN/TLS,
     # which terminates at the edge :443 (SNI split; container 5349 is internal
-    # to the proxy network), so the direct-ICE TCP port 7881, the UDP media range
-    # 20100-20200 and the plain TURN UDP listener 3478 are unused, and TURN relay
-    # allocations bind container-internal ports (turn.relay_range default
-    # 30000-40000). The ranges stay in config/livekit.yaml: they name what the
-    # SFU binds inside the container (the media-port allowlist embedded TURN
-    # relays on this host's own addresses). Removing the publishes is what
-    # closes the ports: Docker publishes bypass the host firewall (ufw), so ufw
-    # rules cannot gate them.
+    # to the proxy network), so the direct-ICE TCP port 7881 and the plain TURN
+    # UDP listener 3478 are unused, and TURN relay allocations bind
+    # container-internal ports (turn.relay_range default 30000-40000). The UDP
+    # media range 20100-20200 is still USED by relayed calls (a client's relayed
+    # checks address the SFU's advertised candidate, mapped IP on a media
+    # port), but patch 0003 delivers those writes on an interface address, so
+    # the range does not need the publish either. The ranges stay in
+    # config/livekit.yaml: they name what the SFU binds inside the container
+    # (the media-port allowlist embedded TURN relays on this host's own
+    # addresses). Removing the publishes is what closes the ports: Docker
+    # publishes bypass the host firewall (ufw), so ufw rules cannot gate them.
     volumes:
       - ./config/livekit.yaml:/etc/livekit.yaml:ro
       # The DIRECTORY, never a single policy file: a git checkout replaces a

@@ -176,7 +176,7 @@ deployment is known to run a different version.
 | Element Web serving base | `nginxinc/nginx-unprivileged:1.31.6-alpine-slim@sha256:c81a27f28bc2…` | `dockerfiles/Dockerfile.element` (runtime `FROM`) | Stock, with our `config/element-nginx.conf` and security headers |
 | siwx-oidc | default `ghcr.io/inblockio/siwx-oidc:sha-40efae9@sha256:54739f4813bf…` (CI build of siwx-oidc main at 40efae9) | `docker-compose.yml` (`SIWX_OIDC_IMAGE_REF`) | First-party, built in [inblockio/siwx-oidc](https://github.com/inblockio/siwx-oidc) |
 | Redis | `8.10.2` (`redis:8.10.2@sha256:d5ac52db24d4…`) | `docker-compose.yml` (`REDIS_IMAGE_REF`) | Stock, run with `--appendonly yes` and a password ([docs/redis-password.md](docs/redis-password.md)) |
-| LiveKit server | `v1.13.10` (`livekit/livekit-server:v1.13.10@sha256:89ca9ce0791e…`) | `docker-compose.yml` (`LIVEKIT_IMAGE_REF`) | **Own patched build** (`dockerfiles/Dockerfile.livekit`, `ARG LIVEKIT_TAG`/`LIVEKIT_COMMIT`, same tag; the [relay policy and downlink padding](patches/livekit/README.md)), published by CI as `…/livekit-server` and the compose default. A deployment that pins `LIVEKIT_IMAGE_REF` to the stock image runs that instead (both settings are then silently ignored) |
+| LiveKit server | `v1.13.10` (`livekit/livekit-server:v1.13.10@sha256:89ca9ce0791e…`) | `docker-compose.yml` (`LIVEKIT_IMAGE_REF`) | **Own patched build** (`dockerfiles/Dockerfile.livekit`, `ARG LIVEKIT_TAG`/`LIVEKIT_COMMIT`, same tag; the [relay policy, downlink padding and local delivery](patches/livekit/README.md)), published by CI as `…/livekit-server` and the compose default. A deployment that pins `LIVEKIT_IMAGE_REF` to the stock image runs that instead (those behaviors are then silently absent) |
 | pion/turn | `v5.0.13` (commit `6ab77aaaf620…`) | `dockerfiles/Dockerfile.livekit` (`ARG PION_TURN_TAG`/`PION_TURN_COMMIT`) | **Patched copy** ([downlink padding](patches/pion-turn/README.md)); the module replaces the requirement for that build only. Upstream unmodified |
 | lk-jwt-service | upstream `v0.9.0` (commit `0e176b1eca44…`), unmodified; default image `…/lk-jwt-service:sha-5190a44@sha256:c4f9d1ebde0e…` (CI build of main at 5190a44, the first build without the retired `restrict-screen-share.patch`) | `dockerfiles/Dockerfile.lk-jwt` (`ARG LK_JWT_TAG`, `ARG LK_JWT_COMMIT`); `docker-compose.yml` (`LK_JWT_IMAGE_REF`) | **Own build, no patch.** Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service`, non-root (65532). A deployment that pins `LK_JWT_IMAGE_REF` to an upstream image runs that instead |
 | Caddy | `v2.11.7` (`caddy:2.11.7-builder@sha256:d842facfd63b…`, `caddy:2.11.7@sha256:685ae3d7c34d…`) | `dockerfiles/Dockerfile.caddy-l4` (builder and final `FROM`) | **Custom build** with xcaddy and the two modules below. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/caddy-l4` |
@@ -306,6 +306,12 @@ applied with `git apply`, their tests run in the build); the image is published 
    media messages are padded up to, so a relayed call's message sizes do not reveal
    real-time media. The behaviour lives in the patched pion/turn module (below).
    POLICY.
+
+3. [`0003-turn-relay-local-delivery.patch`](patches/livekit/0003-turn-relay-local-delivery.patch):
+   a relayed write to this host's own mapped address on an RTC media port is
+   delivered on an interface address, not through the host's published port for
+   the media range, which is what allows `docker-compose.yml` to publish no
+   media ports at all. POLICY.
 
 **pion/turn (LiveKit dependency).** Registry:
 [`patches/pion-turn/README.md`](patches/pion-turn/README.md). The same
