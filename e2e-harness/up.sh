@@ -167,7 +167,7 @@ podman run -d --name siwx-e2eh-fed-proxy --network "container:siwx-e2eh-lk-jwt" 
   -v "${REPO_ROOT}/config/fed-proxy.e2e.Caddyfile:/etc/caddy/Caddyfile:ro" \
   -v "${FED_CERT_DIR}/fed.crt:/certs/fed.crt:ro" \
   -v "${FED_CERT_DIR}/fed.key:/certs/fed.key:ro" \
-  docker.io/library/caddy:2.11.4-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b >/dev/null
+  docker.io/library/caddy:2.11.7-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f >/dev/null
 
 # 9. caddy edge (publish 18080 + 18081)
 echo "[up] starting siwx-e2eh-caddy (host ${CADDY_EDGE_PORT} + ${SIWEOIDC_HOST_PORT})"
@@ -175,7 +175,7 @@ podman run -d --name siwx-e2eh-caddy --network "${NET}" --restart unless-stopped
   -p "${CADDY_EDGE_PORT}:18080" \
   -p "${SIWEOIDC_HOST_PORT}:18081" \
   -v "${REPO_ROOT}/Caddyfile.e2e:/etc/caddy/Caddyfile:ro" \
-  docker.io/library/caddy:2.11.4-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b >/dev/null
+  docker.io/library/caddy:2.11.7-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f >/dev/null
 
 echo "[up] all siwx-e2eh-* containers launched. Current state:"
 podman ps --filter "name=siwx-e2eh-" --format '  {{.Names}}\t{{.Status}}\t{{.Ports}}'

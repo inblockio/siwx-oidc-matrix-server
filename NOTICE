@@ -265,7 +265,7 @@ https://github.com/inblockio/siwx-oidc-matrix-server/tree/<revision>.
 
 Alpine packages. The element-web image is built on
 nginxinc/nginx-unprivileged:1.31.6-alpine-slim, which is Alpine Linux
-3.24.2, and the caddy-l4 image on caddy:2.11.4, which is Alpine Linux
+3.24.2, and the caddy-l4 image on caddy:2.11.7, which is Alpine Linux
 3.23.6. Their Alpine packages, BusyBox (GPL-2.0-only) among them, are
 built from the aports repository; the release tags and source archives
 are:
