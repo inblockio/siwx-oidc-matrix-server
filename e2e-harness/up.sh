@@ -37,7 +37,7 @@ LK_JWT_IMAGE_REF="${LK_JWT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/
 e2eh_ensure_images || { echo "[up] FATAL: harness images unavailable (see above)." >&2; exit 1; }
 echo "[up] siwx-oidc image: ${SIWX_OIDC_IMAGE_REF}"
 echo "[up] synapse image  : ${SYNAPSE_IMAGE_REF}"
-LIVEKIT_IMAGE_REF="${LIVEKIT_IMAGE_REF:-livekit/livekit-server:v1.13.6@sha256:e37d68f172556d02aa77968b9fc55ef481468c0315fa38e4fa6c56ce72e3a815}"
+LIVEKIT_IMAGE_REF="${LIVEKIT_IMAGE_REF:-livekit/livekit-server:v1.13.10@sha256:89ca9ce0791e18d6e03bf6e2c49ceb27e1c754eae8bd50c989386c1a5963791a}"
 
 FRESH=0
 [ "${1:-}" = "--fresh" ] && FRESH=1

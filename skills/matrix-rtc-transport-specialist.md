@@ -67,7 +67,7 @@ setting, are in `docker-compose.yml`; the points that matter:
 
 ```yaml
 livekit:
-  image: ${LIVEKIT_IMAGE_REF:-livekit/livekit-server:v1.13.7@sha256:…}   # pinned; never :latest
+  image: ${LIVEKIT_IMAGE_REF:-livekit/livekit-server:v1.13.10@sha256:…}   # pinned; never :latest
   command: --config /etc/livekit.yaml
   environment:
     LIVEKIT_KEYS: "${LIVEKIT_KEY}: ${LIVEKIT_SECRET}"
@@ -523,6 +523,21 @@ link-local) peer IPs by default (`allow_restricted_peer_cidrs` /
 `deny_peer_cidrs` in the schema, both left unset here). Our SFU advertises
 only the public node IP (the `rtc.ips.excludes` fix above ensures this), so
 the default never blocks a real client and no override is needed.
+
+livekit-server v1.13.10 (livekit#4992) tightens embedded TURN further, again with no
+action needed here:
+
+- TCP relays (RFC 6062 `Allocate` with a TCP transport) are refused (STUN error 508).
+  WebRTC clients only ask for UDP relays. Checked 2026-10-18 against v1.13.7 (allocates) and
+  v1.13.10 (refuses); a UDP allocation works on both.
+- A relay to one of the host's own addresses (its interface addresses and the node IP) is
+  delivered only to the RTC media UDP ports, `rtc.port_range_start` to `rtc.port_range_end`
+  (`rtc.udp_port` when no range is set; none at all with `rtc.force_tcp`); other packets
+  are dropped without an error. A client that relays to the SFU reaches an ICE candidate in
+  that range, so calls are unaffected. A diagnostic that relays to another port of the
+  host (7880, 3478) now silently gets nothing.
+- Carrier-grade NAT (`100.64.0.0/10`), NAT64 and a few reserved ranges join the restricted
+  peer ranges, so a peer on such an address (a tailnet address, for example) is not relayed.
 
 ## Known limitations
 

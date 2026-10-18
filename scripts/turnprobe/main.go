@@ -4,7 +4,9 @@
 // default roots).
 //
 // The credential derivation REIMPLEMENTS LiveKit's TURNAuthHandler
-// (pkg/service/turn.go at v1.12.0); it is not a copy of that code. Username:
+// (pkg/service/turn.go at v1.12.0); it is not a copy of that code. Re-checked at
+// v1.13.10: credentials minted this way are still accepted (a zero expiry is
+// not, and this tool always sends one). Username:
 // base62("<api key>|<participant id>|<unix expiry>"); password:
 // base62(sha256("<api secret>|<participant id>|<unix expiry>")); realm
 // "livekit". Re-check it against that file whenever LiveKit is bumped.
