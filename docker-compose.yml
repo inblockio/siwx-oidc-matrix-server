@@ -176,14 +176,18 @@ services:
   livekit:
     # Pinned: an unpinned :latest jumps SFU versions on any `docker compose pull`
     # (start-matrix.sh pulls on every start), which can change call behavior
-    # unannounced. Bump deliberately. Default (2026-10-18) = v1.13.10; set
-    # LIVEKIT_IMAGE_REF in .env to pin a deployment by digest. Since v1.13.8 the
-    # server rejects an unknown rtc.congestion_control.send_side_bwe_pacer value
-    # (config/livekit.yaml sets none). v1.13.10 (livekit#4992) refuses TURN TCP
-    # relays and lets embedded TURN relay to this host's own addresses only on
-    # the RTC media UDP ports (rtc.port_range_start/end), which is where an SFU
-    # candidate lives; see skills/matrix-rtc-transport-specialist.md.
-    image: ${LIVEKIT_IMAGE_REF:-livekit/livekit-server:v1.13.10@sha256:89ca9ce0791e18d6e03bf6e2c49ceb27e1c754eae8bd50c989386c1a5963791a}
+    # unannounced. Bump deliberately. Default (2026-10-18) = our CI build of
+    # v1.13.10 (livekit-server + the relay-policy patch, f343840); set
+    # LIVEKIT_IMAGE_REF in .env to pin a deployment by digest. OUR build, not
+    # stock: the relay policy below (LIVEKIT_RELAY_POLICY_DIR) exists only in
+    # dockerfiles/Dockerfile.livekit, and the stock image silently ignores it.
+    # Since v1.13.8 the server rejects an unknown
+    # rtc.congestion_control.send_side_bwe_pacer value (config/livekit.yaml sets
+    # none). v1.13.10 (livekit#4992) refuses TURN TCP relays and lets embedded
+    # TURN relay to this host's own addresses only on the RTC media UDP ports
+    # (rtc.port_range_start/end), which is where an SFU candidate lives; see
+    # skills/matrix-rtc-transport-specialist.md.
+    image: ${LIVEKIT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/livekit-server:sha-f343840@sha256:5235f64a8dafef3d4497bd9dc9e8bd1163135949e2905c16b6a281ba47845bba}
     restart: unless-stopped
     command: --config /etc/livekit.yaml
     environment:
