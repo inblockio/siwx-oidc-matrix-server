@@ -416,11 +416,12 @@ affected either way**: it's advertised correctly as
 
 `dockerfiles/Dockerfile.caddy-l4` builds Caddy via `xcaddy` with
 `github.com/mholt/caddy-l4` at commit `77044b47bccf`, whose `go.mod` pins
-`caddyserver/caddy/v2 v2.11.7` exactly — the Dockerfile's builder/final base
+`caddyserver/caddy/v2 v2.11.7` exactly, so the Dockerfile's builder/final base
 tags must match that pin (see the Dockerfile header before bumping either
-version, and for why it is a commit and not a release). Published by `.github/workflows/docker.yml` (matrix entry `image:
-caddy-l4`) to `ghcr.io/inblockio/siwx-oidc-matrix-server/caddy-l4`, so an
-edge can pull a digest-pinnable build instead of building on the host.
+version, and for why it is a commit and not a release). Published by
+`.github/workflows/docker.yml` (matrix entry `image: caddy-l4`) to
+`ghcr.io/inblockio/siwx-oidc-matrix-server/caddy-l4`, so an edge can pull a
+digest-pinnable build instead of building on the host.
 
 The edge Caddyfile's global options block carries the wrapper:
 

@@ -44,7 +44,7 @@
 # docker-compose.e2e.yml, e2e-harness/up.sh), so adding one would break local
 # dev and the e2e harness. Those stock pins follow the Caddy version below.
 #
-# VERSION-LOCK RATIONALE — caddy-l4 (verified 2026-10-18 against upstream):
+# VERSION-LOCK RATIONALE, caddy-l4 (verified 2026-10-18 against upstream):
 #   caddy-l4's go.mod pins `github.com/caddyserver/caddy/v2` at ONE exact
 #   version (not >=, not a range). xcaddy statically links whatever `caddy`
 #   module version is resolved at build time, so the builder base image's
@@ -103,7 +103,7 @@
 #     (`docker run --rm <image> caddy build-info | grep caddy-`), and
 #     `caddy version` reports v2.11.7.
 #
-#   * Both candidates BUILD and RUN against Caddy 2.11.x — each produced a
+#   * Both candidates BUILD and RUN against Caddy 2.11.x: each produced a
 #     working binary listing `layer4` AND `http.handlers.rate_limit` (on
 #     2.11.4 with caddy-l4 v0.1.2, and the pinned commit on 2.11.7). The
 #     tag is therefore NOT rejected for incompatibility; it compiles fine.
