@@ -67,14 +67,13 @@ setting, are in `docker-compose.yml`; the points that matter:
 
 ```yaml
 livekit:
-  image: ${LIVEKIT_IMAGE_REF:-livekit/livekit-server:v1.13.10@sha256:…}   # pinned; never :latest
+  image: ${LIVEKIT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/livekit-server:sha-…@sha256:…}   # own build (patches/livekit), pinned; never :latest
   command: --config /etc/livekit.yaml
   environment:
     LIVEKIT_KEYS: "${LIVEKIT_KEY}: ${LIVEKIT_SECRET}"
-  ports:
-    - "7881:7881/tcp"                    # WebRTC over TCP fallback
-    - "20100-20200:20100-20200/udp"      # WebRTC media
-    - "3478:3478/udp"                    # embedded TURN, UDP leg (TLS leg: see Embedded TURN)
+  # no ports: every client is relay-only over TURN/TLS on the edge :443 (catch-all
+  # relay policy), the SFU's ports stay container-internal. Without embedded TURN,
+  # add docker-compose.direct-media.yml (publishes 20100-20200/udp for direct ICE).
   volumes:
     - ./config/livekit.yaml:/etc/livekit.yaml:ro
 

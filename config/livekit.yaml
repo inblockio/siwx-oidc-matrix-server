@@ -5,8 +5,10 @@ rtc:
   tcp_port: 7881
   # Below the Linux ephemeral range (32768-60999) so these listeners cannot be
   # squatted by the host's own ephemeral source ports; matches
-  # config/livekit.e2e.yaml. MUST match the docker-compose.yml ports mapping,
-  # and the host firewall must allow 20100:20200/udp.
+  # config/livekit.e2e.yaml. With embedded TURN and the TLS edge (below) the
+  # range stays container-internal (no publish, docker-compose.yml); without
+  # them it must be published for direct ICE (docker-compose.direct-media.yml,
+  # same range) and allowed by the host firewall.
   port_range_start: 20100
   port_range_end: 20200
   use_external_ip: true
@@ -50,8 +52,8 @@ logging:
 # a `servers :443 { listener_wrappers { layer4 { ... } } }` block plus a dummy
 # cert-automation site for the TURN domain in that edge's Caddyfile, a DNS
 # record for the TURN domain pointing at the host, NO host publish of tls_port
-# (5349) — it must stay reachable only from the edge — and the host firewall
-# allowing 3478/udp (TURN-UDP; 5349 is edge-internal only). With external_tls
+# (5349) — it must stay reachable only from the edge. 3478/udp (TURN-UDP) needs no
+# publish under the catch-all relay policy: every client uses TURN/TLS. With external_tls
 # but no SNI-split edge in front of 443, the advertised `turns:` URL on port
 # 443 has nothing correct to land on. To enable it, set `enabled: true` and
 # `domain` to your TURN host name; skills/matrix-rtc-transport-specialist.md,

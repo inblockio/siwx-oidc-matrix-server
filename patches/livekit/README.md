@@ -188,7 +188,7 @@ in-container capture of a PASSING relayed call (meet.spec 2/2 against the
 last-good image, `pass-live.pcap`, 2026-10-18) against the failing-state
 `in3.pcap`. The docker-proxy hairpin is a symmetric NAT: the client's checks
 reach the SFU from the bridge gateway (172.21.0.1:relay-port, SNAT) and the
-SFU's answers reach the relay socket FROM THE PUBLIC IP (207.154.209.103:
+SFU's answers reach the relay socket FROM THE PUBLIC IP (<public IP>:
 media-port, conntrack-restored source), which is what both the client's TURN
 permission and its ICE remote candidate name. Revision 3 rewrote only the
 outbound leg, so the answers arrived from the container's interface address
@@ -209,16 +209,15 @@ go unanswered. One behavioral note for the closed state: LiveKit's
 `use_external_ip` STUN *validation* needs the publish's return path, so with
 the range closed the startup log shows `could not validate external IP` and
 falls back to `no external IPs found, using node IP for NAT1To1Ips` with the
-STUN-discovered `207.154.209.103` - the same advertised candidates; the old
+STUN-discovered `<public IP>` - the same advertised candidates; the old
 "grep 'using external IPs' must show one entry" check no longer applies in a
 port-closed deployment.
 
-The compose DEFAULT pin and the `docker-compose.yml` media-range publish
-stay as they are (default `sha-697233b`, patches 1-2 only; range published)
-until the v4 build is promoted deliberately: removing the publish from a
-deployment whose image predates revision 4 breaks every relayed join, so the
-default-image bump and the publish removal travel together, and prod (still
-on the morning item's `sha-f343840`, media range open) needs Tim's go.
+Promoted 2026-10-20: prod runs `sha-8529000` (revision 4) with no media
+publishes since 2026-10-19 22:23Z, and the `docker-compose.yml` default pin
+moved to the same build in the same change that removed the media-range
+publish. The two travel together: removing the publish from a deployment
+whose image predates revision 4 breaks every relayed join.
 
 **Evidence.** Live bisect on dev-aquafire (2026-10-18): no publishes ->
 `Failed to connect to Livekit server` on join, media range republished ->
@@ -230,7 +229,7 @@ answered (loopback peers dropped); revision 3's failing capture
 172.21.0.2:relay, XOR-MAPPED-ADDR=172.21.0.2, zero client answers, no DTLS
 in 80 s) against the passing capture (`pass-live.pcap`: checks in from
 172.21.0.1:relay after the docker-proxy SNAT, responses in from
-207.154.209.103:media, XOR-MAPPED-ADDR=172.21.0.1:relay, client answers
+<public IP>:media, XOR-MAPPED-ADDR=172.21.0.1:relay, client answers
 present, DTLS + RTP/RTCP flowing within seconds). Tests:
 `pkg/service/turnrelay_localdelivery_test.go` (a real-socket end to end over
 both legs: mapped-IP media-port write delivered on an interface address while

@@ -1,0 +1,15 @@
+# Opt-in override for a deployment WITHOUT embedded TURN and its TLS edge
+# (`turn.enabled: false`, the default in config/livekit.yaml). docker-compose.yml
+# publishes no LiveKit ports because, with TURN/TLS on :443, every client is
+# relay-only and the SFU's ports stay container-internal. Without TURN there is
+# no relay, so clients need direct ICE to the SFU's UDP media range: publish it
+# here and allow it in the host firewall (Docker publishes bypass ufw for the
+# container, but a host firewall in front still has to let it through).
+#
+# Use with COMPOSE_FILE=docker-compose.yml:docker-compose.direct-media.yml in
+# .env (see .env.example). The range must match rtc.port_range_start/end in
+# config/livekit.yaml exactly.
+services:
+  livekit:
+    ports:
+      - "20100-20200:20100-20200/udp"
