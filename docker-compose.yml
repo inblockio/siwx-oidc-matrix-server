@@ -176,9 +176,10 @@ services:
   livekit:
     # Pinned: an unpinned :latest jumps SFU versions on any `docker compose pull`
     # (start-matrix.sh pulls on every start), which can change call behavior
-    # unannounced. Bump deliberately. Default (2026-10-18) = our CI build of
-    # v1.13.10 (livekit-server + relay-policy and downlink-padding patches, and
-    # the pion/turn patch they build against, 697233b); set
+    # unannounced. Bump deliberately. Default (2026-10-20) = our CI build of
+    # v1.13.10 (livekit-server + relay-policy, downlink-padding and local
+    # relay delivery patches 0001-0003, and the pion/turn patch they build
+    # against, 8529000; the image prod and dev-aquafire run); set
     # LIVEKIT_IMAGE_REF in .env to pin a deployment by digest. OUR build, not
     # stock: the relay policy below (LIVEKIT_RELAY_POLICY_DIR) exists only in
     # dockerfiles/Dockerfile.livekit, and the stock image silently ignores it.
@@ -188,7 +189,7 @@ services:
     # TURN relay to this host's own addresses only on the RTC media UDP ports
     # (rtc.port_range_start/end), which is where an SFU candidate lives; see
     # skills/matrix-rtc-transport-specialist.md.
-    image: ${LIVEKIT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/livekit-server:sha-697233b@sha256:b65a2b22a5ce9995f0bde502babbe3e8a609d4609537c389c02ee3b8d7b15541}
+    image: ${LIVEKIT_IMAGE_REF:-ghcr.io/inblockio/siwx-oidc-matrix-server/livekit-server:sha-8529000@sha256:b8072d10c419b5e06cb49108c450254804e3350cbc07369ca8f95856c37451ef}
     restart: unless-stopped
     command: --config /etc/livekit.yaml
     environment:
@@ -211,30 +212,23 @@ services:
       # Unset or empty = off. Applies only to media the SERVER relays; the
       # client's own uplink is the browser's and cannot be padded here.
       LIVEKIT_TURN_DOWNLINK_PAD_BYTES: "1300"
-    # Host-published ports (revised 2026-10-18, see the turn-tls follow-up):
+    # No host-published ports (2026-10-20, as on prod and dev-aquafire):
     # under the catch-all relay policy (config/relay-policy/all.yaml) every
     # client is relay-only over TURN/TLS, which terminates at the edge :443
     # (SNI split; container 5349 is internal to the proxy network), so the
-    # direct-ICE TCP port 7881 and the plain TURN UDP listener 3478 are
-    # unused and stay closed, and TURN relay allocations bind
-    # container-internal ports (turn.relay_range default 30000-40000). But
-    # the UDP media range 20100-20200 IS still used by relayed calls: a
-    # client's relayed ICE checks address the SFU's advertised candidate
-    # (mapped IP on a media port) and those writes hairpin through this
-    # docker-proxy publish. LiveKit patch 0003 delivers them on an interface
-    # address instead and is QUALIFIED on dev (2026-10-18, revision 4 - see
-    # the 0003 registry entry), but this file's DEFAULT image pin predates
-    # patch 0003, and a deployment running a pre-0003 image needs this
-    # publish for relayed calls to work at all. So the publish - and the
-    # default pin bump that retires it - travel together in a deliberate
-    # promotion; dev-aquafire already runs the v4 image with no publish.
-    # Removing a publish is what closes a port: Docker publishes bypass the
-    # host firewall (ufw). The ranges stay in config/livekit.yaml: they name
-    # what the SFU binds inside the container (the media-port allowlist
-    # embedded TURN relays on this host's own addresses).
-    ports:
-      # Must match rtc.port_range_start/end in config/livekit.yaml exactly.
-      - "20100-20200:20100-20200/udp"
+    # direct-ICE TCP port 7881, the UDP media range 20100-20200 and the plain
+    # TURN UDP listener 3478 are unused. Relayed checks toward the SFU's media
+    # ports are delivered inside the container (livekit patch 0003, in the
+    # default image above), and TURN relay allocations bind container-internal
+    # ports (turn.relay_range default 30000-40000). Removing a publish is what
+    # closes a port: Docker publishes bypass the host firewall (ufw). The
+    # ranges stay in config/livekit.yaml: they name what the SFU binds inside
+    # the container (the media-port allowlist for embedded TURN relays on this
+    # host's own addresses).
+    # This needs embedded TURN with the TLS edge (`turn.enabled` in
+    # config/livekit.yaml, off by default). A deployment without it has no
+    # relay and must publish the media range for direct ICE: add
+    # docker-compose.direct-media.yml (COMPOSE_FILE in .env.example).
     volumes:
       - ./config/livekit.yaml:/etc/livekit.yaml:ro
       # The DIRECTORY, never a single policy file: a git checkout replaces a
