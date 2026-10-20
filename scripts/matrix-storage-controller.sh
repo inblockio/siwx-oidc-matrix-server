@@ -44,6 +44,15 @@
 # Tokens are minted per run and re-minted mid-run as they near expiry. They are
 # NEVER cached to disk and the TTL is never widened to cover a long run.
 #
+# Where the MAS shared secret comes from: a systemd credential named
+# `mas_shared_secret` when the unit passes one (the unit has a LoadCredential setting with
+# that id and $CREDENTIALS_DIRECTORY then holds it; the service manager reads the
+# file and only the unit's user can read the copy), otherwise MAS_SHARED_SECRET in
+# the stack's .env. A deployment that keeps its secrets in a root-only secret
+# store passes the credential and drops the .env line. The value is read into a
+# shell variable and only ever written to the stdin of the container exec; it
+# is in no argument vector, no exported variable and no log line.
+#
 # -----------------------------------------------------------------------------
 # FAIL-LOUD CONTRACT (the reason this rewrite exists)
 # -----------------------------------------------------------------------------
@@ -155,6 +164,12 @@ log_unprotected() {
 
 # Read one key from .env without exposing the rest of the file.
 env_get() { sed -n "s/^$1=//p" "$STACK_DIR/.env" | head -1 | sed -e 's/^"//' -e 's/"$//'; }
+
+# The file of the systemd credential `mas_shared_secret`, when the unit passes one.
+mas_credential_file() {
+  [ -n "${CREDENTIALS_DIRECTORY:-}" ] && [ -e "$CREDENTIALS_DIRECTORY/mas_shared_secret" ] || return 1
+  printf '%s' "$CREDENTIALS_DIRECTORY/mas_shared_secret"
+}
 
 now_ms() { date +%s%3N; }
 now_s() { date +%s; }
@@ -317,7 +332,7 @@ mint_admin_token() {
   fi
   if ! is_2xx "$code"; then
     log_fatal "admin-token mint REFUSED: http=$code resp=$body"
-    log_fatal "check that MAS_SHARED_SECRET in $STACK_DIR/.env matches siwx-oidc's SIWEOIDC_MAS_SHARED_SECRET"
+    log_fatal "check that the MAS shared secret (${MAS_ORIGIN:-unknown source}) matches siwx-oidc's SIWEOIDC_MAS_SHARED_SECRET"
     log_unprotected
     record_failure "mint http=$code"
     exit 3
@@ -529,15 +544,23 @@ alert_transition() {
 
 # ---- environment --------------------------------------------------------------
 load_env() {
+  local cred
   [ -f "$STACK_DIR/.env" ] || { log_fatal "$STACK_DIR/.env not found"; log_unprotected; exit 1; }
-  MAS_SECRET="$(env_get MAS_SHARED_SECRET)"
+  # MAS_ORIGIN names where the secret came from, for the error text; never the value.
+  if cred="$(mas_credential_file)"; then
+    MAS_SECRET="$(head -n 1 "$cred" | tr -d '\r')" || { log_fatal "cannot read the mas_shared_secret credential"; log_unprotected; exit 1; }
+    MAS_ORIGIN="the mas_shared_secret credential"
+  else
+    MAS_SECRET="$(env_get MAS_SHARED_SECRET)"
+    MAS_ORIGIN="MAS_SHARED_SECRET in $STACK_DIR/.env"
+  fi
   MATRIX_HOST="$(env_get MATRIX_HOST)"
   MATRIX_PORT="$(env_get MATRIX_PORT)"; MATRIX_PORT="${MATRIX_PORT:-8080}"
   ADMIN_DID="$(env_get MATRIX_ADMIN_DID)"
   ADMIN_MXID="$(env_get MATRIX_ADMIN_MXID)"
   local oidc_port; oidc_port="$(env_get SIWEOIDC_PORT)"
   OIDC_INTERNAL_URL="${OIDC_INTERNAL_URL:-http://${OIDC_SERVICE}:${oidc_port:-8081}}"
-  [ -n "$MAS_SECRET" ] || { log_fatal "MAS_SHARED_SECRET empty in $STACK_DIR/.env"; log_unprotected; exit 1; }
+  [ -n "$MAS_SECRET" ] || { log_fatal "the MAS shared secret is empty or missing ($MAS_ORIGIN)"; log_unprotected; exit 1; }
   # MATRIX_HOST builds both the local-media admin path and the notice mxid. Empty
   # yields ".../media//delete" and "@did-...:", which Synapse rejects with a
   # confusing 400/404 instead of naming the real problem. Fail on the config.

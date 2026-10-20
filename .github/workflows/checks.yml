@@ -117,3 +117,20 @@ jobs:
         env:
           SIWX_ACCEPT_SCRATCH: ${{ runner.temp }}/lk-jwt-accept
         run: scripts/lk-jwt-membership-accept.sh
+
+  # scripts/storage-controller-credential-test.sh runs the storage controller against a
+  # scratch stack with a stub `docker`: the MAS shared secret comes from the systemd
+  # credential `mas_shared_secret` when the unit passes one, else from .env, and it never
+  # reaches an argument vector or a log line.
+  storage-controller-credential:
+    name: Storage controller secret source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      # Pinned by commit, not by a movable tag; the comment names the release.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Credential, .env, both, neither
+        run: scripts/storage-controller-credential-test.sh
