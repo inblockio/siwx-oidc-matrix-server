@@ -120,8 +120,10 @@ jobs:
 
   # scripts/storage-controller-credential-test.sh runs the storage controller against a
   # scratch stack with a stub `docker`: the MAS shared secret comes from the systemd
-  # credential `mas_shared_secret` when the unit passes one, else from .env, and it never
-  # reaches an argument vector or a log line.
+  # credential `mas_shared_secret` when the unit passes credentials (an error when it
+  # passes others but not this one), else from .env, and neither it nor the admin token
+  # reaches an argument vector (the host's docker, or curl inside the container) or a log
+  # line.
   storage-controller-credential:
     name: Storage controller secret source
     runs-on: ubuntu-24.04
