@@ -77,8 +77,15 @@ COMMON_ENV=(-e "SYNAPSE_SERVER_NAME=$SERVER" -e SYNAPSE_REPORT_STATS=no -e "MATR
   -e "MATRIX_BASE_URL=http://$SERVER" -e MATRIX_PORT=8008 -e SIWEOIDC_BASE_URL=http://127.0.0.1:9)
 GROUPS_ADD=(--group-add 5001 --group-add 5002 --group-add 5003)
 
-wait_listening() { # wait_listening CONTAINER SECONDS : "Synapse now listening" appears, or the container ends
-  timeout "$2" bash -c "'$RT' logs -f '$1' 2>&1 | grep -q -m1 'Synapse now listening on TCP port 8008'"
+wait_listening() { # wait_listening CONTAINER SECONDS : "Synapse now listening" appears; false if the container ends or time runs out
+  local end=$((SECONDS + $2)) out
+  while [ "$SECONDS" -lt "$end" ]; do
+    out="$("$RT" logs "$1" 2>&1)"
+    case "$out" in *"Synapse now listening on TCP port 8008"*) return 0 ;; esac
+    [ "$("$RT" inspect -f '{{.State.Running}}' "$1" 2>/dev/null)" = true ] || return 1
+    sleep 2
+  done
+  return 1
 }
 
 # --- the store: group-only readable files in a volume ---------------------------------------
