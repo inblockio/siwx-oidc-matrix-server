@@ -1,11 +1,69 @@
 # Builds Element Web from source at a pinned tag, applies every patch in
 # patches/element-web/ (listed, in apply order, in its README.md), and serves
-# the result with the inblock.io overlay (config, theme, favicons).
+# the result with the inblock.io overlay (config, theme, favicons). The Element
+# Call embedded build that Element Web serves is built from source too, from
+# patches/element-call/ (stage `element-call`, registry entry 12).
 #
 # Why from source: the prebuilt vectorim/element-web image cannot carry source
 # patches, such as force-first-device-recovery's change to MatrixChat.tsx that
 # makes a recoverable identity (4S recovery key) mandatory on first login.
 # See docs/element-web-source-build.md.
+
+# ---------------------------------------------------------------------------
+# element-call: the Element Call embedded build that Element Web serves under
+# widgets/element-call/, built from source at a pinned tag with our patch
+# (patches/element-call/0180-bt-audio-output.patch, registry entry 12 in
+# patches/element-web/README.md).
+#
+# Why: Element Web v1.12.32 does not build Element Call. apps/web/webpack.config.ts
+# copies dist/** of the npm package @element-hq/element-call-embedded (0.26.0,
+# pinned in apps/web/package.json) into webapp/widgets/element-call/, so a patch
+# to Element Web's source cannot reach it. The patch keeps calls audible with
+# Bluetooth headsets (a Windows hands-free output rule, an audio-output guard,
+# autoplay-block reporting); entry 12 has the evidence. Stage `deps` replaces the
+# installed package's dist/ with the dist/ built here.
+#
+# What: shallow clone of the pinned tag, the patch applied, then the build
+# upstream's CI runs for the embedded package (.github/workflows/build-element-call.yaml:
+# corepack with the packageManager its package.json pins, a frozen-lockfile
+# install that ignores any pnpmfile, `pnpm run build:embedded:production`). The
+# output is dist/. Same base image as `deps` (Element Call's .node-version is 24).
+#
+# Fail loudly: the tag must resolve to the pinned commit, and the patch is applied
+# with `git apply` (no --3way), so a moved tag or a patch that stops applying fails
+# the image build instead of shipping stock or a stale copy. Element Call is
+# AGPL-3.0-only OR LicenseRef-Element-Commercial; this repository carries the
+# patch file, which is the source offer for our modification (NOTICE).
+# ---------------------------------------------------------------------------
+FROM node:24.20.0-bullseye@sha256:25f3016fcdae6b5d65bd9bcb4064b7e4198ec8d49493fa40d73f9b463d04fb15 AS element-call
+
+ARG ELEMENT_CALL_TAG=v0.26.1
+ARG ELEMENT_CALL_COMMIT=9f7c35cd8f84b12f9395e6aac56fd396a3921482
+ARG ELEMENT_CALL_VERSION=embedded-v0.26.1-aqua.0180
+
+WORKDIR /src
+
+# Shallow clone of the pinned tag, checked against its commit like the Element
+# Web clone below. Keep .git: git apply works on the checkout.
+RUN git clone --depth 1 --branch "${ELEMENT_CALL_TAG}" \
+      https://github.com/element-hq/element-call.git /src \
+    && actual="$(git -C /src rev-parse HEAD)" \
+    && if [ "$actual" != "${ELEMENT_CALL_COMMIT}" ]; then \
+         echo "FATAL: ${ELEMENT_CALL_TAG} resolves to $actual, expected ELEMENT_CALL_COMMIT=${ELEMENT_CALL_COMMIT}. Bump both together, or find out why upstream moved the tag." >&2; \
+         exit 1; \
+       fi
+
+COPY patches/element-call/0180-bt-audio-output.patch /tmp/ec-bt-audio-output.patch
+RUN git apply --verbose /tmp/ec-bt-audio-output.patch
+
+# Install exactly what the lockfile pins, as upstream's CI does. VITE_APP_VERSION
+# names the build in Element Call's own version string. The build script sets its
+# own NODE_OPTIONS heap limit; the one given here is upstream CI's. The test -s
+# lines make an empty or missing dist/ fail here, not in the copy below.
+RUN corepack enable && pnpm install --frozen-lockfile --ignore-pnpmfile
+RUN VITE_APP_VERSION="${ELEMENT_CALL_VERSION}" NODE_OPTIONS=--max-old-space-size=4096 \
+      pnpm run build:embedded:production \
+    && test -s dist/index.html && test -s dist/config.json && test -d dist/assets
 
 # ---------------------------------------------------------------------------
 # Deps, then (patch-tests | builder): clone element-web at the pinned tag, apply
@@ -182,6 +240,32 @@ RUN git apply --verbose /tmp/ew-copy-markdown.patch
 # Install exactly what the lockfile pins.
 RUN corepack enable && pnpm install --frozen-lockfile
 
+# Entry 12: serve our Element Call build, not the npm package's. webpack copies
+# <installed @element-hq/element-call-embedded>/dist/** into webapp/widgets/element-call/
+# (apps/web/webpack.config.ts), so the installed package's dist/ is replaced by the
+# one the `element-call` stage built. The directory is resolved from apps/web as
+# webpack resolves it (pnpm links the package into its store layout), not hard-coded.
+# dist/ is removed and then copied in, never overwritten file by file: pnpm
+# hard-links package files from its store, and writing through a hard link would
+# change the store's copy too. Fails the build when the installed package is not the
+# version this replaces (Element Web moved to another Element Call: rebase the
+# `element-call` stage first, entry 12), or has no dist/.
+ARG ELEMENT_CALL_STOCK_VERSION=0.26.0
+COPY --from=element-call /src/dist /tmp/element-call-dist
+RUN set -e; \
+    pkgjson="$(cd apps/web && node -p "require.resolve('@element-hq/element-call-embedded/package.json')")"; \
+    pkgdir="$(dirname "$(realpath "$pkgjson")")"; \
+    got="$(node -p "require('$pkgdir/package.json').version")"; \
+    if [ "$got" != "${ELEMENT_CALL_STOCK_VERSION}" ]; then \
+      echo "FATAL: Element Web installs @element-hq/element-call-embedded $got, this build replaces ${ELEMENT_CALL_STOCK_VERSION}. Rebase the element-call stage onto the new Element Call release (patches/element-web/README.md, entry 12)." >&2; \
+      exit 1; \
+    fi; \
+    test -d "$pkgdir/dist"; \
+    rm -rf "$pkgdir/dist"; \
+    cp -a /tmp/element-call-dist "$pkgdir/dist"; \
+    rm -rf /tmp/element-call-dist; \
+    echo "element-call-embedded: dist/ of $pkgdir replaced by the element-call stage's build"
+
 # ---------------------------------------------------------------------------
 # patch-tests: runs the unit tests our patches carry on the tree above (tag +
 # every patch + lockfile install), derived from the patches by
@@ -259,8 +343,10 @@ RUN cp /src/apps/web/config.sample.json /src/apps/web/webapp/config.json
 # discrimination record" in the registry); every row must hold in the webapp as
 # built. scripts/element-patch-markers.sh runs the same rows against a served
 # deployment. A row's path is relative to the webapp: `bundles/*/<file>` globs the
-# bundle hash, and `i18n/<name>.json` resolves through i18n/languages.json to the
-# hashed file name. A row whose file is missing counts as a missing marker.
+# bundle hash, `i18n/<name>.json` resolves through i18n/languages.json to the
+# hashed file name, and `widgets/element-call/assets/index-*.js` globs the hash of
+# the Element Call entry chunk (entry 12). A row whose file is missing counts as a
+# missing marker.
 RUN --mount=type=bind,source=patches/element-web/markers.tsv,target=/tmp/markers.tsv \
     cd /src/apps/web/webapp \
     && tab="$(printf '\t')" && rows=0 && bad=0 \

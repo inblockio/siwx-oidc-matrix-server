@@ -10,15 +10,16 @@ described below are exceptions: the Apache License does not cover them.
 Patches to upstream projects
 ----------------------------
 
-The .patch files under patches/ modify Synapse and Element Web (lk-jwt-service
-is built unmodified, see patches/lk-jwt/README.md), which are
+The .patch files under patches/ modify Synapse, Element Web and Element Call
+(lk-jwt-service is built unmodified, see patches/lk-jwt/README.md), which are
 not licensed under the Apache License. Each change in a patch is licensed
 under the license of the upstream file it changes, and a file that a patch
 adds is licensed as stated below. The registries patches/synapse/README.md,
 patches/element-web/README.md and patches/lk-jwt/README.md are this
 project's own documentation
 and fall under the Apache License. The upstream licenses below were read
-from Synapse v1.163.0, Element Web v1.12.29 and lk-jwt-service v0.9.0.
+from Synapse v1.163.0, Element Web v1.12.29, Element Call v0.26.1 and
+lk-jwt-service v0.9.0.
 
 patches/synapse/msc4133-profile-field-write-policy.patch
     AGPL-3.0-or-later. It changes synapse/config/experimental.py and
@@ -122,6 +123,20 @@ patches/element-web/*.patch
       These two files are therefore AGPL-3.0-only. Their headers do not
       say so yet.
 
+patches/element-call/0180-bt-audio-output.patch
+    Modifies Element Call (https://github.com/element-hq/element-call),
+    not Element Web; the Element Web image builds Element Call's embedded
+    widget from source with it. The Element Call files it changes carry
+    "SPDX-License-Identifier: AGPL-3.0-only OR
+    LicenseRef-Element-Commercial". The second option names Element's
+    commercial license, which only Element can grant, so the changes to
+    these files are licensed AGPL-3.0-only. The patch adds three files
+    (src/state/audioOutputGuard.ts, src/state/audioOutputGuard.test.ts and
+    src/state/headsetOutput.test.ts) whose headers read "Copyright 2026
+    Aqua Meet contributors" and the same SPDX line; they are AGPL-3.0-only
+    here as well. The patch file in this repository is the source offer
+    for the modification (patches/element-web/README.md, entry 12).
+
 
 Brand assets
 ------------
@@ -213,6 +228,11 @@ repository.
     Element Web       https://github.com/element-hq/element-web
         AGPL-3.0 or GPL-3.0 (see "Patches" above), or Element's commercial
         license. Pinned by ELEMENT_WEB_TAG and ELEMENT_WEB_COMMIT in
+        dockerfiles/Dockerfile.element.
+    Element Call      https://github.com/element-hq/element-call
+        AGPL-3.0-only (see "Patches" above), or Element's commercial
+        license. The embedded widget is built from source, pinned by
+        ELEMENT_CALL_TAG and ELEMENT_CALL_COMMIT in
         dockerfiles/Dockerfile.element.
     livekit-server    https://github.com/livekit/livekit
         Apache-2.0. Copyright 2023 LiveKit, Inc. Pinned by LIVEKIT_TAG and

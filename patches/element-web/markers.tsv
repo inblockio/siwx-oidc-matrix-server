@@ -13,6 +13,10 @@
 #                                    and element-web-app.js, not the numbered chunks (<n>.js)
 #   i18n/<name>.json                 the language file whose hashed name languages.json gives
 #                                    (i18n/en_EN.json is served as i18n/en_EN.<hash>.json)
+#   widgets/element-call/assets/index-*.js
+#                                    the entry chunk of the Element Call embedded build the
+#                                    image serves (entry 12); the `*` is the chunk hash, read
+#                                    from widgets/element-call/index.html
 #
 # Used by dockerfiles/Dockerfile.element (fails the build when a row is missing from the
 # builder's webapp), by scripts/element-patch-markers.sh (a served deployment) and by
@@ -42,3 +46,4 @@
 9	sw.js	retrying without one
 10	sw.js	retrying media request with a refreshed access token
 11	i18n/en_EN.json	copy_markdown
+12	widgets/element-call/assets/index-*.js	[aqua-meet audio output]

@@ -37,7 +37,7 @@ stores; nothing here can patch it.
 | `docker-compose.e2e.yml`, `Caddyfile.e2e`, `e2e-harness/` | Hermetic local end-to-end stack (podman). See [e2e-harness/README.md](e2e-harness/README.md). |
 | `docker-compose.override.yml.example` | Template that binds Synapse's `/data` to a dedicated volume. |
 | `dockerfiles/Dockerfile` | The Synapse image: pinned upstream base, pinned `yq`, the Synapse patches, `entrypoints/matrix_server.sh`. |
-| `dockerfiles/Dockerfile.element` | The Element Web image: clones a pinned tag, applies the Element Web patches in order, builds, serves with unprivileged nginx and the runtime overlay. |
+| `dockerfiles/Dockerfile.element` | The Element Web image: clones a pinned tag, applies the Element Web patches in order, builds, serves with unprivileged nginx and the runtime overlay. A stage `element-call` builds Element Call's embedded widget from a pinned tag with its patch and replaces the npm package's `dist/` that Element Web copies. |
 | `dockerfiles/Dockerfile.lk-jwt` | The lk-jwt-service image: upstream at a pinned commit, unmodified (no patches in `patches/lk-jwt/` at present), built `FROM scratch`, runs as 65532. |
 | `dockerfiles/Dockerfile.livekit` | The livekit-server image: upstream at a pinned commit with the patches in `patches/livekit/` (the relay policy), their tests run in the build, upstream's runtime stage. |
 | `dockerfiles/Dockerfile.caddy-l4` | Caddy built with the `layer4` and `rate_limit` modules, for an edge that splits TURN-TLS by SNI and rate-limits `GET /resolve`. |
@@ -45,7 +45,7 @@ stores; nothing here can patch it.
 | `entrypoints/matrix_server.sh` | Synapse entrypoint: writes `homeserver.yaml` (see [What runs on every boot](#what-runs-on-every-boot)), and in the optional secret store mode reads every secret from a file ([docs/synapse-secret-files.md](docs/synapse-secret-files.md)). Baked into the image, not bind-mounted. |
 | `entrypoints/element_entrypoint.sh` | Element entrypoint: templates `config.json`, favicons, the theme stylesheet link. Bind-mounted by `docker-compose.yml`. |
 | `config/` | Element config, nginx config and security headers, service-worker boot shim, theme CSS, LiveKit config, brand assets. |
-| `patches/synapse/`, `patches/element-web/` | Vendored patches and their registries (`README.md` in each). |
+| `patches/synapse/`, `patches/element-web/`, `patches/element-call/` | Vendored patches and their registries (`README.md` in the first two). The Element Call patch is built into the Element Web image and registered in `patches/element-web/README.md` (entry 12). |
 | `scripts/` | Registry, hunk and Copy Markdown vector checks and the Element patch unit tests (`element-patch-tests.sh`, run in CI), DID-field guard acceptance test, the secret store mode tests (`synapse-secret-store-accept.sh`, `synapse-secret-store-e2e.sh`, run in CI), localpart-vector check, deployment audits, the storage controller, e2e helpers. |
 | `verify-deployment.sh`, `verify-theme.sh` | Probe of a live deployment's public endpoints, read-only unless `--e2ee` (which signs in and sends a message); static theme check. |
 | `docs/` | Element theme contract, Element source build, the Copy Markdown algorithm and its conformance vectors, audits, drafts filed upstream. |
@@ -131,7 +131,9 @@ change reaches an existing deployment.
   before porting it: a patch that stops applying often means upstream merged it.
 - **An Element bump changes `ELEMENT_WEB_TAG` and `ELEMENT_WEB_COMMIT` together.** The
   build fails when the tag resolves to a different commit, so a moved upstream tag cannot
-  change what we ship. Then run registry rule 4 over every patch, in order.
+  change what we ship. Then run registry rule 4 over every patch, in order. The build
+  also fails when the new tag installs another `@element-hq/element-call-embedded` than
+  `ELEMENT_CALL_STOCK_VERSION`: rebase the `element-call` stage (registry rule 4, entry 12).
 
 ### The DID profile field (`io.inblock.did`)
 

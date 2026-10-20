@@ -1,7 +1,9 @@
 # Element Web vendored patches — the registry
 
 This directory is the **complete, canonical list of every modification we apply to
-upstream Element Web source** before building. `dockerfiles/Dockerfile.element` is the
+upstream Element Web source** before building, and to the Element Call embedded build
+that the image serves (entry 12, whose patch file lives in
+[`patches/element-call/`](../element-call/)). `dockerfiles/Dockerfile.element` is the
 single build source for the element-web image that CI publishes from `main`, and it
 applies exactly the patches listed here, each with `git apply --verbose` so **a patch
 that stops applying fails the image build loudly** — never silently at runtime.
@@ -10,6 +12,8 @@ that stops applying fails the image build loudly** — never silently at runtime
 repository. Each change is licensed like the Element Web file it changes, which for the
 code the image ships means AGPL-3.0-only OR GPL-3.0-only. A docs file, an Apache-2.0 test
 and two tests that adapt an AGPL-only harness differ; [`NOTICE`](../../NOTICE) lists them.
+Entry 12 changes Element Call, which is AGPL-3.0-only OR LicenseRef-Element-Commercial,
+so that change is AGPL-3.0-only (NOTICE).
 
 Rules of this registry:
 
@@ -95,6 +99,16 @@ Rules of this registry:
    Once they apply, re-prove the markers against the new tag's stock image (last section of
    this file): the Dockerfile fails the build on a row that no longer holds, and a row that
    stock now also carries (upstream shipped the string) no longer discriminates.
+
+   **Entry 12 is not in that loop**: it patches Element Call, not Element Web, and its patch
+   file is in `patches/element-call/`. At every bump read the version of
+   `@element-hq/element-call-embedded` in the new tag's `apps/web/package.json`. The build
+   fails when it differs from `ARG ELEMENT_CALL_STOCK_VERSION` in `deps`, so a bump cannot
+   silently serve an older Element Call than the one Element Web moved to. When it moved,
+   rebase the `element-call` stage: new `ELEMENT_CALL_TAG` and `ELEMENT_CALL_COMMIT`
+   together (`git ls-remote https://github.com/element-hq/element-call 'refs/tags/<tag>^{}'`),
+   try the patch against a fresh clone of that tag (`git apply --check`), and read the
+   retirement condition of entry 12 before forward-porting it.
 
    **4b. Upstream refresh (every tag bump, from the repo root).** First, refresh the
    upstream status of every upstream link in both registries and update each entry's
@@ -209,6 +223,7 @@ re-litigated each time someone audits the registry.
 | 9 | `sw-versions-no-cache-on-error` | The service worker never caches a failed `/versions` check, retries it anonymously, and shares one check per server. | none |
 | 10 | `sw-media-401-token-retry` | A media request that 401s with the stored token waits (5 s bound) for the app's refresh and retries once. | none |
 | 11 | `copy-markdown` | Right-click "Copy Markdown" directly above Pin: copies a text, notice or emote message as clean CommonMark + GFM, converted from `formatted_body` (no HTML emitted), instead of the lossy rendered-text copy or the JSON of View source. | none |
+| 12 | `0180-bt-audio-output` | Patch to the **Element Call** embedded build, not to Element Web (file in `patches/element-call/`, built by the `element-call` stage): calls stay audible with Bluetooth headsets. A Windows hands-free output rule, an audio-output guard that holds LiveKit's remote audio on the chosen output and replays it after device or microphone changes, and autoplay-block reporting. | none |
 
 Entry 6 is the only gated one:
 
@@ -229,14 +244,20 @@ recorded by that deployment, not here.
 
 ## Which Dockerfile applies what
 
-**One Dockerfile, all eleven patches.** `dockerfiles/Dockerfile.element` applies every
+**One Dockerfile, all twelve patches.** `dockerfiles/Dockerfile.element` applies every
 numbered patch below, in this file's order. **8 depends on 7** and **10 depends on 9**;
 each must stay after the entry it depends on (see their Order notes). **11 is applied
-last**: its `en_EN.json` hunk was generated against the tree with 1-10 applied. Until 2026-09-01 a
+last of the Element Web patches**: its `en_EN.json` hunk was generated against the tree with
+1-10 applied. **12 patches Element Call, not Element Web**: it is applied in its own build
+stage `element-call`, which precedes `deps`, to a clone of Element Call, and stage `deps`
+then replaces the `dist/` of the installed `@element-hq/element-call-embedded` package with
+that stage's build, right after `pnpm install`. It touches no Element Web file, so it is
+independent of 1-11 and of their order. Until 2026-09-01 a
 separate `dev` branch applied a different subset; that branch was merged into `main` and
 deleted, so there is a single Dockerfile.
 
-A tag bump must try every patch in this file's order.
+A tag bump must try every Element Web patch (1-11) in this file's order, and check entry 12
+as rule 4 says.
 
 ---
 
@@ -1928,6 +1949,131 @@ A tag bump must try every patch in this file's order.
   around it by settling the menu before it clicks (`settleMenu`); drop that once upstream
   fixes the clamp.
 
+### 12. `0180-bt-audio-output.patch` - UPSTREAM DEFECT, our own fix (deliberately not filed; carry until upstream fixes it)
+
+This is the only entry that is not a patch to Element Web: the file is
+[`patches/element-call/0180-bt-audio-output.patch`](../element-call/0180-bt-audio-output.patch)
+and it applies to **Element Call v0.26.1**
+(`9f7c35cd8f84b12f9395e6aac56fd396a3921482`, `element-hq/element-call`), copied byte for byte
+from the Element Call patch registry of the aqua-meet repository, where it is row `0180`.
+
+- **What:** Calls stay audible with Bluetooth headsets. Opening a headset's microphone
+  switches it from stereo to hands-free mode, which can retire the output the call plays on.
+  The patch touches media output routing only (no MatrixRTC, membership, E2EE or key code).
+  1. `state/MediaDevices.ts`: on Windows (Chrome, Edge) with no output chosen, a headset
+     whose microphone is in use plays on its **Hands-Free** output (`headsetOutputId`: the
+     output with the microphone's name, via the `communications` pseudo device when it points
+     there). No change when the default already plays there (Windows 11), for a built-in or
+     USB microphone, or off Windows; an explicit choice wins. Upstream's `selectDevice$` is
+     untouched.
+  2. New `state/audioOutputGuard.ts`, attached in `ConnectionFactory.ts` to every LiveKit room
+     (not when the host controls the devices): it holds the remote audio on Element Call's
+     chosen output; tries a failed switch once more after 1.5 s while the output is listed,
+     then falls back to the browser default, as it does when the output is no longer listed;
+     follows the choice only while the room is connected; 1.5 s after a device change, a
+     microphone change or the microphone opening (`SETTLE_MS`), puts every remote audio
+     element back on that output, assigns its stream again and plays it (on Safari only while
+     the microphone is open, otherwise it only resumes a paused element); and reports autoplay
+     blocks as `soundBlocked$` with `turnSoundOn()` (`room.startAudio()`). The "sound blocked"
+     notice that shows `soundBlocked$` is a separate aqua-meet patch (`0181`) and is **not**
+     carried here, so in this image the state is reported and nothing displays it.
+  3. Tests the patch adds or changes: `audioOutputGuard.test.ts` (11 tests, including a real
+     LiveKit `Room` under a Firefox user agent: pinned without the guard, held with it),
+     `headsetOutput.test.ts` (7), and a `localParticipant` on the mock room of
+     `ECConnectionFactory.test.ts`.
+  The patch adds three files with the header "Copyright 2026 Aqua Meet contributors" and
+  "SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial".
+- **How it reaches the image:** Element Web v1.12.32 does not build Element Call.
+  `apps/web/webpack.config.ts` (line 719) copies `dist/**` of the installed npm package
+  `@element-hq/element-call-embedded` (0.26.0, `apps/web/package.json` line 127) into
+  `apps/web/webapp/widgets/element-call/`, so a patch to Element Web's source cannot reach
+  it. `dockerfiles/Dockerfile.element` therefore has a stage `element-call` (on the base image
+  of `deps`, by digest) that shallow-clones Element Call at `ELEMENT_CALL_TAG`
+  (fails unless HEAD is `ELEMENT_CALL_COMMIT`), applies the patch with `git apply --verbose`
+  and builds the way upstream's CI builds the embedded package (`corepack enable`, the
+  `packageManager` its `package.json` pins (pnpm 11.21.0), `pnpm install --frozen-lockfile
+  --ignore-pnpmfile`, `VITE_APP_VERSION=embedded-v0.26.1-aqua.0180 pnpm run
+  build:embedded:production`). Stage `deps` copies that `dist/` in and replaces the package's
+  `dist/` with it, in the real directory of the package as resolved from `apps/web`, which is
+  how `getPackageRoot` in the webpack config finds it (pnpm's store layout, resolved, not
+  hard-coded); the directory is removed and recreated, never
+  overwritten in place, because pnpm hard-links package files from its store. The webpack
+  step is not edited: it copies what it finds, as before. The replacement fails the build
+  when the installed package's version is not `ELEMENT_CALL_STOCK_VERSION` (0.26.0).
+  **We serve v0.26.1 plus the patch where Element Web ships 0.26.0**: the patch is generated
+  against the v0.26.1 tag, and the embedded package Element Web installs is an earlier
+  Element Call release.
+- **Base delta (v0.26.0 to v0.26.1, upstream's own changes, not ours):** `git diff v0.26.0
+  v0.26.1` in element-hq/element-call is six files. `src/state/MediaDevices.ts` puts the
+  virtual default output first (element-call#4244, which the patch's Firefox case builds on),
+  `src/state/CallViewModel/CallViewModel.ts` stamps `${userId}:${deviceId}` instead of a
+  uuid as the member id outside Matrix 2.0 mode (element-call#4266), `package.json` and `pnpm-lock.yaml` move
+  `@vector-im/compound-design-tokens` from 10.2.4 to 11.0.0 (#4270), and the rest is a test
+  and a compose file. Serving this image therefore also serves those changes. Rule 4 treats a bump
+  of the embedded Element Call as a normal part of an Element Web bump; a deploy of this
+  entry needs the real-browser user check of a call like any other build.
+- **Registry placement (rule 5 asks where a delta that is not a source patch goes):** this
+  is a `.patch` file with a build stage that applies it, so it is a numbered entry here
+  (rule 1) and `scripts/check-patch-registry.sh` requires the file, this entry, the
+  Dockerfile apply step and the root README line to agree (it checks `patches/element-call/`
+  as part of this registry's list). It is not a row of "Runtime-stage deltas": the runtime
+  stage of the image is unchanged.
+- **Why:** with the stock embedded build, a call heard on a Bluetooth headset can go silent
+  when the headset's microphone opens (Windows 10: the browser default is the headset's
+  Stereo output, and Windows discards what goes there while the hands-free microphone is open)
+  or when a device change makes LiveKit re-pin the output to another device (Firefox, where
+  the default output is the empty string). Each is a defect of the combination of Windows,
+  the browser and the LiveKit client library; upstream Element Call does not handle them.
+- **Evidence:**
+  - Microsoft, "Bluetooth Classic Audio"
+    (<https://learn.microsoft.com/en-us/windows-hardware/drivers/bluetooth/bluetooth-classic-audio>):
+    on Windows 10, once an application opens the hands-free microphone, the device switches
+    into HFP mode and "any audio streaming to the stereo output is discarded"; applications
+    that need the microphone, VoIP among them, "should be configured to use the hands-free
+    endpoints". On Windows 11 the endpoints are unified. This is the rule in (1).
+  - LiveKit client-sdk-js 2.22.3 and 2.23.0, `Room.selectDefaultDevices`: on every device
+    change, when the active output is `""` (the browser default) it re-pins the output to the
+    first listed device. That undoes [element-call#4244](https://github.com/element-hq/element-call/pull/4244)
+    ("Prefer the browser default audio output when no output has been chosen", merged
+    2026-09-16) on Firefox. This is the behaviour the guard in (2) counters, and the unit test
+    with a real `Room` under a Firefox user agent reproduces it without the guard.
+  - The aqua-meet Element Call patch registry, `patches/element-call/README.md`, row `0180`,
+    has the full description and its tests: 18 unit tests (the 11 and 7 above) and the
+    aqua-meet call end-to-end specs, 74 passed; one grok second review, 2 findings, both
+    confirmed and fixed. A real Bluetooth headset cannot be driven from CI; the unit tests
+    model the device lists of a Windows 10 headset.
+  - Marker proof: "Marker discrimination record" below (2026-10-20).
+- **Upstream status:** UPSTREAM DEFECT, **deliberately not filed**: a product owner decision of
+  2026-10-20 ("our own patch, not upstream"). Rule 3 asks an UPSTREAM DEFECT to be filed and
+  linked; that step is waived here by that decision, nothing else about the class changes.
+  Nothing blocks filing later.
+- **Retirement:** upstream Element Call (and the LiveKit client it embeds) no longer pins the
+  output on a device change and routes a Windows headset's call audio to its hands-free
+  output, or Element Web moves to an embedded Element Call whose own release makes the patch
+  obsolete. Check both at every `ELEMENT_WEB_TAG` bump (rule 4): if the new tag installs an
+  Element Call newer than v0.26.1, the build fails until the stage is rebased, and the rebase
+  is the moment to test whether the patch still applies and is still needed. When the
+  patch is dropped, delete the `element-call` stage, the `deps` replacement,
+  `patches/element-call/`, the row of `markers.tsv`, the grammar line for
+  `widgets/element-call/assets/index-*.js` in the two marker scripts, and this entry's
+  README and NOTICE lines, and let Element Web's own `dist/` through again.
+- **Coverage (rule 2):** none in this repository's CI beyond the marker, and plainly so. The
+  18 unit tests belong to the patched Element Call tree, and the `Element patch unit tests`
+  job runs Element Web's tree, not Element Call's; they run in the aqua-meet repository
+  against this same patch file. There is no leg in the siwx-oidc Element suite
+  (`e2e/element/`) either. What this repository proves is that the patch applied and its
+  code reached the served bundle: the build fails on a missing marker
+  (`[aqua-meet audio output]`, the guard's logger name, a row of `markers.tsv` in
+  `widgets/element-call/assets/index-*.js`), and
+  `scripts/element-patch-markers.sh <element_url>` runs it against a deployment.
+  A follow-up that would close the gap is a second test stage that runs the three test
+  files on the Element Call tree of the `element-call` stage; it is not part of this entry.
+- **Source offer:** Element Call is AGPL-3.0-only OR LicenseRef-Element-Commercial and the
+  image conveys our modified build of it to every browser that loads it. This repository,
+  with `patches/element-call/0180-bt-audio-output.patch` and the pinned tag and commit in
+  `dockerfiles/Dockerfile.element`, is the corresponding source of the modification; it is
+  public.
+
 ## Runtime-stage deltas (not `.patch` files, still upstream deviations)
 
 | Delta | Where | Why |
@@ -2069,6 +2215,25 @@ What the table does not say, and the choices behind it:
   `element-web-app.js`, `sw.js`, `i18n/en_EN.<hash>.json`) still exist at this tag. Served
   from loopback, `element-patch-markers.sh` passes all 11 entries on the candidate, fails
   all 11 on stock, and passes all 11 on stock with `--absent 1,...,11`.
+- **Entry 12 (2026-10-20), not in the table above because it was proved on other artefacts.**
+  Its marker is `[aqua-meet audio output]`, the logger name of `state/audioOutputGuard.ts`
+  (a string literal, so it survives minification), in `widgets/element-call/assets/index-*.js`:
+  the entry chunk that `widgets/element-call/index.html` names as its module script, which
+  holds the guard because `ConnectionFactory.ts` imports it. The marker scripts resolve the
+  hash from that `index.html` (`element-patch-markers.sh`) or glob it (the Dockerfile).
+  **Candidate:** a local test build of the branch that added the entry
+  (`podman build --target builder -f dockerfiles/Dockerfile.element`, entries 1-12, not a
+  deployed artefact): the Dockerfile's loop reported 18 rows present, and the marker occurs
+  once in `index-C_xQxweS.js` (and in its source map). **Stock:** the `dist/` of
+  `@element-hq/element-call-embedded@0.26.0` from `npm pack`, which is the package Element Web
+  v1.12.32 installs and copies into `widgets/element-call/`: 0 occurrences in all 157 files,
+  including `assets/index-Bz16m3ir.js` (the two `audio output` strings in it are LiveKit
+  client warnings, not the marker). Served from loopback, `element-patch-markers.sh` passes entry 12 on the
+  candidate's webapp (all 12 entries pass), fails it on the same webapp with the stock
+  `dist/` put back, and passes it there with `--absent 12`. No baseline column: no earlier
+  build carries entries 1-11 plus a marker for 12 that was measured. The stock
+  `vectorim/element-web` image of this tag was not pulled for this entry; its Element Call
+  directory is that same npm package.
 - **To re-prove after a tag bump or a new entry:** extract `/app` of the new build and of the stock
   image for the new tag, serve each from a loopback static server, and run
   `scripts/element-patch-markers.sh --absent <every entry> http://127.0.0.1:<port>` against stock

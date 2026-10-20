@@ -26,8 +26,10 @@
 #   element-patch-markers.sh --absent 9,10,11 https://element.example.org
 #
 # Fetches: index.html (always; it names the bundle directory), i18n/languages.json
-# (only when a marker is in an i18n file; it names the hashed file) and each file a
-# marker names, once. Dependencies: bash (4+), curl, grep, mktemp.
+# (only when a marker is in an i18n file; it names the hashed file),
+# widgets/element-call/index.html (only when a marker is in the Element Call build;
+# it names the entry chunk) and each file a marker names, once.
+# Dependencies: bash (4+), curl, grep, mktemp.
 #
 # Exit code: 0 every entry passed, 1 at least one failed, 2 usage error, unreadable
 # markers file, or the deployment could not be read (connection error, timeout,
@@ -81,7 +83,7 @@ while IFS= read -r line || [ -n "$line" ]; do
   [ "${#tabs}" -eq 2 ] || die "$MARKERS:$lineno: want entry<TAB>path<TAB>string (exactly two tabs)"
   e="${line%%"$TAB"*}"; rest="${line#*"$TAB"}"; p="${rest%%"$TAB"*}"; s="${rest#*"$TAB"}"
   [[ $e =~ ^[0-9]+$ ]] || die "$MARKERS:$lineno: entry is not a number: $e"
-  [[ $p =~ ^(index\.html|sw\.js|sw-boot\.js|bundles/\*/[A-Za-z0-9_.-]+|i18n/[A-Za-z0-9_-]+\.json)$ ]] \
+  [[ $p =~ ^(index\.html|sw\.js|sw-boot\.js|bundles/\*/[A-Za-z0-9_.-]+|i18n/[A-Za-z0-9_-]+\.json|widgets/element-call/assets/index-\*\.js)$ ]] \
     || die "$MARKERS:$lineno: unsupported served path: $p"
   [ -n "$s" ] || die "$MARKERS:$lineno: empty marker string"
   [[ $s != *$'\r'* ]] || die "$MARKERS:$lineno: carriage return in marker string (CRLF file?)"
@@ -133,11 +135,12 @@ fetch_file index.html
 [ "${FSTATE[index.html]}" = ok ] || die "GET /index.html answered ${FSTATE[index.html]}: is $URL an Element Web?"
 
 BUNDLE_HASH=""
-need_bundle=0; need_i18n=0
+need_bundle=0; need_i18n=0; need_ec=0
 for p in "${M_PATH[@]}"; do
   case "$p" in
     bundles/\*/*) need_bundle=1 ;;
     i18n/*) need_i18n=1 ;;
+    widgets/element-call/assets/*) need_ec=1 ;;
   esac
 done
 if [ "$need_bundle" -eq 1 ]; then
@@ -145,6 +148,9 @@ if [ "$need_bundle" -eq 1 ]; then
 fi
 if [ "$need_i18n" -eq 1 ]; then
   fetch_file i18n/languages.json
+fi
+if [ "$need_ec" -eq 1 ]; then
+  fetch_file widgets/element-call/index.html
 fi
 
 # resolve <marker-path>: sets RESOLVED to the served path and returns 0, or sets RESOLVE_ERR
@@ -163,6 +169,11 @@ resolve() {
       f="$(grep -aoE "\"${name}\.[0-9a-f]+\.json\"" "${FLOCAL[i18n/languages.json]}" | head -n 1 | tr -d '"')"
       if [ -z "$f" ]; then RESOLVE_ERR="i18n/languages.json lists no ${name}.<hash>.json"; return 1; fi
       RESOLVED="i18n/$f" ;;
+    widgets/element-call/assets/index-\*.js)
+      if [ "${FSTATE[widgets/element-call/index.html]}" != ok ]; then RESOLVE_ERR="widgets/element-call/index.html: ${FSTATE[widgets/element-call/index.html]}"; return 1; fi
+      f="$(grep -aoE 'assets/index-[A-Za-z0-9_-]+\.js' "${FLOCAL[widgets/element-call/index.html]}" | head -n 1)"
+      if [ -z "$f" ]; then RESOLVE_ERR="widgets/element-call/index.html names no assets/index-<hash>.js"; return 1; fi
+      RESOLVED="widgets/element-call/$f" ;;
     *) RESOLVED="$p" ;;
   esac
 }
