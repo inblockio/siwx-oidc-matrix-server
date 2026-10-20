@@ -18,6 +18,12 @@
 # order, and it is load-bearing: several Element patches only apply on top of
 # an earlier one.
 #
+# A directory named in EXTRA_DIRS (patches/element-call/) is checked together with
+# the directory it is listed under: its patches are built into the same image, are
+# numbered in that directory's registry after its own entries, and are linked in the
+# same root README list. Each directory keeps its own Dockerfile order (they are
+# separate build stages), the listed one first.
+#
 # Where a directory is listed in NEEDS_MARKERS (Element Web), it also proves that
 # patches/<dir>/markers.tsv, the served-artifact markers the build and
 # scripts/element-patch-markers.sh check, is well formed, has at least one row for
@@ -49,7 +55,19 @@ declare -A OWNER=(
   # pion/turn patches are applied by the livekit-server build, which is the
   # only image that consumes the module.
   [pion-turn]=dockerfiles/Dockerfile.livekit
+  # Element Call's embedded build is built by a stage of the Element Web image.
+  [element-call]=dockerfiles/Dockerfile.element
 )
+
+# patches/<dir>/ whose patches are checked as part of another directory's list: the
+# registry is the other directory's README.md, the markers its markers.tsv.
+declare -A EXTRA_DIRS=(
+  [element-web]="element-call"
+)
+declare -A IS_EXTRA=()
+for _d in "${!EXTRA_DIRS[@]}"; do
+  for _e in ${EXTRA_DIRS[$_d]}; do IS_EXTRA[$_e]=1; done
+done
 
 # Directories whose patches must be provable in the built artifact: each needs a
 # patches/<dir>/markers.tsv with a row for every numbered registry entry.
@@ -152,7 +170,7 @@ marker_rows() {
     /^[ \t]*$/ || /^#/ { next }
     NF != 3 { printf "!line %d: want entry<TAB>path<TAB>string, found %d field(s)\n", NR, NF; next }
     $1 !~ /^[0-9]+$/ { printf "!line %d: entry \"%s\" is not a number\n", NR, $1; next }
-    $2 !~ /^(index\.html|sw\.js|sw-boot\.js|bundles\/\*\/[A-Za-z0-9_.-]+|i18n\/[A-Za-z0-9_-]+\.json)$/ {
+    $2 !~ /^(index\.html|sw\.js|sw-boot\.js|bundles\/\*\/[A-Za-z0-9_.-]+|i18n\/[A-Za-z0-9_-]+\.json|widgets\/element-call\/assets\/index-\*\.js)$/ {
       printf "!line %d: unsupported served path \"%s\"\n", NR, $2; next }
     $3 == "" { printf "!line %d: empty marker string\n", NR; next }
     { print $1 + 0 }' "$1"
@@ -172,10 +190,23 @@ for d in "${!OWNER[@]}"; do
   [ -d "patches/$d" ] || fail "OWNER maps patches/$d/, which does not exist; drop the stale entry"
 done
 
+# patches/<dir>/ of a file name, among a directory and its extras (for messages).
+where() {
+  local n="$2" x
+  for x in "$1" ${EXTRA_DIRS[$1]:-}; do
+    [ -f "patches/$x/$n" ] && { echo "patches/$x/$n"; return; }
+  done
+  echo "patches/$1/$n"
+}
+
 for dir in patches/*/; do
   d="$(basename "$dir")"
+  [ -z "${IS_EXTRA[$d]:-}" ] || continue
   before=$FAILS
-  disk="$(find "patches/$d" -maxdepth 1 -type f -name '*.patch' -printf '%f\n' | sort)"
+  alldirs="$d ${EXTRA_DIRS[$d]:-}"
+  disk="$(for x in $alldirs; do
+            if [ -d "patches/$x" ]; then find "patches/$x" -maxdepth 1 -type f -name '*.patch' -printf '%f\n'; fi
+          done | sort)"
   registry_md="patches/$d/README.md"
   df="${OWNER[$d]:-}"
 
@@ -188,14 +219,14 @@ for dir in patches/*/; do
 
   entries="$(registry_entries "$registry_md")"
   reg="$(awk '{ print $2 }' <<<"$entries" | sed '/^$/d')"
-  raw="$(applied_patches "$d" "$df")"
+  raw="$(for x in $alldirs; do applied_patches "$x" "$df"; done)"
   applied="$(sed -n 's/^A //p' <<<"$raw")"
   while IFS= read -r msg; do [ -z "$msg" ] || fail "$msg"; done < <(sed -n 's/^P //p' <<<"$raw")
-  linked="$(readme_links "$d")"
+  linked="$(for x in $alldirs; do readme_links "$x"; done)"
 
   # 1-2: disk <-> registry
-  while IFS= read -r f; do [ -z "$f" ] || fail "patches/$d/$f has no numbered entry in $registry_md"; done < <(minus "$disk" "$reg")
-  while IFS= read -r f; do [ -z "$f" ] || fail "$registry_md has an entry for $f, but patches/$d/$f does not exist"; done < <(minus "$reg" "$disk")
+  while IFS= read -r f; do [ -z "$f" ] || fail "$(where "$d" "$f") has no numbered entry in $registry_md"; done < <(minus "$disk" "$reg")
+  while IFS= read -r f; do [ -z "$f" ] || fail "$registry_md has an entry for $f, but no patches/{${alldirs// /,}}/$f exists"; done < <(minus "$reg" "$disk")
   while IFS= read -r f; do [ -z "$f" ] || fail "$registry_md has more than one entry for $f"; done < <(sed '/^$/d' <<<"$reg" | sort | uniq -d)
   want=1
   while read -r num f; do
@@ -205,13 +236,13 @@ for dir in patches/*/; do
   done <<<"$entries"
 
   # 3: disk <-> Dockerfile
-  while IFS= read -r f; do [ -z "$f" ] || fail "patches/$d/$f is not applied by $df"; done < <(minus "$disk" "$applied")
-  while IFS= read -r f; do [ -z "$f" ] || fail "$df applies patches/$d/$f, which does not exist"; done < <(minus "$applied" "$disk")
-  while IFS= read -r f; do [ -z "$f" ] || fail "$df applies patches/$d/$f more than once"; done < <(sed '/^$/d' <<<"$applied" | sort | uniq -d)
+  while IFS= read -r f; do [ -z "$f" ] || fail "$(where "$d" "$f") is not applied by $df"; done < <(minus "$disk" "$applied")
+  while IFS= read -r f; do [ -z "$f" ] || fail "$df applies patches/{${alldirs// /,}}/$f, which does not exist"; done < <(minus "$applied" "$disk")
+  while IFS= read -r f; do [ -z "$f" ] || fail "$df applies $(where "$d" "$f") more than once"; done < <(sed '/^$/d' <<<"$applied" | sort | uniq -d)
 
   # 4: disk <-> README
-  while IFS= read -r f; do [ -z "$f" ] || fail "patches/$d/$f is not listed in README.md (Upstream deviations)"; done < <(minus "$disk" "$linked")
-  while IFS= read -r f; do [ -z "$f" ] || fail "README.md links patches/$d/$f, which does not exist"; done < <(minus "$linked" "$disk")
+  while IFS= read -r f; do [ -z "$f" ] || fail "$(where "$d" "$f") is not listed in README.md (Upstream deviations)"; done < <(minus "$disk" "$linked")
+  while IFS= read -r f; do [ -z "$f" ] || fail "README.md links patches/{${alldirs// /,}}/$f, which does not exist"; done < <(minus "$linked" "$disk")
 
   # 5: registry <-> markers (served-artifact markers; spec layer L2)
   markers_note=""
@@ -251,8 +282,10 @@ for dir in patches/*/; do
   fi
 
   if [ "$FAILS" -eq "$before" ]; then
-    printf 'OK    patches/%s/: %d patch(es) registered, applied by %s and listed in README.md, in one order%s\n' \
-      "$d" "$(sed '/^$/d' <<<"$disk" | wc -l)" "$df" "$markers_note"
+    label=""
+    for x in $alldirs; do label+="${label:+ + }patches/$x/"; done
+    printf 'OK    %s: %d patch(es) registered, applied by %s and listed in README.md, in one order%s\n' \
+      "$label" "$(sed '/^$/d' <<<"$disk" | wc -l)" "$df" "$markers_note"
   fi
 done
 

@@ -1,0 +1,975 @@
+diff --git a/src/state/CallViewModel/remoteMembers/ConnectionFactory.ts b/src/state/CallViewModel/remoteMembers/ConnectionFactory.ts
+index 30ff37f..00414ef 100644
+--- a/src/state/CallViewModel/remoteMembers/ConnectionFactory.ts
++++ b/src/state/CallViewModel/remoteMembers/ConnectionFactory.ts
+@@ -28,6 +28,7 @@ import type { MediaDevices } from "../../MediaDevices.ts";
+ import type { Behavior } from "../../Behavior.ts";
+ import type { ProcessorState } from "../../../livekit/TrackProcessorContext.tsx";
+ import { getLiveKitOptions } from "../../../livekit/options.ts";
++import { guardAudioOutput } from "../../audioOutputGuard.ts";
+ import {
+   advancedCamera,
+   cameraResolution,
+@@ -87,7 +88,11 @@ export class ECConnectionFactory implements ConnectionFactory {
+         controlledAudioDevices: this.controlledAudioDevices,
+       });
+       logger.info("[ECConnectionFactory] livekit room options: ", roomOptions);
+-      return new LivekitRoom(roomOptions);
++      const room = new LivekitRoom(roomOptions);
++      // aqua-meet: keep the call audible while a Bluetooth headset changes mode (state/audioOutputGuard.ts)
++      if (!this.controlledAudioDevices)
++        guardAudioOutput(room, this.devices.audioOutput.selected$, logger);
++      return room;
+     };
+     this.livekitRoomFactory = livekitRoomFactory ?? defaultFactory;
+   }
+diff --git a/src/state/CallViewModel/remoteMembers/ECConnectionFactory.test.ts b/src/state/CallViewModel/remoteMembers/ECConnectionFactory.test.ts
+index 411ae20..4b43e61 100644
+--- a/src/state/CallViewModel/remoteMembers/ECConnectionFactory.test.ts
++++ b/src/state/CallViewModel/remoteMembers/ECConnectionFactory.test.ts
+@@ -45,6 +45,8 @@ vi.mock("livekit-client", async (importOriginal) => {
+         emit: emitter.emit.bind(emitter),
+         disconnect: vi.fn(),
+         remoteParticipants: new Map(),
++        // aqua-meet: the audio output guard listens to the local participant
++        localParticipant: new EventEmitter(),
+       } as unknown as LivekitRoom;
+     }),
+   };
+diff --git a/src/state/MediaDevices.ts b/src/state/MediaDevices.ts
+index 8ab20ac..00db9cf 100644
+--- a/src/state/MediaDevices.ts
++++ b/src/state/MediaDevices.ts
+@@ -7,9 +7,11 @@ Please see LICENSE in the repository root for full details.
+ 
+ import {
+   combineLatest,
++  distinctUntilChanged,
+   filter,
+   map,
+   type Observable,
++  of,
+   pairwise,
+   Subject,
+   switchMap,
+@@ -194,7 +196,8 @@ function selectDevice$<Label>(
+ class AudioInput implements MediaDevice<DeviceLabel, SelectedAudioInputDevice> {
+   private logger = rootLogger.getChild("[MediaDevices AudioInput]");
+ 
+-  private readonly availableRaw$: Behavior<MediaDeviceInfo[]> =
++  // aqua-meet: public, so that AudioOutput can find a headset's call output (headsetOutputId)
++  public readonly availableRaw$: Behavior<MediaDeviceInfo[]> =
+     availableRawDevices$(
+       "audioinput",
+       this.usingNames$,
+@@ -242,18 +245,82 @@ class AudioInput implements MediaDevice<DeviceLabel, SelectedAudioInputDevice> {
+   }
+ }
+ 
++const PSEUDO_DEVICE_IDS = new Set(["default", "communications", ""]);
++
++/** Whether a "default" or "communications" entry (group and "<localized prefix> - <name>" of its device) means `d`. */
++const pointsAt = (
++  pseudo: MediaDeviceInfo | undefined,
++  d: MediaDeviceInfo,
++): boolean =>
++  !!pseudo &&
++  !!d.label &&
++  pseudo.label.length > d.label.length &&
++  pseudo.label.endsWith(d.label) &&
++  (!pseudo.groupId || pseudo.groupId === d.groupId);
++
++/**
++ * aqua-meet: the output to play a call on when the microphone in use is a Bluetooth headset that Windows splits in
++ * two. Windows 10 lists such a headset as a "Stereo" output, which it makes the default device, and a "Hands-Free"
++ * output and microphone. Once the hands-free microphone is open, Windows discards everything sent to the Stereo
++ * output, so a call played on the browser default is silent. The hands-free output carries the microphone's name;
++ * that is how it is found. Returns undefined when the default output already plays there (one unified endpoint, as on
++ * Windows 11), when the microphone has no output of its own name (built-in, USB) or when not on Windows. Prefers the
++ * "communications" pseudo device when it points at that output, as the browser follows it should Windows change it.
++ */
++export function headsetOutputId(
++  outputs: MediaDeviceInfo[],
++  inputs: MediaDeviceInfo[],
++  micId: string | undefined,
++  windows: boolean = /Windows/.test(navigator.userAgent),
++): string | undefined {
++  if (!windows || micId === undefined) return undefined;
++  const selected = inputs.find((d) => d.deviceId === micId);
++  if (!selected?.label) return undefined;
++  const mic = PSEUDO_DEVICE_IDS.has(selected.deviceId)
++    ? inputs.find(
++        (d) => !PSEUDO_DEVICE_IDS.has(d.deviceId) && pointsAt(selected, d),
++      )
++    : selected;
++  if (!mic?.label) return undefined;
++  const output = outputs.find(
++    (d) => !PSEUDO_DEVICE_IDS.has(d.deviceId) && d.label === mic.label,
++  );
++  if (!output) return undefined;
++  const find = (id: string): MediaDeviceInfo | undefined =>
++    outputs.find((d) => d.deviceId === id);
++  if (pointsAt(find("default"), output)) return undefined;
++  return pointsAt(find("communications"), output)
++    ? "communications"
++    : output.deviceId;
++}
++
+ export class AudioOutput implements MediaDevice<
+   AudioOutputDeviceLabel,
+   SelectedAudioOutputDevice
+ > {
+   private logger = rootLogger.getChild("[MediaDevices AudioOutput]");
++  private readonly availableRaw$ = availableRawDevices$(
++    "audiooutput",
++    this.usingNames$,
++    this.scope,
++    this.logger,
++  );
++
++  // aqua-meet: a Windows Bluetooth headset's hands-free output, while its microphone is the one in use
++  private readonly headsetOutput$: Observable<string | undefined> = this
++    .headsetMic
++    ? combineLatest(
++        [
++          this.availableRaw$,
++          this.headsetMic.availableRaw$,
++          this.headsetMic.selected$,
++        ],
++        (outputs, inputs, mic) => headsetOutputId(outputs, inputs, mic?.id),
++      ).pipe(distinctUntilChanged())
++    : of(undefined);
++
+   public readonly available$ = this.scope.behavior(
+-    availableRawDevices$(
+-      "audiooutput",
+-      this.usingNames$,
+-      this.scope,
+-      this.logger,
+-    ).pipe(
++    this.availableRaw$.pipe(
+       map((availableRaw) => {
+         let available: Map<string, AudioOutputDeviceLabel> =
+           buildDeviceMap(availableRaw);
+@@ -286,8 +353,20 @@ export class AudioOutput implements MediaDevice<
+     ),
+   );
+ 
++  // aqua-meet: what the viewer chose if it is listed, else a Windows headset's call output, else as upstream
++  private readonly preferredId$: Observable<string | undefined> = this
++    .headsetMic
++    ? combineLatest(
++        [audioOutputSetting.value$, this.headsetOutput$, this.available$],
++        (chosen, headset, available) =>
++          chosen !== undefined && available.has(chosen)
++            ? chosen
++            : (headset ?? chosen),
++      ).pipe(distinctUntilChanged())
++    : audioOutputSetting.value$;
++
+   public readonly selected$ = this.scope.behavior(
+-    selectDevice$(this.available$, audioOutputSetting.value$).pipe(
++    selectDevice$(this.available$, this.preferredId$).pipe(
+       map((id) => {
+         if (id === undefined) {
+           return undefined;
+@@ -307,6 +386,10 @@ export class AudioOutput implements MediaDevice<
+   public constructor(
+     private readonly usingNames$: Behavior<boolean>,
+     private readonly scope: ObservableScope,
++    private readonly headsetMic?: Pick<
++      AudioInput,
++      "availableRaw$" | "selected$"
++    >,
+   ) {
+     this.available$.subscribe((available) => {
+       this.logger.info("[audio-output] available devices:", available);
+@@ -383,10 +466,14 @@ export class MediaDevices {
+     this.deviceNamesRequest$.pipe(map(() => true)),
+     false,
+   );
++  private readonly audioInputDevice = new AudioInput(
++    this.usingNames$,
++    this.scope,
++  );
+   public readonly audioInput: MediaDevice<
+     DeviceLabel,
+     SelectedAudioInputDevice
+-  > = new AudioInput(this.usingNames$, this.scope);
++  > = this.audioInputDevice;
+ 
+   public readonly audioOutput: MediaDevice<
+     AudioOutputDeviceLabel,
+@@ -404,7 +491,7 @@ export class MediaDevices {
+           this.scope,
+           this.audioOutputOptions.callIntent,
+         )
+-    : new AudioOutput(this.usingNames$, this.scope);
++    : new AudioOutput(this.usingNames$, this.scope, this.audioInputDevice);
+ 
+   public readonly videoInput: MediaDevice<DeviceLabel, SelectedDevice> =
+     new VideoInput(this.usingNames$, this.scope);
+diff --git a/src/state/audioOutputGuard.test.ts b/src/state/audioOutputGuard.test.ts
+new file mode 100644
+index 0000000..f5023ca
+--- /dev/null
++++ b/src/state/audioOutputGuard.test.ts
+@@ -0,0 +1,334 @@
++/*
++Copyright 2026 Aqua Meet contributors
++
++SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE in the repository root for full details.
++*/
++
++import { EventEmitter } from "events";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import { BehaviorSubject } from "rxjs";
++import { Room, RoomEvent, ParticipantEvent, Track } from "livekit-client";
++import { logger } from "matrix-js-sdk/lib/logger";
++
++import {
++  guardAudioOutput,
++  SETTLE_MS,
++  soundBlocked$,
++  turnSoundOn,
++} from "./audioOutputGuard";
++import { type SelectedAudioOutputDevice } from "./MediaDevices";
++
++const dev = (
++  kind: MediaDeviceKind,
++  deviceId: string,
++  label: string,
++): MediaDeviceInfo =>
++  ({ kind, deviceId, label, groupId: deviceId }) as MediaDeviceInfo;
++const flush = async (): Promise<void> => {
++  for (let i = 0; i < 20; i++) await Promise.resolve();
++};
++const choice = (id: string): SelectedAudioOutputDevice => ({
++  id,
++  virtualEarpiece: false,
++});
++
++describe("guardAudioOutput with LiveKit's own device handling (Firefox)", () => {
++  let devices: MediaDeviceInfo[];
++  beforeEach(() => {
++    vi.spyOn(navigator, "userAgent", "get").mockReturnValue(
++      "Mozilla/5.0 (X11; Linux x86_64; rv:151.0) Gecko/20100101 Firefox/151.0",
++    );
++    const mediaDevices = Object.assign(new EventTarget(), {
++      enumerateDevices: async (): Promise<MediaDeviceInfo[]> =>
++        Promise.resolve(devices),
++    });
++    Object.defineProperty(navigator, "mediaDevices", {
++      value: mediaDevices,
++      configurable: true,
++    });
++    Object.defineProperty(HTMLMediaElement.prototype, "setSinkId", {
++      value: async (): Promise<void> => {},
++      configurable: true,
++    });
++    // Firefox lists no "default" output; Element Call chooses the browser default "" (element-call#4244)
++    devices = [
++      dev("audiooutput", "bt-a2dp", "WH-1000XM4"),
++      dev("audiooutput", "laptop", "Built-in Speakers"),
++      dev("audioinput", "laptop-mic", "Built-in Mic"),
++    ];
++  });
++  afterEach(() => {
++    vi.restoreAllMocks();
++    Reflect.deleteProperty(navigator, "mediaDevices");
++    Reflect.deleteProperty(HTMLMediaElement.prototype, "setSinkId");
++  });
++
++  // The headset opens its microphone and changes mode: its output is replaced, the browser reports a device change.
++  const headsetChangesMode = async (): Promise<void> => {
++    await Room.getLocalDevices(undefined, false);
++    devices = [
++      dev("audiooutput", "bt-hfp", "WH-1000XM4 (hands-free)"),
++      dev("audiooutput", "laptop", "Built-in Speakers"),
++      dev("audioinput", "bt-hfp-mic", "WH-1000XM4 (hands-free)"),
++      dev("audioinput", "laptop-mic", "Built-in Mic"),
++    ];
++    navigator.mediaDevices.dispatchEvent(new Event("devicechange"));
++    await flush();
++  };
++
++  it("without the guard, LiveKit pins the call to the first listed output", async () => {
++    const room = new Room({ audioOutput: { deviceId: "" } });
++    await room.switchActiveDevice("audiooutput", "");
++    await headsetChangesMode();
++    expect(room.getActiveDevice("audiooutput")).toBe("bt-hfp");
++    expect(room.options.audioOutput?.deviceId).toBe("bt-hfp");
++  });
++
++  it("with the guard, the call stays on the browser default", async () => {
++    const room = new Room({ audioOutput: { deviceId: "" } });
++    guardAudioOutput(room, new BehaviorSubject(choice("")), logger);
++    await room.switchActiveDevice("audiooutput", "");
++    await headsetChangesMode();
++    expect(room.getActiveDevice("audiooutput")).toBe("");
++    // what participants who join later are given
++    expect(room.options.audioOutput?.deviceId).toBe("");
++  });
++});
++
++// A stand-in for the parts of a LiveKit room the guard uses.
++class FakeRoom extends EventEmitter {
++  public active = "default";
++  public canPlaybackAudio = true;
++  public readonly switches: string[] = [];
++  public failing = new Set<string>();
++  public readonly remoteParticipants = new Map<string, unknown>();
++  public mic: { isMuted: boolean; readyState: string } | undefined;
++  public readonly localParticipant = Object.assign(new EventEmitter(), {
++    getTrackPublication: (): unknown =>
++      this.mic && {
++        isMuted: this.mic.isMuted,
++        track: { mediaStreamTrack: { readyState: this.mic.readyState } },
++      },
++  });
++  public startAudio = vi.fn(async (): Promise<void> => {
++    this.canPlaybackAudio = true;
++    return Promise.resolve();
++  });
++  public getActiveDevice(): string {
++    return this.active;
++  }
++  public async switchActiveDevice(_kind: string, id: string): Promise<void> {
++    this.switches.push(id);
++    if (this.failing.has(id))
++      return Promise.reject(new Error(`NotFoundError ${id}`));
++    this.active = id;
++    this.emit(RoomEvent.ActiveDeviceChanged, "audiooutput", id);
++    return Promise.resolve();
++  }
++  public addElement(element: object): void {
++    const track = { attachedElements: [element] };
++    this.remoteParticipants.set(`p${this.remoteParticipants.size}`, {
++      audioTrackPublications: new Map([["a", { track }]]),
++    });
++  }
++}
++const asRoom = (r: FakeRoom): Room => r as unknown as Room;
++
++const element = (
++  paused: boolean,
++  play: () => Promise<void> = async (): Promise<void> => {},
++): {
++  srcObject: object;
++  paused: boolean;
++  sinkId: string;
++  assigned: number;
++  play: ReturnType<typeof vi.fn>;
++  setSinkId: ReturnType<typeof vi.fn>;
++} => {
++  let src: object = { stream: 1 };
++  const el = {
++    paused,
++    sinkId: "bt-a2dp",
++    assigned: 0,
++    play: vi.fn(play),
++    setSinkId: vi.fn(async (id: string): Promise<void> => {
++      el.sinkId = id;
++      return Promise.resolve();
++    }),
++    get srcObject(): object {
++      return src;
++    },
++    set srcObject(v: object) {
++      el.assigned++;
++      if (v) src = v;
++    },
++  };
++  return el;
++};
++
++describe("guardAudioOutput", () => {
++  beforeEach(() => vi.useFakeTimers());
++  afterEach(() => {
++    vi.useRealTimers();
++    Reflect.deleteProperty(window, "GestureEvent");
++  });
++
++  it("puts the call back on its output whenever something moves it", async () => {
++    const room = new FakeRoom();
++    guardAudioOutput(asRoom(room), new BehaviorSubject(choice("")), logger);
++    await flush();
++    expect(room.switches).toEqual([]); // "default" and "" both mean the browser default
++    await room.switchActiveDevice("audiooutput", "laptop");
++    await flush();
++    expect(room.active).toBe("");
++  });
++
++  it("tries a failed switch once more, then falls back to the browser default, and tries the choice again on a device change", async () => {
++    const room = new FakeRoom();
++    room.failing.add("headset");
++    guardAudioOutput(
++      asRoom(room),
++      new BehaviorSubject(choice("headset")),
++      logger,
++    );
++    await flush();
++    expect(room.switches).toEqual(["headset"]);
++    vi.advanceTimersByTime(SETTLE_MS);
++    await flush();
++    expect(room.switches).toEqual(["headset", "headset", ""]);
++    room.failing.clear();
++    room.emit(RoomEvent.MediaDevicesChanged);
++    await flush();
++    expect(room.active).toBe("headset");
++  });
++
++  it("keeps the choice when a switch fails only once (grok F1: another switch in flight)", async () => {
++    const room = new FakeRoom();
++    room.failing.add("headset");
++    guardAudioOutput(
++      asRoom(room),
++      new BehaviorSubject(choice("headset")),
++      logger,
++    );
++    await flush();
++    room.failing.clear();
++    vi.advanceTimersByTime(SETTLE_MS);
++    await flush();
++    expect(room.active).toBe("headset");
++    expect(room.switches).not.toContain("");
++  });
++
++  it("plays every remote element afresh on its output once the microphone opened", async () => {
++    const room = new FakeRoom();
++    const el = element(false);
++    room.addElement(el);
++    guardAudioOutput(asRoom(room), new BehaviorSubject(choice("")), logger);
++    room.localParticipant.emit(ParticipantEvent.LocalTrackPublished, {
++      source: Track.Source.Microphone,
++    });
++    vi.advanceTimersByTime(SETTLE_MS - 1);
++    await flush();
++    expect(el.play).not.toHaveBeenCalled();
++    vi.advanceTimersByTime(1);
++    await flush();
++    expect(el.setSinkId).toHaveBeenCalledWith("");
++    expect(el.assigned).toBe(2); // the stream was taken off and put back
++    expect(el.play).toHaveBeenCalledOnce();
++  });
++
++  it("leaves a chosen output that has gone without a device change (Firefox)", async () => {
++    Object.defineProperty(navigator, "mediaDevices", {
++      value: {
++        enumerateDevices: async (): Promise<MediaDeviceInfo[]> =>
++          Promise.resolve([dev("audiooutput", "laptop", "Built-in Speakers")]),
++      },
++      configurable: true,
++    });
++    const room = new FakeRoom();
++    guardAudioOutput(
++      asRoom(room),
++      new BehaviorSubject(choice("headset")),
++      logger,
++    );
++    await flush();
++    expect(room.active).toBe("headset");
++    room.localParticipant.emit(ParticipantEvent.LocalTrackPublished, {
++      source: Track.Source.Microphone,
++    });
++    vi.advanceTimersByTime(SETTLE_MS);
++    await flush();
++    expect(room.active).toBe("");
++    Reflect.deleteProperty(navigator, "mediaDevices");
++  });
++
++  it("settles once after a burst of device changes", async () => {
++    const room = new FakeRoom();
++    const el = element(false);
++    room.addElement(el);
++    guardAudioOutput(asRoom(room), new BehaviorSubject(choice("")), logger);
++    room.emit(RoomEvent.MediaDevicesChanged);
++    vi.advanceTimersByTime(SETTLE_MS / 2);
++    room.emit(RoomEvent.MediaDevicesChanged);
++    vi.advanceTimersByTime(SETTLE_MS);
++    await flush();
++    expect(el.play).toHaveBeenCalledOnce();
++  });
++
++  it("on Safari with the microphone closed only resumes a paused element", async () => {
++    Object.defineProperty(window, "GestureEvent", {
++      value: class {},
++      configurable: true,
++    });
++    const room = new FakeRoom();
++    const playing = element(false);
++    const paused = element(true);
++    room.addElement(playing);
++    room.addElement(paused);
++    guardAudioOutput(
++      asRoom(room),
++      new BehaviorSubject<SelectedAudioOutputDevice | undefined>(undefined),
++      logger,
++    );
++    room.emit(RoomEvent.MediaDevicesChanged);
++    vi.advanceTimersByTime(SETTLE_MS);
++    await flush();
++    expect(playing.play).not.toHaveBeenCalled();
++    expect(paused.play).toHaveBeenCalledOnce();
++    expect(paused.assigned).toBe(0);
++    expect(paused.setSinkId).not.toHaveBeenCalled(); // Safari: Element Call chooses no output
++  });
++
++  it("reports a blocked call and lets a click turn the sound on", async () => {
++    const room = new FakeRoom();
++    const notAllowed = Object.assign(new Error("blocked"), {
++      name: "NotAllowedError",
++    });
++    room.addElement(element(true, async () => Promise.reject(notAllowed)));
++    guardAudioOutput(asRoom(room), new BehaviorSubject(choice("")), logger);
++    room.emit(RoomEvent.MediaDevicesChanged);
++    vi.advanceTimersByTime(SETTLE_MS);
++    await flush();
++    expect(soundBlocked$.value).toBe(true);
++    turnSoundOn();
++    await flush();
++    expect(room.startAudio).toHaveBeenCalledOnce();
++    expect(soundBlocked$.value).toBe(false);
++  });
++
++  it("follows the choice only while connected and LiveKit's playback status", () => {
++    const room = new FakeRoom();
++    const selected$ = new BehaviorSubject(choice(""));
++    guardAudioOutput(asRoom(room), selected$, logger);
++    // grok F2: a room that never connects keeps no subscription
++    expect(selected$.observed).toBe(false);
++    room.emit(RoomEvent.Connected);
++    expect(selected$.observed).toBe(true);
++    room.canPlaybackAudio = false;
++    room.emit(RoomEvent.AudioPlaybackStatusChanged, false);
++    expect(soundBlocked$.value).toBe(true);
++    room.emit(RoomEvent.Disconnected);
++    expect(soundBlocked$.value).toBe(false);
++    expect(selected$.observed).toBe(false);
++  });
++});
+diff --git a/src/state/audioOutputGuard.ts b/src/state/audioOutputGuard.ts
+new file mode 100644
+index 0000000..377091e
+--- /dev/null
++++ b/src/state/audioOutputGuard.ts
+@@ -0,0 +1,229 @@
++/*
++Copyright 2026 Aqua Meet contributors
++
++SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE in the repository root for full details.
++*/
++
++import {
++  type LocalTrackPublication,
++  ParticipantEvent,
++  type RemoteAudioTrack,
++  type Room,
++  RoomEvent,
++  Track,
++} from "livekit-client";
++import { BehaviorSubject, type Subscription } from "rxjs";
++import { type Logger } from "matrix-js-sdk/lib/logger";
++
++import { type SelectedAudioOutputDevice } from "./MediaDevices";
++import { type Behavior } from "./Behavior";
++
++/** How long a headset takes to settle in its new mode before the call is played afresh. */
++export const SETTLE_MS = 1500;
++
++/** True while the browser refuses to play the call's sound until the viewer clicks (see turnSoundOn). */
++export const soundBlocked$ = new BehaviorSubject<boolean>(false);
++const blockedRooms = new Set<Room>();
++const setBlocked = (room: Room, blocked: boolean): void => {
++  if (blocked) blockedRooms.add(room);
++  else blockedRooms.delete(room);
++  if (soundBlocked$.value !== blockedRooms.size > 0)
++    soundBlocked$.next(blockedRooms.size > 0);
++};
++
++/** For a click handler: asks every call whose sound the browser blocked to play it. */
++export function turnSoundOn(): void {
++  for (const room of blockedRooms) {
++    void room.startAudio().then(() => setBlocked(room, !room.canPlaybackAudio));
++  }
++}
++
++// "" and "default" both mean the browser's default output (Firefox and Safari know only "")
++const isDefault = (id: string | undefined): boolean =>
++  id === "" || id === "default";
++const same = (a: string | undefined, b: string | undefined): boolean =>
++  a === b || (isDefault(a) && isDefault(b));
++// eslint-disable-next-line @typescript-eslint/no-explicit-any
++const isSafari = (): boolean => !!(window as any).GestureEvent; // as in MediaDevices.ts
++
++/**
++ * aqua-meet: keeps a call audible while a Bluetooth headset changes mode. Opening a headset's microphone switches it
++ * from its stereo mode to its hands-free mode, closing it switches it back, and either switch can retire the output
++ * the call plays on. For one LiveKit room the guard
++ * - holds the remote audio on the output Element Call chose (`selected$`: the browser default unless the viewer
++ *   picked one). LiveKit itself moves it to the first listed device on every device change when the choice is the
++ *   browser default "" (Firefox), and an output pinned like that stays silent once the headset changes mode;
++ * - tries a failed switch once more after a pause while the output is listed (another switch can be in flight),
++ *   and falls back to the browser default when the output cannot be used or has gone;
++ * - plays the call afresh on its output once a device change, a microphone change or the microphone opening has
++ *   settled, as a player can go on feeding an output that went away;
++ * - reports when the browser refuses to play the call's sound without a click (soundBlocked$).
++ * It follows `selected$` while the room is connected; a room that never connects keeps no subscription.
++ */
++export function guardAudioOutput(
++  room: Room,
++  selected$: Behavior<SelectedAudioOutputDevice | undefined>,
++  logger: Logger,
++): void {
++  const log = logger.getChild("[aqua-meet audio output]");
++  // What Element Call chose; what the guard holds the room on (the choice, or the default once it failed).
++  let chosen = selected$.value?.id;
++  let held = chosen;
++  // A switch to a listed output failed once; the next failure gives up on it.
++  let retried = false;
++  let timer: ReturnType<typeof setTimeout> | undefined;
++  let subscription: Subscription | undefined;
++
++  // Whether an output is still there. Firefox can lose one without a device change (a headset changing mode), and
++  // setSinkId does not fail for the id an element already has, so the list is asked.
++  const listed = async (id: string): Promise<boolean> => {
++    if (isDefault(id) || id === "communications") return true;
++    const devices = await navigator.mediaDevices
++      ?.enumerateDevices?.()
++      .catch(() => undefined);
++    return (
++      !devices ||
++      devices.some((d) => d.kind === "audiooutput" && d.deviceId === id)
++    );
++  };
++
++  const fallBack = async (target: string, e: unknown): Promise<void> => {
++    log.warn(`output ${target} cannot be used, using the browser default`, e);
++    held = "";
++    retried = false;
++    await room
++      .switchActiveDevice("audiooutput", "")
++      .catch((e2: unknown) => log.error("the browser default failed too", e2));
++  };
++
++  const hold = async (): Promise<void> => {
++    const target = held;
++    if (
++      target === undefined ||
++      same(room.getActiveDevice("audiooutput"), target)
++    )
++      return;
++    try {
++      await room.switchActiveDevice("audiooutput", target);
++      retried = false;
++    } catch (e) {
++      if (isDefault(target) || held !== target) return;
++      if (!retried && (await listed(target))) {
++        retried = true;
++        log.warn(`switching to output ${target} failed, trying again`, e);
++        settle("a failed switch");
++      } else {
++        await fallBack(target, e);
++      }
++    }
++  };
++
++  const micLive = (): boolean => {
++    const mic = room.localParticipant.getTrackPublication(
++      Track.Source.Microphone,
++    );
++    return (
++      !!mic && !mic.isMuted && mic.track?.mediaStreamTrack.readyState === "live"
++    );
++  };
++
++  // Each remote audio element: back on the held output, its stream assigned again (so the browser opens the output
++  // afresh) and played. Safari plays without a click only while the microphone is open, so there it only resumes.
++  const replay = (): void => {
++    const restart = !isSafari() || micLive();
++    for (const participant of room.remoteParticipants.values()) {
++      for (const publication of participant.audioTrackPublications.values()) {
++        const track = publication.track as RemoteAudioTrack | undefined;
++        for (const element of track?.attachedElements ?? []) {
++          const sinkElement = element as HTMLMediaElement & {
++            sinkId?: string;
++            setSinkId?: (id: string) => Promise<void>;
++          };
++          if (
++            held !== undefined &&
++            sinkElement.setSinkId &&
++            !same(sinkElement.sinkId, held)
++          )
++            sinkElement.setSinkId(held).catch((e: unknown) => {
++              log.warn(`could not put an element on output ${held}`, e);
++            });
++          if (restart && element.srcObject) {
++            const stream = element.srcObject;
++            element.srcObject = null;
++            element.srcObject = stream;
++          }
++          if (restart || element.paused)
++            element.play().catch((e: unknown) => {
++              if ((e as Error | undefined)?.name === "NotAllowedError")
++                setBlocked(room, true);
++            });
++        }
++      }
++    }
++  };
++
++  // Some time after a change: the choice again (unless it has gone), held, and every element played afresh.
++  function settle(why: string): void {
++    clearTimeout(timer);
++    timer = setTimeout(() => {
++      log.info(`playing the call afresh after ${why}`);
++      const target = chosen;
++      void (async (): Promise<void> => {
++        const there = target === undefined || (await listed(target));
++        if (chosen !== target) return; // a newer choice holds itself
++        if (!there)
++          log.warn(`output ${target} is gone, using the browser default`);
++        held = there ? target : "";
++        await hold();
++        replay();
++      })();
++    }, SETTLE_MS);
++  }
++
++  void hold();
++
++  room
++    .on(RoomEvent.ActiveDeviceChanged, (kind: MediaDeviceKind, id: string) => {
++      if (kind === "audiooutput") {
++        if (held !== undefined && !same(id, held)) {
++          log.info(`LiveKit moved the output to ${id}, holding ${held}`);
++          void hold();
++        }
++      } else if (kind === "audioinput") {
++        settle("a microphone change");
++      }
++    })
++    .on(RoomEvent.MediaDevicesChanged, () => {
++      // a device came or went: try the choice again (it may be back), then hold whatever can be used
++      held = chosen;
++      void hold();
++      settle("a device change");
++    })
++    .on(RoomEvent.AudioPlaybackStatusChanged, () =>
++      setBlocked(room, !room.canPlaybackAudio),
++    )
++    .on(RoomEvent.Connected, () => {
++      subscription ??= selected$.subscribe((device) => {
++        chosen = device?.id;
++        held = chosen;
++        retried = false;
++        void hold();
++      });
++    })
++    .on(RoomEvent.Disconnected, () => {
++      subscription?.unsubscribe();
++      subscription = undefined;
++      clearTimeout(timer);
++      setBlocked(room, false);
++    });
++
++  // The microphone stays open while muted (stopMicTrackOnMute: false), so the headset changes mode when it opens.
++  room.localParticipant.on(
++    ParticipantEvent.LocalTrackPublished,
++    (publication: LocalTrackPublication) => {
++      if (publication.source === Track.Source.Microphone)
++        settle("the microphone opened");
++    },
++  );
++}
+diff --git a/src/state/headsetOutput.test.ts b/src/state/headsetOutput.test.ts
+new file mode 100644
+index 0000000..2787071
+--- /dev/null
++++ b/src/state/headsetOutput.test.ts
+@@ -0,0 +1,183 @@
++/*
++Copyright 2026 Aqua Meet contributors
++
++SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE in the repository root for full details.
++*/
++
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import * as ComponentsCore from "@livekit/components-core";
++
++import { ObservableScope } from "./ObservableScope";
++import { AudioOutput, headsetOutputId } from "./MediaDevices";
++import { audioOutput as audioOutputSetting } from "../settings/settings";
++import { withTestScheduler } from "../utils/test";
++
++const dev = (
++  kind: MediaDeviceKind,
++  deviceId: string,
++  label: string,
++  groupId: string,
++): MediaDeviceInfo => ({ kind, deviceId, label, groupId }) as MediaDeviceInfo;
++
++// Chrome on Windows 10 with a Sony headset: Windows splits it into a Stereo and a Hands-Free endpoint.
++const STEREO = dev("audiooutput", "s1", "Headphones (WH-1000XM4 Stereo)", "gS");
++const HANDS_FREE = dev(
++  "audiooutput",
++  "h1",
++  "Headset (WH-1000XM4 Hands-Free AG Audio)",
++  "gH",
++);
++const SPEAKERS = dev("audiooutput", "r1", "Speakers (Realtek(R) Audio)", "gR");
++const HF_MIC = dev(
++  "audioinput",
++  "m1",
++  "Headset (WH-1000XM4 Hands-Free AG Audio)",
++  "gH",
++);
++const LAPTOP_MIC = dev(
++  "audioinput",
++  "m2",
++  "Microphone Array (Realtek(R) Audio)",
++  "gR",
++);
++const as = (
++  id: "default" | "communications",
++  d: MediaDeviceInfo,
++  prefix = id === "default" ? "Default" : "Communications",
++): MediaDeviceInfo => ({ ...d, deviceId: id, label: `${prefix} - ${d.label}` });
++
++const WIN10_OUTPUTS = [
++  as("default", STEREO),
++  as("communications", HANDS_FREE),
++  STEREO,
++  HANDS_FREE,
++  SPEAKERS,
++];
++const WIN10_INPUTS = [
++  as("default", HF_MIC),
++  as("communications", HF_MIC),
++  HF_MIC,
++  LAPTOP_MIC,
++];
++
++describe("headsetOutputId", () => {
++  it("plays on the hands-free output while the headset's microphone is in use (Windows 10)", () => {
++    expect(headsetOutputId(WIN10_OUTPUTS, WIN10_INPUTS, "default", true)).toBe(
++      "communications",
++    );
++    // chosen by its own id, too
++    expect(headsetOutputId(WIN10_OUTPUTS, WIN10_INPUTS, "m1", true)).toBe(
++      "communications",
++    );
++  });
++
++  it("uses the hands-free output itself when communications points elsewhere", () => {
++    const outputs = [
++      as("default", STEREO),
++      as("communications", SPEAKERS),
++      STEREO,
++      HANDS_FREE,
++      SPEAKERS,
++    ];
++    expect(headsetOutputId(outputs, WIN10_INPUTS, "default", true)).toBe("h1");
++  });
++
++  it("reads localized prefixes", () => {
++    const outputs = [
++      as("default", STEREO, "Standard"),
++      as("communications", HANDS_FREE, "Kommunikation"),
++      STEREO,
++      HANDS_FREE,
++    ];
++    const inputs = [as("default", HF_MIC, "Standard"), HF_MIC];
++    expect(headsetOutputId(outputs, inputs, "default", true)).toBe(
++      "communications",
++    );
++  });
++
++  it("leaves the default alone with the laptop microphone and the headset as stereo headphones", () => {
++    const inputs = [as("default", LAPTOP_MIC), HF_MIC, LAPTOP_MIC];
++    expect(headsetOutputId(WIN10_OUTPUTS, inputs, "default", true)).toBe(
++      undefined,
++    );
++  });
++
++  it("leaves the default alone when it already plays on the headset (Windows 11, one endpoint)", () => {
++    const out = dev("audiooutput", "u1", "Headset (WH-1000XM4)", "gU");
++    const mic = dev("audioinput", "u2", "Headset (WH-1000XM4)", "gU");
++    expect(
++      headsetOutputId(
++        [as("default", out), as("communications", out), out, SPEAKERS],
++        [as("default", mic), mic],
++        "default",
++        true,
++      ),
++    ).toBe(undefined);
++  });
++
++  it("does nothing off Windows, without a microphone or without names", () => {
++    expect(headsetOutputId(WIN10_OUTPUTS, WIN10_INPUTS, "default", false)).toBe(
++      undefined,
++    );
++    expect(headsetOutputId(WIN10_OUTPUTS, WIN10_INPUTS, undefined, true)).toBe(
++      undefined,
++    );
++    const blank = (d: MediaDeviceInfo): MediaDeviceInfo => ({
++      ...d,
++      label: "",
++    });
++    expect(
++      headsetOutputId(
++        WIN10_OUTPUTS.map(blank),
++        WIN10_INPUTS.map(blank),
++        "default",
++        true,
++      ),
++    ).toBe(undefined);
++  });
++});
++
++vi.mock("@livekit/components-core", () => ({
++  createMediaDeviceObserver: vi.fn(),
++}));
++
++describe("AudioOutput with a Windows headset", () => {
++  let testScope: ObservableScope;
++
++  beforeEach(() => {
++    testScope = new ObservableScope();
++    audioOutputSetting.setValue(undefined);
++    vi.spyOn(navigator, "userAgent", "get").mockReturnValue(
++      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/141.0.0.0 Safari/537.36",
++    );
++  });
++
++  afterEach(() => {
++    testScope.end();
++    vi.restoreAllMocks();
++  });
++
++  it("selects the hands-free output while nothing is chosen, and a choice still wins", () => {
++    withTestScheduler(({ behavior, cold, schedule, expectObservable }) => {
++      vi.mocked(ComponentsCore.createMediaDeviceObserver).mockReturnValue(
++        cold("a", { a: WIN10_OUTPUTS }),
++      );
++      const audioOutput = new AudioOutput(
++        behavior("a", { a: true }),
++        testScope,
++        {
++          availableRaw$: behavior("a", { a: WIN10_INPUTS }),
++          selected$: behavior("a", {
++            a: { id: "default", hardwareDeviceChange$: cold("") },
++          }),
++        },
++      );
++      schedule("--a", { a: () => audioOutput.select(SPEAKERS.deviceId) });
++      expectObservable(audioOutput.selected$).toBe("a-b", {
++        a: { id: "communications", virtualEarpiece: false },
++        b: { id: SPEAKERS.deviceId, virtualEarpiece: false },
++      });
++    });
++  });
++});
