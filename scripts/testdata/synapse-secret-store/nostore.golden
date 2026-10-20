@@ -1,0 +1,128 @@
+### homeserver.yaml (first boot)
+# Configuration file for Synapse.
+server_name: "example.org"
+pid_file: /data/homeserver.pid
+listeners:
+  - port: 8008
+    tls: false
+    type: http
+    x_forwarded: true
+    resources:
+      - names: [client, federation]
+        compress: false
+database:
+  name: sqlite3
+  args:
+    database: /data/homeserver.db
+log_config: "/data/log.config"
+media_store_path: /data/media_store
+registration_shared_secret: "<redacted>"
+report_stats: false
+macaroon_secret_key: "<redacted>"
+form_secret: "<redacted>"
+signing_key_path: "/data/signing.key"
+trusted_key_servers:
+  - server_name: "matrix.org"
+public_baseurl: https://example.org
+serve_server_wellknown: false
+retention:
+  enabled: false
+server_notices:
+  system_mxid_localpart: notices
+  system_mxid_display_name: example.org storage alerts
+  room_name: Server Alerts
+matrix_authentication_service:
+  enabled: true
+  endpoint: https://auth.example.org
+  secret: <redacted>
+experimental_features:
+  msc4108_enabled: true
+  msc4143_enabled: true
+  msc3266_enabled: true
+  msc4222_enabled: true
+  msc4502_enabled: true
+  msc4133_key_denylist:
+    - io.inblock.did
+max_event_delay_duration: 24h
+rc_delayed_event_mgmt:
+  per_second: 1
+  burst_count: 20
+rc_message:
+  per_second: 0.5
+  burst_count: 30
+matrix_rtc:
+  transports:
+    - type: livekit
+      livekit_service_url: https://example.org/livekit/jwt
+app_service_config_files:
+  - /data/lk-jwt-as.yaml
+### lk-jwt-as.yaml (first boot)
+id: lk-jwt-service
+as_token: "<redacted>"
+hs_token: "<redacted>"
+sender_localpart: _lk_jwt_service
+url: null
+namespaces:
+  users:
+    - exclusive: false
+      regex: '^@[^:]+:example\.org$'
+io.element.msc4502.scopes:
+  - "urn:matrix:client:io.element.msc4502:rooms:is_joined"
+### homeserver.yaml (second boot)
+# Configuration file for Synapse.
+server_name: "example.org"
+pid_file: /data/homeserver.pid
+listeners:
+  - port: 8008
+    tls: false
+    type: http
+    x_forwarded: true
+    resources:
+      - names: [client, federation]
+        compress: false
+database:
+  name: sqlite3
+  args:
+    database: /data/homeserver.db
+log_config: "/data/log.config"
+media_store_path: /data/media_store
+registration_shared_secret: "<redacted>"
+report_stats: false
+macaroon_secret_key: "<redacted>"
+form_secret: "<redacted>"
+signing_key_path: "/data/signing.key"
+trusted_key_servers:
+  - server_name: "matrix.org"
+public_baseurl: https://example.org
+serve_server_wellknown: false
+retention:
+  enabled: false
+server_notices:
+  system_mxid_localpart: notices
+  system_mxid_display_name: example.org storage alerts
+  room_name: Server Alerts
+matrix_authentication_service:
+  enabled: true
+  endpoint: https://auth.example.org
+  secret: <redacted>
+experimental_features:
+  msc4108_enabled: true
+  msc4143_enabled: true
+  msc3266_enabled: true
+  msc4222_enabled: true
+  msc4502_enabled: true
+  msc4133_key_denylist:
+    - io.inblock.did
+max_event_delay_duration: 24h
+rc_delayed_event_mgmt:
+  per_second: 1
+  burst_count: 20
+rc_message:
+  per_second: 0.5
+  burst_count: 30
+matrix_rtc:
+  transports:
+    - type: livekit
+      livekit_service_url: https://example.org/livekit/jwt
+app_service_config_files:
+  - /data/lk-jwt-as.yaml
