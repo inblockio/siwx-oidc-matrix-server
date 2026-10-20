@@ -44,12 +44,13 @@ command -v python3 >/dev/null || { echo "need python3" >&2; exit 2; }
 P="p2e-$$-$RANDOM"
 T="${XDG_CACHE_HOME:-$HOME/.cache}/siwx-synapse-secret-store-e2e/$P"   # logs of this run, on disk, never tmpfs
 mkdir -p "$T"
-VOLS=(); CTRS=()
+CTRS=()
 cleanup() {
   local c v
   rm -rf "$T"
   for c in "${CTRS[@]:-}"; do [ -z "$c" ] || "$RT" rm -f "$c" >/dev/null 2>&1; done
-  for v in "${VOLS[@]:-}"; do [ -z "$v" ] || "$RT" volume rm -f "$v" >/dev/null 2>&1; done
+  # By name prefix: vol() runs in a command substitution, so it cannot extend an array here.
+  for v in $("$RT" volume ls -q 2>/dev/null | grep "^${P}-"); do "$RT" volume rm -f "$v" >/dev/null 2>&1; done
 }
 trap cleanup EXIT
 
@@ -67,7 +68,7 @@ leaks_in() { # leaks_in FILE : a throwaway value is in the file
   local v; for v in "${VALUES[@]}"; do grep -qF -- "$v" "$1" && return 0; done; return 1
 }
 
-vol() { local v="$P-$1"; "$RT" volume create "$v" >/dev/null && VOLS+=("$v"); echo "$v"; }
+vol() { local v="$P-$1"; "$RT" volume create "$v" >/dev/null; echo "$v"; }
 # helper IMG-as-root with the given mounts; stdin script via -c
 helper() { "$RT" run --rm --network none --user 0 --entrypoint sh "$@"; }
 
