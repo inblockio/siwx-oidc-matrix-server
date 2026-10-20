@@ -294,6 +294,7 @@ docker build --target patch-tests -f dockerfiles/Dockerfile.element .  # unit te
 ./verify-theme.sh                        # static theme invariants
 node --test scripts/browser-eventindex-invariants.mjs
 scripts/did-field-guard-accept.sh        # needs a container runtime; see its header
+scripts/storage-controller-credential-test.sh  # where the storage controller reads the MAS secret from (CI)
 scripts/check-did-localpart-vectors.sh   # needs `gh`; compares against siwx-oidc's fixture
 e2e-harness/run.sh smoke                 # hermetic stack; needs podman and a siwx-oidc checkout
 ```

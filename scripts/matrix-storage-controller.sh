@@ -44,6 +44,22 @@
 # Tokens are minted per run and re-minted mid-run as they near expiry. They are
 # NEVER cached to disk and the TTL is never widened to cover a long run.
 #
+# Where the MAS shared secret comes from: a systemd credential named
+# `mas_shared_secret` when the unit passes one (the unit has a LoadCredential setting with
+# that id and $CREDENTIALS_DIRECTORY then holds it; the service manager reads the
+# file and only the unit's user can read the copy), otherwise MAS_SHARED_SECRET in
+# the stack's .env. A deployment that keeps its secrets in a root-only secret
+# store passes the credential and drops the .env line. When $CREDENTIALS_DIRECTORY
+# is set but holds no such credential the controller stops: a unit that passes
+# credentials is a unit on the store, and falling back to .env there would hide a
+# misconfigured unit. Every tick logs the source by name (`credential` or `env`),
+# never the value. The value is read into a shell variable and only ever written
+# to the stdin of the container exec. Inside the container the shell reads it from
+# that stdin and hands curl the whole header line on curl's own stdin
+# (`curl -H @-`), so it is in no argument vector, on the host or in the
+# container (any local user can read an argument vector from /proc and `ps`), in
+# no exported variable and in no log line. The admin token is handled the same way.
+#
 # -----------------------------------------------------------------------------
 # FAIL-LOUD CONTRACT (the reason this rewrite exists)
 # -----------------------------------------------------------------------------
@@ -155,6 +171,15 @@ log_unprotected() {
 
 # Read one key from .env without exposing the rest of the file.
 env_get() { sed -n "s/^$1=//p" "$STACK_DIR/.env" | head -1 | sed -e 's/^"//' -e 's/"$//'; }
+
+# The file of the systemd credential `mas_shared_secret`. Returns 2 when the unit passes no credentials at all
+# ($CREDENTIALS_DIRECTORY unset or empty: the stack's env file is the source) and 1 when it passes credentials but
+# not this one (an error for the caller, never a fall back to the env file).
+mas_credential_file() {
+  [ -n "${CREDENTIALS_DIRECTORY:-}" ] || return 2
+  [ -e "$CREDENTIALS_DIRECTORY/mas_shared_secret" ] || return 1
+  printf '%s' "$CREDENTIALS_DIRECTORY/mas_shared_secret"
+}
 
 now_ms() { date +%s%3N; }
 now_s() { date +%s; }
@@ -273,7 +298,12 @@ TOKEN_EXPIRES_AT=0
 # network dependency and no new exposed port.
 #
 # Secrets are fed on STDIN, not via `-e VAR=value`, because the latter puts them
-# in the docker argv where any local user can read them out of `ps`.
+# in the docker argv where any local user can read them out of `ps`. Inside the
+# container the script does the same one level down: the shell `read`s the secret
+# from its stdin and `printf`s (a builtin, so no process argument vector) the
+# header line into `curl -H @-`, which reads headers from its own stdin. Putting
+# the value into `-H "Authorization: Bearer $SEC"` would put it on curl's command
+# line, readable by every user of the host while the request runs.
 in_synapse() {
   local script="$1"; shift
   docker compose --project-directory "$STACK_DIR" exec -T "$@" "$SYNAPSE_SERVICE" sh -c "$script"
@@ -292,9 +322,9 @@ mint_admin_token() {
   set +e
   out="$(printf '%s\n' "$MAS_SECRET" | in_synapse '
       read -r SEC
-      curl -s -w "\n__HTTP__%{http_code}" -X POST \
+      printf "Authorization: Bearer %s\n" "$SEC" | curl -s -w "\n__HTTP__%{http_code}" -X POST \
         --connect-timeout "$CT" --max-time "$MT" \
-        -H "Authorization: Bearer $SEC" \
+        -H @- \
         "$OIDC_URL/oauth2/admin_token"
     ' -e OIDC_URL="$OIDC_INTERNAL_URL" -e CT="$HTTP_CONNECT_TIMEOUT" -e MT="$MINT_MAX_TIME")"
   rc=$?
@@ -317,7 +347,7 @@ mint_admin_token() {
   fi
   if ! is_2xx "$code"; then
     log_fatal "admin-token mint REFUSED: http=$code resp=$body"
-    log_fatal "check that MAS_SHARED_SECRET in $STACK_DIR/.env matches siwx-oidc's SIWEOIDC_MAS_SHARED_SECRET"
+    log_fatal "check that the MAS shared secret (${MAS_ORIGIN:-unknown source}) matches siwx-oidc's SIWEOIDC_MAS_SHARED_SECRET"
     log_unprotected
     record_failure "mint http=$code"
     exit 3
@@ -357,14 +387,14 @@ synapse_call() {
   out="$(printf '%s\n' "$ADMIN_TOKEN" | in_synapse '
       read -r TOK
       if [ -n "$D" ]; then
-        curl -s -w "\n__HTTP__%{http_code}" -X "$M" \
+        printf "Authorization: Bearer %s\n" "$TOK" | curl -s -w "\n__HTTP__%{http_code}" -X "$M" \
           --connect-timeout "$CT" --max-time "$MT" \
-          -H "Authorization: Bearer $TOK" -H "Content-Type: application/json" \
+          -H @- -H "Content-Type: application/json" \
           -d "$D" "http://localhost:$PORT$P"
       else
-        curl -s -w "\n__HTTP__%{http_code}" -X "$M" \
+        printf "Authorization: Bearer %s\n" "$TOK" | curl -s -w "\n__HTTP__%{http_code}" -X "$M" \
           --connect-timeout "$CT" --max-time "$MT" \
-          -H "Authorization: Bearer $TOK" "http://localhost:$PORT$P"
+          -H @- "http://localhost:$PORT$P"
       fi
     ' -e PORT="$MATRIX_PORT" -e M="$method" -e P="$path" -e D="$data" \
       -e CT="$HTTP_CONNECT_TIMEOUT" -e MT="$ADMIN_MAX_TIME")"
@@ -529,15 +559,32 @@ alert_transition() {
 
 # ---- environment --------------------------------------------------------------
 load_env() {
+  local cred src
   [ -f "$STACK_DIR/.env" ] || { log_fatal "$STACK_DIR/.env not found"; log_unprotected; exit 1; }
-  MAS_SECRET="$(env_get MAS_SHARED_SECRET)"
+  # MAS_ORIGIN names where the secret came from, for the error text; never the value.
+  set +e; cred="$(mas_credential_file)"; src=$?; set -e
+  case "$src" in
+    0)
+      MAS_SECRET="$(head -n 1 "$cred" | tr -d '\r')" || { log_fatal "cannot read the mas_shared_secret credential"; log_unprotected; exit 1; }
+      MAS_ORIGIN="the mas_shared_secret credential"; MAS_SOURCE=credential ;;
+    1)
+      # The unit passes credentials, so it runs on the secret store; a missing mas_shared_secret is a unit
+      # defect (a LoadCredential setting that names another id, or none for this one), not a reason to read
+      # the env file.
+      log_fatal "the unit passes credentials (CREDENTIALS_DIRECTORY is set) but the mas_shared_secret credential is not among them; not falling back to the env file"
+      log_unprotected; exit 1 ;;
+    *)
+      MAS_SECRET="$(env_get MAS_SHARED_SECRET)"
+      MAS_ORIGIN="MAS_SHARED_SECRET in $STACK_DIR/.env"; MAS_SOURCE="env" ;;
+  esac
+  log "MAS shared secret source: $MAS_SOURCE"
   MATRIX_HOST="$(env_get MATRIX_HOST)"
   MATRIX_PORT="$(env_get MATRIX_PORT)"; MATRIX_PORT="${MATRIX_PORT:-8080}"
   ADMIN_DID="$(env_get MATRIX_ADMIN_DID)"
   ADMIN_MXID="$(env_get MATRIX_ADMIN_MXID)"
   local oidc_port; oidc_port="$(env_get SIWEOIDC_PORT)"
   OIDC_INTERNAL_URL="${OIDC_INTERNAL_URL:-http://${OIDC_SERVICE}:${oidc_port:-8081}}"
-  [ -n "$MAS_SECRET" ] || { log_fatal "MAS_SHARED_SECRET empty in $STACK_DIR/.env"; log_unprotected; exit 1; }
+  [ -n "$MAS_SECRET" ] || { log_fatal "the MAS shared secret is empty or missing ($MAS_ORIGIN)"; log_unprotected; exit 1; }
   # MATRIX_HOST builds both the local-media admin path and the notice mxid. Empty
   # yields ".../media//delete" and "@did-...:", which Synapse rejects with a
   # confusing 400/404 instead of naming the real problem. Fail on the config.
