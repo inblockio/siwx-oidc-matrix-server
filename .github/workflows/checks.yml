@@ -92,11 +92,12 @@ jobs:
 
   # scripts/lk-jwt-membership-accept.sh extracts apply_lk_jwt_membership from the
   # entrypoint and runs it against fixture homeserver.yaml files: idempotency, the
-  # users-namespace regex, and every refusal path.
+  # users-namespace regex, and every refusal path. The job also runs the secret
+  # store mode's acceptance script, which needs the same pinned yq.
   lk-jwt-membership-accept:
     name: lk-jwt membership accept
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       # Pinned by commit, not by a movable tag; the comment names the release.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -118,6 +119,15 @@ jobs:
           SIWX_ACCEPT_SCRATCH: ${{ runner.temp }}/lk-jwt-accept
         run: scripts/lk-jwt-membership-accept.sh
 
+      # The whole entrypoint against scratch directories with a stubbed /start.py:
+      # the rendered config with the mode off against a committed golden (the image
+      # must behave as before), the secret store mode's cases and every refusal.
+      # No container runtime.
+      - name: Synapse secret store acceptance cases
+        env:
+          SIWX_ACCEPT_SCRATCH: ${{ runner.temp }}/synapse-secret-store-accept
+        run: scripts/synapse-secret-store-accept.sh
+
   # scripts/storage-controller-credential-test.sh runs the storage controller against a
   # scratch stack with a stub `docker`: the MAS shared secret comes from the systemd
   # credential `mas_shared_secret` when the unit passes credentials (an error when it
@@ -136,3 +146,34 @@ jobs:
 
       - name: Credential, .env, both, neither
         run: scripts/storage-controller-credential-test.sh
+
+  # The Synapse secret store mode (docs/synapse-secret-files.md) is tested twice:
+  # the logic in the `lk-jwt-membership-accept` job above (it already has the pinned
+  # yq), and here the real image.
+  #
+  # `synapse-secret-store-e2e` builds the Synapse image exactly as docker.yml does
+  # (the build is not published) and runs it with throwaway volumes and no network:
+  # as 991:991 with a group_add group that alone can read the secret files, a real
+  # Synapse start in store mode with --no-secrets-in-config, the refusals that need
+  # a runtime, and the image without the store variable. Public images and generated
+  # values only; no secrets and a read-only token.
+  synapse-secret-store-e2e:
+    name: Synapse secret store e2e
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      # dockerfiles/Dockerfile needs BuildKit (ADD --checksum).
+      DOCKER_BUILDKIT: '1'
+    steps:
+      # Pinned by commit, not by a movable tag; the comment names the release.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the Synapse image
+        run: docker build --progress=plain -f dockerfiles/Dockerfile -t synapse-under-test .
+
+      - name: Secret store mode, end to end
+        env:
+          XDG_CACHE_HOME: ${{ runner.temp }}/cache
+        run: scripts/synapse-secret-store-e2e.sh --image synapse-under-test
