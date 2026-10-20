@@ -17,7 +17,8 @@
 #      config stops it (and does not without the flag);
 #   5. no secret is in the container's environment, its logs or its data volume;
 #   6. the refusals that need a runtime: a root container, a homeserver.yaml owned by
-#      another uid;
+#      another uid, a secret file the container user (991) owns, a secret directory it
+#      can write;
 #   7. without the store variable the same image starts as it always did (root, gosu,
 #      secrets in the environment, no flag).
 #
@@ -282,6 +283,22 @@ RO=(--read-only); case "$RT" in *podman*) RO+=(--read-only-tmpfs=false) ;; esac
 run_to_end "$P-i" 120 "$T/i.log" "${STORE_RUN[@]}" "${RO[@]}" -v "$DATA_I":/data "${COMMON_ENV[@]}" -e SYNAPSE_SECRETS_DIR=/run/secrets "$IMAGE"
 grep -E 'REFUSING|ERROR' "$T/i.log" | sed 's/^/      | /'
 if grep -q 'REFUSING TO START (secret store mode).*/tmp' "$T/i.log"; then ok "I: refused, and the refusal names /tmp"; else bad "I: read-only /tmp" "the refusal does not name /tmp"; fi
+
+echo "== J. F4: a secret file the container user owns, and a directory it can write"
+# Copies of the store (owner root, groups 5001 to 5003, mode 0440, directory 0711, which start fine in A).
+# J1: the macaroon file is 991's own (mode 0440, so not writable, and the mount is read-only: only the
+# owner check can refuse it). J2: the directory is mode 0777 on a mount that is not read-only.
+SEC_J1="$(vol sec-j1)"; SEC_J2="$(vol sec-j2)"
+helper -v "$SEC":/from:ro -v "$SEC_J1":/sec "$IMAGE" -c 'cp -a /from/. /sec/ && chown 991:0 /sec/macaroon_secret_key' >/dev/null 2>&1 && ok "J: store copy with a file owned by 991" || bad "J: store copy 1"
+helper -v "$SEC":/from:ro -v "$SEC_J2":/sec "$IMAGE" -c 'cp -a /from/. /sec/ && chmod 0777 /sec' >/dev/null 2>&1 && ok "J: store copy with a directory mode 0777" || bad "J: store copy 2"
+DATA_J1="$(chowned_data data-j1)"; DATA_J2="$(chowned_data data-j2)"
+run_to_end "$P-j1" 120 "$T/j1.log" --network none --user 991:991 "${GROUPS_ADD[@]}" -v "$SEC_J1":/run/secrets:ro -v "$DATA_J1":/data "${COMMON_ENV[@]}" -e SYNAPSE_SECRETS_DIR=/run/secrets "$IMAGE"
+grep -E 'REFUSING' "$T/j1.log" | sed 's/^/      | /'
+if grep -q 'REFUSING TO START (secret store mode): secret file /run/secrets/macaroon_secret_key (SYNAPSE_MACAROON_SECRET_FILE) is owned by uid 991' "$T/j1.log"; then ok "J1: a file owned by uid 991 is refused, named, on a read-only mount"; else bad "J1: owned file" "no owner refusal"; fi
+run_to_end "$P-j2" 120 "$T/j2.log" --network none --user 991:991 "${GROUPS_ADD[@]}" -v "$SEC_J2":/run/secrets -v "$DATA_J2":/data "${COMMON_ENV[@]}" -e SYNAPSE_SECRETS_DIR=/run/secrets "$IMAGE"
+grep -E 'REFUSING' "$T/j2.log" | sed 's/^/      | /'
+if grep -q 'REFUSING TO START (secret store mode): secret file /run/secrets/mas_shared_secret (SYNAPSE_MAS_SECRET_FILE) sits in the directory /run/secrets, which is writable by uid 991' "$T/j2.log"; then ok "J2: a directory 991 can write is refused, named"; else bad "J2: writable directory" "no directory refusal"; fi
+if leaks_in "$T/j1.log" || leaks_in "$T/j2.log"; then bad "J: a value is in a log"; else ok "J: no value in either log"; fi
 
 echo
 echo "passed: $PASS   failed: $FAILN"

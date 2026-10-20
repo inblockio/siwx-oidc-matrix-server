@@ -80,17 +80,23 @@ V_GEN_REG="$(rnd)"; V_GEN_MAC="$(rnd)"; V_GEN_FORM="$(rnd)"        # what `gener
 V_S_MAS="$(rnd)"; V_S_MAC="$(rnd)"; V_S_FORM="$(rnd)"              # store files
 V_S_AS="$(rnd)"; V_S_HS="$(rnd)"                                   # store registration
 V_LEAK="$(rnd)"                                                    # a secret put into the environment
-ALL_VALUES=("$V_MAS" "$V_LKAS" "$V_LKHS" "$V_GEN_REG" "$V_GEN_MAC" "$V_GEN_FORM" "$V_S_MAS" "$V_S_MAC" "$V_S_FORM" "$V_S_AS" "$V_S_HS" "$V_LEAK")
+V_F_AS="$(rnd)"; V_F_HS="$(rnd)"                                   # the registration an existing config already lists
+ALL_VALUES=("$V_MAS" "$V_LKAS" "$V_LKHS" "$V_GEN_REG" "$V_GEN_MAC" "$V_GEN_FORM" "$V_S_MAS" "$V_S_MAC" "$V_S_FORM" "$V_S_AS" "$V_S_HS" "$V_LEAK" "$V_F_AS" "$V_F_HS")
 
 # --- stand-ins on PATH and PYTHONPATH --------------------------------------------------
 FAKEBIN="$WORK/fakebin"; mkdir -p "$FAKEBIN"
-# id: `id -u` answers 0 when FAKE_ID_ROOT=1, to reach the root refusal without being root.
+# id: `id -u` answers 0 when FAKE_ID_ROOT=1, to reach the root refusal without being root, and
+# FAKE_ID_UID otherwise when that is set. The fixtures are owned by the user who runs this script, so
+# a boot is given another uid as its "container user" (run_entry sets one), the way the image's uid 991
+# owns none of the mounted secret files; FAKE_ID_UID=<the real uid> makes the files the container user's own.
 cat > "$FAKEBIN/id" <<FAKE
 #!/usr/bin/env bash
 if [ "\${FAKE_ID_ROOT:-}" = 1 ] && [ "\${1:-}" = "-u" ]; then echo 0; exit 0; fi
+if [ -n "\${FAKE_ID_UID:-}" ] && [ "\${1:-}" = "-u" ]; then echo "\$FAKE_ID_UID"; exit 0; fi
 exec "$REAL_ID" "\$@"
 FAKE
 chmod +x "$FAKEBIN/id"
+REAL_UID="$("$REAL_ID" -u)"; FAKE_UID=$((REAL_UID + 1))
 
 # A Synapse that carries the MSC4133 write-ACL patch, as far as the entrypoint's own
 # probe can tell (synapse_enforces_did_field_denylist reads two marker strings).
@@ -154,18 +160,32 @@ prepare_entry() {
 # directory can be tested).
 RUNN=0
 RUNDIR="$WORK/_runs"; mkdir -p "$RUNDIR"
+# The directories that hold the secret files ($D/sec, $D/alt) are read-only while a boot runs, as a
+# read-only mount is, and writable again afterwards so that a case can go on changing its fixtures.
+# A case that tests a writable directory names it in WRITABLE_DIRS (space separated) for one boot.
+WRITABLE_DIRS=""
+lock_store_dirs() { # lock_store_dirs lock|unlock D
+  local x
+  for x in "$2/sec" "$2/alt"; do
+    [ -d "$x" ] || continue
+    case " $WRITABLE_DIRS " in *" $x "*) continue ;; esac
+    if [ "$1" = lock ]; then chmod a-w "$x"; else chmod u+w "$x"; fi
+  done
+}
 run_entry() {
   local entry="$1" d="$2"; shift 2
   RUNN=$((RUNN+1))
   prepare_entry "$entry" "$RUNDIR/entry.$RUNN.sh" "$d"
   LOG="$RUNDIR/out.$RUNN.log"
+  lock_store_dirs lock "$d"
   env -i PATH="$FAKEBIN:$YQ_DIR:/usr/local/bin:/usr/bin:/bin" HOME="$d" \
-    PYTHONPATH="$FAKEPKG" ACCEPT_DATA="$d" \
+    PYTHONPATH="$FAKEPKG" ACCEPT_DATA="$d" FAKE_ID_UID="$FAKE_UID" \
     ACCEPT_GEN_REG="$V_GEN_REG" ACCEPT_GEN_MAC="$V_GEN_MAC" ACCEPT_GEN_FORM="$V_GEN_FORM" \
     MATRIX_HOST=example.org MATRIX_BASE_URL=https://example.org MATRIX_PORT=8008 \
     SIWEOIDC_BASE_URL=https://auth.example.org MATRIX_MESSAGE_LIFETIME=4w \
     "$@" bash "$RUNDIR/entry.$RUNN.sh" > "$LOG" 2>&1
   RC=$?
+  lock_store_dirs unlock "$d"
 }
 
 # The environment of a boot with the mode off: the secrets are in it, as today.
@@ -191,13 +211,26 @@ EOF
   chmod 0440 "$D"/sec/*
 }
 
-# new_hs_fixture : a plain homeserver.yaml in $D (an existing deployment), no secrets.
+# new_hs_fixture : a plain config in $D (an existing deployment), no inline secrets. It lists one
+# registration of another service. The file exists and has its own id and tokens: a listed entry
+# that is not a readable regular file is refused (F1).
 new_hs_fixture() {
   cat > "$D/homeserver.yaml" <<EOF
 server_name: "example.org"
 public_baseurl: https://example.org/
 app_service_config_files:
   - $D/other-as.yaml
+EOF
+  cat > "$D/other-as.yaml" <<EOF
+id: foreign-service
+as_token: "$V_F_AS"
+hs_token: "$V_F_HS"
+sender_localpart: _foreign_service
+url: null
+namespaces:
+  users:
+    - exclusive: false
+      regex: '^@foreign_[^:]+:example\.org\$'
 EOF
 }
 
@@ -531,8 +564,9 @@ refuse_case "AUD-2 a URL with a password and no user is refused" "the environmen
 refuse_case "AUD-2 a variable with the word PEM in its name is refused" "the environment variable TLS_CERT_PEM is set" "TLS_CERT_PEM=$V_LEAK"
 new_dir r-ok-env; new_hs_fixture
 run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec" "UPSTREAM_URL=https://deploy@example.org/repo" "OTHER_URL=https://example.org:8448/x@y" \
+  "GIT_URL=https://deploy@example.org@git.example.org/repo" "GIT_URL_PORT=https://deploy@example.org@git.example.org:8443/repo" "PORT_URL=https://deploy@example.org:8443/x@y" \
   "SYNAPSE_SERVER_NAME=example.org" "SYNAPSE_REPORT_STATS=no" "MATRIX_RETENTION_ENABLED=false" "SYNAPSE_SECRET_ENV_DENY=${DENY_LIST}"
-check "AUD-2 non-secret names, URLs without a password and the store settings pass" test "$RC" = 0
+check "AUD-2 non-secret names, URLs without a password (also with an at sign in the user name) and the store settings pass" test "$RC" = 0
 
 # AUD-3: the same id; the same as_token as a registration that stays listed; the realistic
 # switch, where the registration file keeps the tokens the legacy rendered file already has.
@@ -591,14 +625,18 @@ for fmt in ' %s\n' '%s \n' '%s\n\n' '%s\r\n' '%s\t' '\n%s\n'; do
   refuses "AUD-6 whitespace shape $i around a secret value is refused" "secret file $D/sec/form_secret"
   check "AUD-6 shape $i: the message says leading or trailing whitespace" grep -q 'has leading or trailing whitespace' "$LOG"
 done
+all_printable() { # every byte from 0x21 to 0x7e, once, in order (built at run time)
+  local c; for ((c=33; c<=126; c++)); do printf '%b' "\\0$(printf '%03o' "$c")"; done
+}
 new_dir r-ws-ok; new_hs_fixture
 chmod u+w "$D/sec/form_secret" "$D/sec/macaroon_secret_key"
 printf '%s' "$V_S_FORM" > "$D/sec/form_secret"                  # no final newline
-printf 'a b %s\n' "$V_S_MAC" > "$D/sec/macaroon_secret_key"     # whitespace inside is the value's own
+printf '%s%s\n' "$(all_printable)" "$V_S_MAC" > "$D/sec/macaroon_secret_key"   # F2: the whole printable range, both ends included
 chmod 0440 "$D/sec/form_secret" "$D/sec/macaroon_secret_key"
-chmod u+w "$D/sec/lk_jwt_as_registration.yaml"; printf '\n\n' >> "$D/sec/lk_jwt_as_registration.yaml"; chmod 0440 "$D/sec/lk_jwt_as_registration.yaml"
+# A registration is YAML: blank lines, spaces and non-ASCII text in it are fine (F2 narrows the three raw values only).
+chmod u+w "$D/sec/lk_jwt_as_registration.yaml"; printf '\n\n# caf\xc3\xa9 and some spaces\n\n' >> "$D/sec/lk_jwt_as_registration.yaml"; chmod 0440 "$D/sec/lk_jwt_as_registration.yaml"
 run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec"
-check "AUD-6 no final newline, inner spaces and blank lines at the end of a registration pass" test "$RC" = 0
+check "AUD-6 no final newline, every printable ASCII byte in a raw value, and blank lines, spaces and non-ASCII text in a registration pass" test "$RC" = 0
 
 # AUD-9: an unwritable TMPDIR.
 new_dir r-tmpdir; new_hs_fixture; cp "$D/homeserver.yaml" "$D/.hs.before"
@@ -622,6 +660,86 @@ check "AUD-10 the foreign entry stays, the store entry goes, and the log says wh
   test \"\$(yq '.app_service_config_files | length' '$D/homeserver.yaml')\" = 1 &&
   test \"\$(yq '.app_service_config_files[0]' '$D/homeserver.yaml')\" = '$D/other-as.yaml' &&
   grep -qF '$D/sec/lk_jwt_as_registration.yaml is no longer in SYNAPSE_APPSERVICE_FILES' '$LOG'"
+
+echo "== re-review of PR #73 (F1 to F4): each case below failed on the version before its fix"
+add_listed() { # add_listed ENTRY : list one more registration in the existing config of $D
+  P="$1" yqv -i '.app_service_config_files += [strenv(P)]' "$D/homeserver.yaml"
+}
+
+# F1: an entry the config already lists that is not a safe path, or not a readable regular file, was
+# skipped by the duplicate check. A skipped registration can share its as_token with a store file, and
+# Synapse's own error for that prints the token. Refused now, by (sanitized) name.
+new_dir f1-unsafe; new_hs_fixture; second_registration "$D/other as.yaml"
+sed -i "s/^as_token: .*/as_token: \"$V_S_AS\"/" "$D/other as.yaml"; add_listed "$D/other as.yaml"; cp "$D/homeserver.yaml" "$D/.hs.before"
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec"
+refuses "F1 a listed registration whose path is not a safe path is refused, not skipped (here it shares an as_token with a store file)" "$D/other?as.yaml"
+new_dir f1-relative; new_hs_fixture; add_listed "relative/as.yaml"; cp "$D/homeserver.yaml" "$D/.hs.before"
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec"
+refuses "F1 a listed registration with a relative path is refused" "relative/as.yaml"
+new_dir f1-missing; new_hs_fixture; add_listed "$D/gone-as.yaml"; cp "$D/homeserver.yaml" "$D/.hs.before"
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec"
+refuses "F1 a listed registration whose file does not exist is refused" "$D/gone-as.yaml"
+new_dir f1-unreadable; new_hs_fixture; chmod 000 "$D/other-as.yaml"; cp "$D/homeserver.yaml" "$D/.hs.before"
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec"
+refuses "F1 a listed registration the container user cannot read is refused" "$D/other-as.yaml"
+new_dir f1-dir; new_hs_fixture; rm "$D/other-as.yaml"; mkdir "$D/other-as.yaml"; cp "$D/homeserver.yaml" "$D/.hs.before"
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec"
+refuses "F1 a listed registration that is a directory is refused" "$D/other-as.yaml"
+check "F1 the refusal says what to do (fix the entry or remove it)" grep -q 'Fix the entry or remove it' "$LOG"
+# The entries this mode itself replaces or unlists need no file: the legacy rendered registration and
+# the store directory's own entries.
+new_dir f1-own; new_hs_fixture; add_listed "$D/lk-jwt-as.yaml"; add_listed "$D/sec/removed-as.yaml"
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec"
+check "F1 the legacy registration and a removed store entry may be listed without a file: exit 0, both are gone" bash -c "
+  test $RC = 0 &&
+  test \"\$(yq '[.app_service_config_files[] | select(. == \"$D/lk-jwt-as.yaml\" or . == \"$D/sec/removed-as.yaml\")] | length' '$D/homeserver.yaml')\" = 0 &&
+  test \"\$(yq '[.app_service_config_files[] | select(. == \"$D/other-as.yaml\")] | length' '$D/homeserver.yaml')\" = 1"
+
+# F2: the three raw values (MAS, macaroon, form) are refused when any byte, a final newline apart, is
+# outside printable ASCII 0x21 to 0x7e: a space, a control byte, DEL or a byte of 0x80 and up inside the
+# value would be read differently by Synapse (which strips it, and decodes it as UTF-8) and by the
+# other consumer of the value (which sends it as a header or compares bytes).
+declare -A RAW_WHAT=([mas_shared_secret]=SYNAPSE_MAS_SECRET_FILE [macaroon_secret_key]=SYNAPSE_MACAROON_SECRET_FILE [form_secret]=SYNAPSE_FORM_SECRET_FILE)
+F2_SHAPES=('%s %s\n' '%s\t%s\n' '%s\r%s\n' '%s\n%s\n' '%s\x01%s\n' '%s\x7f%s\n' '%s\xc3\xa9%s\n' '%s\xff%s\n' '%s\x00%s\n' '%s%s\xc3\xa9')
+for f in mas_shared_secret macaroon_secret_key form_secret; do
+  i=0
+  for fmt in "${F2_SHAPES[@]}"; do
+    i=$((i+1)); new_dir "f2-$f-$i"; new_hs_fixture
+    chmod u+w "$D/sec/$f"; printf "$fmt" "${V_S_MAC:0:20}" "${V_S_MAC:20}" > "$D/sec/$f"; chmod 0440 "$D/sec/$f"
+    cp "$D/homeserver.yaml" "$D/.hs.before"
+    run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec"
+    refuses "F2 $f: byte shape $i outside printable ASCII is refused" "secret file $D/sec/$f (${RAW_WHAT[$f]}) holds a byte outside printable ASCII"
+  done
+done
+new_dir f2-reg-blank; new_hs_fixture; chmod u+w "$D/sec/lk_jwt_as_registration.yaml"; printf '\n \n\t\n' > "$D/sec/lk_jwt_as_registration.yaml"; chmod 0440 "$D/sec/lk_jwt_as_registration.yaml"
+cp "$D/homeserver.yaml" "$D/.hs.before"
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec"
+refuses "F2 a registration holding only whitespace is still refused (the non-blank rule stays)" "secret file $D/sec/lk_jwt_as_registration.yaml"
+check "F2 the registration refusal is the whitespace one" grep -q 'holds nothing but whitespace' "$LOG"
+
+# F3: the user name of a URL may hold an at sign; the userinfo ends at the last one before the host.
+refuse_case "F3 a URL whose user name holds an at sign and that has a password is refused" "the environment variable UPSTREAM_DSN is set to a URL that carries a password" "UPSTREAM_DSN=$(url_with_password postgres 'synapse@example.org' "$V_LEAK" db.example.org/synapse)"
+refuse_case "F3 a password that holds an at sign is refused" "the environment variable UPSTREAM_DSN is set to a URL that carries a password" "UPSTREAM_DSN=$(url_with_password postgres synapse "x@${V_LEAK}" db.example.org/synapse)"
+refuse_case "F3 an at sign in the user name and in the password is refused" "the environment variable UPSTREAM_DSN is set to a URL that carries a password" "UPSTREAM_DSN=$(url_with_password postgres 'synapse@example.org' "x@${V_LEAK}" db.example.org/synapse)"
+
+# F4: a read-only mount is not enough on its own to keep the container user from the secret. The owner
+# of a file can change its mode, and a directory the user can write lets it replace the file.
+new_dir f4-owner; new_hs_fixture; cp "$D/homeserver.yaml" "$D/.hs.before"
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec" "FAKE_ID_UID=$REAL_UID"
+refuses "F4 a secret file owned by the container user is refused" "secret file $D/sec/mas_shared_secret (SYNAPSE_MAS_SECRET_FILE) is owned by uid $REAL_UID"
+new_dir f4-dir; new_hs_fixture; cp "$D/homeserver.yaml" "$D/.hs.before"
+WRITABLE_DIRS="$D/sec"; run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec"; WRITABLE_DIRS=""
+refuses "F4 a secret file in a directory the container user can write is refused" "secret file $D/sec/mas_shared_secret (SYNAPSE_MAS_SECRET_FILE) sits in the directory $D/sec, which is writable by uid"
+new_dir f4-alt; new_hs_fixture; mkdir "$D/alt"; cp "$D/sec/mas_shared_secret" "$D/alt/mas.txt"; cp "$D/homeserver.yaml" "$D/.hs.before"
+WRITABLE_DIRS="$D/alt"; run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec" "SYNAPSE_MAS_SECRET_FILE=$D/alt/mas.txt"; WRITABLE_DIRS=""
+refuses "F4 the directory of an overridden secret file is judged too (the store directory is read-only, this one is not)" "sits in the directory $D/alt"
+new_dir f4-reg-dir; new_hs_fixture; mkdir "$D/alt"; cp "$D/sec/lk_jwt_as_registration.yaml" "$D/alt/as.yaml"; cp "$D/homeserver.yaml" "$D/.hs.before"
+WRITABLE_DIRS="$D/alt"; run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec" "SYNAPSE_APPSERVICE_FILES=$D/alt/as.yaml"; WRITABLE_DIRS=""
+refuses "F4 a registration file in a writable directory is refused too" "sits in the directory $D/alt"
+new_dir f4-link; new_hs_fixture; mkdir "$D/rw"; cp "$D/sec/mas_shared_secret" "$D/rw/mas"; ln -s "$D/rw/mas" "$D/sec/mas-link"; cp "$D/homeserver.yaml" "$D/.hs.before"
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec" "SYNAPSE_MAS_SECRET_FILE=$D/sec/mas-link"
+refuses "F4 a link in a read-only directory to a file in a writable one is refused (the resolved directory is judged)" "sits in the directory $D/rw"
+check "F4 the refusals say what to do (read-only mount, no write permission for the container user)" grep -q 'read-only' "$LOG"
 
 echo "== no value anywhere"
 LEAKS=0

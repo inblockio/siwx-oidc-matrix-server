@@ -17,8 +17,11 @@
 #     SECRET, TOKEN, PASSWORD, ... in it, any URL with a password) is a start
 #     error, named, never its value;
 #   * a missing, empty, blank, unreadable or writable secret file is a start error
-#     naming the file, never its content; two registrations that share an id or a
-#     token are refused by file name before Synapse can print the token;
+#     naming the file, never its content, and so is a file the container user owns
+#     or a file in a directory it can write; a MAS, macaroon or form secret with a
+#     byte outside printable ASCII is refused too; two registrations that share an
+#     id or a token are refused by file name before Synapse can print the token,
+#     and a registration the config lists that cannot be compared is refused too;
 #   * with the mode off, a homeserver.yaml that a store-mode boot wrote is refused
 #     (fix forward), not completed with an inline secret beside the file reference;
 #   * Synapse starts with --no-secrets-in-config, so an inline secret that still
@@ -51,7 +54,9 @@ SS_REFUSED_ENV_NAMES="MAS_SHARED_SECRET LK_JWT_AS_TOKEN LK_JWT_HS_TOKEN SYNAPSE_
 SS_NAME_WORDS=(SECRET TOKEN PASSWORD PASSWD PEM PRIVATE_KEY API_KEY)
 SS_ENV_ALLOWED_NAMES=" SYNAPSE_SECRETS_DIR SYNAPSE_MAS_SECRET_FILE SYNAPSE_MACAROON_SECRET_FILE SYNAPSE_FORM_SECRET_FILE SYNAPSE_SECRET_ENV_DENY "
 # A URL whose userinfo part holds a password (user, colon, password, then the at sign), in any variable.
-SS_URL_USERINFO_RE='[A-Za-z][A-Za-z0-9+.-]*://[^/?#[:space:]@]*:[^/?#[:space:]@]+@'
+# The userinfo ends at the LAST at sign before the host, so an at sign may sit in the user name
+# (user@example.org:password@host) or in the password: the classes below leave it in.
+SS_URL_USERINFO_RE='[A-Za-z][A-Za-z0-9+.-]*://[^/?#[:space:]]*:[^/?#[:space:]]+@'
 
 # Inline secret keys that Synapse's --no-secrets-in-config does NOT check (v1.163.0
 # synapse/config: only macaroon_secret_key, form_secret, registration_shared_secret,
@@ -81,12 +86,12 @@ secret_store_refuse() {
 }
 
 # One secret file: a regular file, readable by THIS process, that THIS process
-# cannot write, not empty, not blank. $3 is "raw" (the whole file is the value:
-# MAS, macaroon, form) or "yaml" (a registration). The checks below read no byte
-# into the shell or the log: they test permissions and count bytes through pipes.
-# Only the path is ever printed.
+# cannot write and does not own, in a directory it cannot write, not empty, not
+# blank. $3 is "raw" (the whole file is the value: MAS, macaroon, form) or "yaml" (a
+# registration). The checks below read no byte into the shell or the log: they test
+# permissions and count bytes through pipes. Only the path is ever printed.
 secret_store_check_file() { # $1 the setting that names the file, $2 its path, $3 raw|yaml
-  local what="$1" f="$2" kind="${3:-raw}"
+  local what="$1" f="$2" kind="${3:-raw}" owner d rd
   [[ "$f" =~ ^/[A-Za-z0-9._/-]+$ ]] \
     || secret_store_refuse "${what} must be an absolute path made of [A-Za-z0-9._/-]."
   [ -e "$f" ] \
@@ -100,6 +105,20 @@ secret_store_check_file() { # $1 the setting that names the file, $2 its path, $
   # the container could then change a secret it only should read.
   [ ! -w "$f" ] \
     || secret_store_refuse "secret file ${f} (${what}) is writable by uid $(id -u). A secret file is mounted read-only (compose: read_only: true) and carries no write permission for the container user."
+  # The owner of a file can change its mode whatever the mode says now, and so can write it later.
+  owner=$(stat -L -c %u -- "$f" 2>/dev/null) && [[ "$owner" =~ ^[0-9]+$ ]] \
+    || secret_store_refuse "could not read the owner of secret file ${f} (${what})."
+  [ "$owner" != "$(id -u)" ] \
+    || secret_store_refuse "secret file ${f} (${what}) is owned by uid ${owner}, the user the container runs as. An owner can change a file's mode and then its content. Let root (or another user) own the file and give the container user read access through a group (compose: group_add)."
+  # A directory the container user can write lets it replace the file (delete it, create another).
+  # Judged for the path as given and, when that is a link, for the directory of what it resolves to.
+  d="${f%/*}"; d="${d:-/}"
+  rd=$(readlink -f -- "$f" 2>/dev/null) && rd="${rd%/*}" && rd="${rd:-/}" \
+    || secret_store_refuse "could not resolve secret file ${f} (${what})."
+  for d in "$d" "$rd"; do
+    [ ! -w "$d" ] \
+      || secret_store_refuse "secret file ${f} (${what}) sits in the directory ${d}, which is writable by uid $(id -u). The container user could replace the file. Mount the directory read-only (compose: read_only: true) and give the container user no write permission to it."
+  done
   [ -s "$f" ] \
     || secret_store_refuse "secret file ${f} (${what}) is empty."
   # `-s` passes a file of blanks and newlines; Synapse strips such a value to "".
@@ -119,6 +138,16 @@ secret_store_check_file() { # $1 the setting that names the file, $2 its path, $
     fi
     if [ "$lead" -ne 1 ] || [ "$core" -ne 1 ]; then
       secret_store_refuse "secret file ${f} (${what}) has leading or trailing whitespace (one final newline is the only one allowed). Write the value alone, for example with printf '%s\\n'."
+    fi
+    # Nothing but printable ASCII (0x21 to 0x7e) is left once one final newline is taken off: a space,
+    # a control character or a byte of 0x80 and up inside the value is read one way by Synapse (it
+    # strips the ends and decodes the rest) and another by a consumer that sends the bytes as a
+    # header or compares them. `tr` deletes the allowed bytes and `wc` counts what is left.
+    local extra fin=0
+    extra=$(LC_ALL=C tr -d '\041-\176' < "$f" | wc -c)
+    [ "$(tail -c1 "$f" | LC_ALL=C tr -d '\n' | wc -c)" -ne 0 ] || fin=1
+    if [ "$extra" -ne "$fin" ]; then
+      secret_store_refuse "secret file ${f} (${what}) holds a byte outside printable ASCII (0x21 to 0x7e), a final newline apart: a space, a control character or a non-ASCII byte inside the value. Write the value alone, for example with printf '%s\\n'."
     fi
   fi
 }
@@ -174,14 +203,23 @@ secret_store_reg_hash() { # $1 file, $2 key
 secret_store_check_registrations() {
   local -A seen_id=() seen_as=() seen_hs=()
   local -a others=() all=()
-  local e f i n="${#SS_APPSERVICE_FILES[@]}" h_id h_as h_hs
+  local e f i n="${#SS_APPSERVICE_FILES[@]}" h_id h_as h_hs shown
   if [ -f /data/homeserver.yaml ]; then
     while IFS= read -r e; do
       [ -n "$e" ] || continue
       [ "$e" != "$SS_LEGACY_REGISTRATION" ] || continue    # unlisted by this mode
       case "$e" in "${SS_DIR}/"*) continue ;; esac         # this mode's own entries are replaced
       case " ${SS_APPSERVICE_FILES[*]} " in *" ${e} "*) continue ;; esac   # the same file, compared once
-      [[ "$e" =~ ^/[A-Za-z0-9._/-]+$ ]] && [ -f "$e" ] && [ -r "$e" ] || continue
+      # Fail closed: an entry that cannot be read and compared is refused, never skipped. A skipped
+      # registration could share its as_token with a file to be listed, and Synapse's error for
+      # that prints the token. Only the name is printed, and a name that is not a safe path is
+      # printed with every unsafe character replaced by a question mark.
+      if ! [[ "$e" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
+        shown="${e//[^A-Za-z0-9._\/-]/?}"
+        secret_store_refuse "/data/homeserver.yaml lists the entry ${shown:0:200} in app_service_config_files, and it is not an absolute path made of [A-Za-z0-9._/-], so it cannot be checked against the other registrations (Synapse's error for a repeated as_token prints the token). Fix the entry or remove it."
+      fi
+      [ -f "$e" ] && [ -r "$e" ] \
+        || secret_store_refuse "/data/homeserver.yaml lists ${e} in app_service_config_files, and it is not a readable regular file, so it cannot be checked against the other registrations (Synapse's error for a repeated as_token prints the token). Fix the entry or remove it."
       others+=("$e")
     done < <(yq '(.app_service_config_files // [])[] | select(tag == "!!str")' /data/homeserver.yaml 2>/dev/null)
   fi

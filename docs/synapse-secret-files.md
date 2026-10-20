@@ -14,7 +14,9 @@ In store mode:
 - a secret-looking variable in the container environment is a start error, named, never its
   value (what that does and does not recognise is under "What the entrypoint refuses");
 - a missing, empty, blank, unreadable or writable secret file is a start error naming the
-  file, never its content;
+  file, never its content; so is a file the container user owns, a file in a directory the
+  container user can write, and a MAS, macaroon or form secret with a byte outside printable
+  ASCII;
 - Synapse starts with `--no-secrets-in-config`, so an inline secret that still reaches
   `homeserver.yaml` is a start error of Synapse itself;
 - the container must run as the Synapse user (`user: "991:991"`), never as root.
@@ -37,16 +39,24 @@ All of these are non-secret and go in the `environment:` list of the compose fil
 
 File contents:
 
-- the three secret files hold the raw value, one line: no leading whitespace and no trailing
-  whitespace beyond one final newline (Synapse strips both ends, a reader that does not would
-  see another value), and not empty or blank;
+- the three secret files hold the raw value, one line: every byte is printable ASCII (0x21 to
+  0x7e), so no space, tab, control character or non-ASCII byte anywhere, except one final
+  newline (Synapse strips the ends and decodes the rest, a reader that sends the bytes as a
+  header or compares them would see another value), and not empty or blank. The registration
+  files are YAML and keep only the not-blank rule;
 - the registration file is the YAML registration Synapse expects (`id`, `as_token`,
   `hs_token`, `sender_localpart`, `namespaces`, ...). It is a secret file too: it carries
   both tokens. Each registration needs the string fields `id`, `as_token` and `hs_token`, and
   no two registrations (these files, and the others `app_service_config_files` keeps listing)
-  may share an `id` or a token;
+  may share an `id` or a token. A registration that an existing config lists must be a safe
+  path (below) to a readable regular file, or the start is refused: it is never skipped;
 - every secret file must be read-only for the container user: mount it with `read_only: true`
-  and no write permission for uid 991 (a file the process can write is refused).
+  and no write permission for uid 991 (a file the process can write is refused). Two more
+  things would let the container user change a secret it only reads, and are refused: the
+  container user (991) owns the file (an owner can change the mode), or the directory that
+  holds the file, or the directory a link to it resolves into, is writable by 991 (it could
+  replace the file). Let root own the files and give uid 991 read access through a group
+  (`group_add`), in a directory it cannot write.
 
 Every path must be absolute and made of `[A-Za-z0-9._/-]`.
 
@@ -57,13 +67,14 @@ Each refusal is `REFUSING TO START (secret store mode): <reason>` on stderr and 
 
 | Reason | Cause and fix |
 |---|---|
-| `the environment variable NAME is set` | A secret is in the container environment, even if empty. Three things are recognised, by name only: (1) the built-in names `MAS_SHARED_SECRET`, `LK_JWT_AS_TOKEN`, `LK_JWT_HS_TOKEN`, `SYNAPSE_REGISTRATION_SHARED_SECRET`, `SYNAPSE_MACAROON_SECRET_KEY`, `SIWEOIDC_SIGNING_KEY_PEM`, `LIVEKIT_SECRET` and the names in `SYNAPSE_SECRET_ENV_DENY`; (2) any other variable whose name contains `SECRET`, `TOKEN`, `PASSWORD`, `PASSWD`, `PEM`, `PRIVATE_KEY` or `API_KEY` (case-insensitive), except the store's own settings (`SYNAPSE_SECRETS_DIR`, `SYNAPSE_MAS_SECRET_FILE`, `SYNAPSE_MACAROON_SECRET_FILE`, `SYNAPSE_FORM_SECRET_FILE`, `SYNAPSE_SECRET_ENV_DENY`) and none of the other names this image or `/start.py` reads; (3) `the environment variable NAME is set to a URL that carries a password`: any variable whose value is a URL with a password in its userinfo part (a user, a colon and a password before the `@`). The environment is read from `/proc`, so a name bash cannot import (a dot in it) is seen too. This is a net, not a proof: a secret in a variable with a harmless name and a value that is not such a URL is not recognised. The guarantee comes from the compose file: an explicit `environment:` list, and no `env_file`. Remove the variable and put the value in a file under the secrets directory. |
+| `the environment variable NAME is set` | A secret is in the container environment, even if empty. Three things are recognised, by name only: (1) the built-in names `MAS_SHARED_SECRET`, `LK_JWT_AS_TOKEN`, `LK_JWT_HS_TOKEN`, `SYNAPSE_REGISTRATION_SHARED_SECRET`, `SYNAPSE_MACAROON_SECRET_KEY`, `SIWEOIDC_SIGNING_KEY_PEM`, `LIVEKIT_SECRET` and the names in `SYNAPSE_SECRET_ENV_DENY`; (2) any other variable whose name contains `SECRET`, `TOKEN`, `PASSWORD`, `PASSWD`, `PEM`, `PRIVATE_KEY` or `API_KEY` (case-insensitive), except the store's own settings (`SYNAPSE_SECRETS_DIR`, `SYNAPSE_MAS_SECRET_FILE`, `SYNAPSE_MACAROON_SECRET_FILE`, `SYNAPSE_FORM_SECRET_FILE`, `SYNAPSE_SECRET_ENV_DENY`) and none of the other names this image or `/start.py` reads; (3) `the environment variable NAME is set to a URL that carries a password`: any variable whose value is a URL with a password in its userinfo part (a user, a colon and a password before the `@`; the userinfo ends at the last `@` before the host, so an `@` in the user name or in the password does not hide it). The environment is read from `/proc`, so a name bash cannot import (a dot in it) is seen too. This is a net, not a proof: a secret in a variable with a harmless name and a value that is not such a URL is not recognised. The guarantee comes from the compose file: an explicit `environment:` list, and no `env_file`. Remove the variable and put the value in a file under the secrets directory. |
 | `the container runs as root` | Run with `user: "991:991"`. As root, `/start.py` drops privileges with `gosu`, which clears supplementary groups: a file readable only through `group_add` would pass this script's check (root reads everything) and then be unreadable to Synapse. |
 | `the environment variable UID is set` | With `UID` set, `/start.py` always calls `gosu`, which a non-root user cannot. Leave `UID` and `GID` unset. |
 | `SYNAPSE_CONFIG_DIR is set to something other than /data`, `SYNAPSE_CONFIG_PATH is set to ...` | The entrypoint secures `/data/homeserver.yaml` only. If `/start.py` were pointed at another config, Synapse would run on a file nothing here checked. Leave both unset. |
 | `DIR is not a writable directory` (DIR is `$TMPDIR`, default `/tmp`) | `yq -i` writes its temp file there. With a read-only root file system and no writable `/tmp` every edit would fail half way; the check is the first thing the preflight does. Give the container `tmpfs: /tmp`. |
 | `/data is not writable` / `/data/homeserver.yaml is not writable` | `yq -i` writes through a temp file and copies it back, so it needs write permission on the file itself; a `homeserver.yaml` owned by another uid fails with "permission denied" even when `/data` is writable. `chown 991:991` the file once. |
-| `secret file PATH (SETTING) does not exist ...`, `is not a regular file`, `is not readable by uid U, gid G, groups ...`, `is writable by uid U`, `is empty`, `holds nothing but whitespace`, `has leading or trailing whitespace` | The mount is missing or wrong, or the owner, mode or `group_add` do not give uid 991 read access; or the container user can write the file (a setting pointed into `/data`, a mount without `read_only: true` on a file 991 owns); or the content is empty or blank (Synapse strips such a value to nothing, and the macaroon key would silently fall back to one derived from the signing key); or a raw value has leading whitespace or trailing whitespace beyond one final newline. The registration file is exempt from the last check only. The message names the file and the setting, never content. |
+| `secret file PATH (SETTING) does not exist ...`, `is not a regular file`, `is not readable by uid U, gid G, groups ...`, `is writable by uid U`, `is owned by uid U`, `sits in the directory DIR, which is writable by uid U`, `is empty`, `holds nothing but whitespace`, `has leading or trailing whitespace`, `holds a byte outside printable ASCII` | The mount is missing or wrong, or the owner, mode or `group_add` do not give uid 991 read access; or the container user can write the file (a setting pointed into `/data`, a mount without `read_only: true` on a file 991 owns); or the container user owns the file, whatever its mode (an owner can chmod it): let root own it and use a group; or the container user can write the directory that holds the file (or the directory a link resolves into), which lets it replace the file; or the content is empty or blank (Synapse strips such a value to nothing, and the macaroon key would silently fall back to one derived from the signing key); or a raw value has leading whitespace or trailing whitespace beyond one final newline, or any byte outside 0x21 to 0x7e (a space, tab, control character, DEL or non-ASCII byte inside it). The registration file is exempt from the last two checks only (it is YAML: spaces, blank lines and non-ASCII text are fine). The message names the file and the setting, never content. |
+| `/data/homeserver.yaml lists the entry E in app_service_config_files, and it is not an absolute path ...` / `... it is not a readable regular file` | A registration the existing config lists cannot be read and compared, so a shared `as_token` could hide behind it, and Synapse's error for that prints the token. The start is refused, naming the entry (an unsafe character shown as `?`). Fix the entry (a path of `[A-Za-z0-9._/-]` to a readable file) or remove it. Not affected: the legacy `lk-jwt-as.yaml` and the entries under the secrets directory, which this mode unlists or replaces. |
 | `the registration files A and B have the same id / as_token / hs_token`, `the as_token of A is the hs_token of B`, `is not a registration Synapse can load` | Compared before Synapse is started, by `id` and by a sha256 of each token, across the files to be listed and the other registrations that stay listed in an existing `homeserver.yaml`. Synapse refuses a duplicate itself, but its error for a repeated `as_token` prints the token. Only file names are printed. |
 | `SYNAPSE_SECRETS_DIR is not set, but /data/homeserver.yaml has KEY` | The mode is off on a config a store-mode boot wrote (`matrix_authentication_service.secret_path`, `macaroon_secret_key_path` or `form_secret_path`). Going on would write the MAS secret inline next to its `secret_path`, which Synapse refuses with an error that prints the secret, and would list a second copy of the registration. Nothing is written. Rolling back is not supported: set `SYNAPSE_SECRETS_DIR` again, or restore a `homeserver.yaml` from before the switch (fix forward). A config that never saw store mode has none of these keys and is untouched. |
 | `homeserver.yaml holds an inline secret at KEY` | See "Keys that `--no-secrets-in-config` does not check" below. Also the final re-read (after every writer): an inline key left in the file, or a `*_path` reference that did not land, stops the start. |
