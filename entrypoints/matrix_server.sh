@@ -1,5 +1,199 @@
 #!/bin/bash
 
+# -----------------------------------------------------------------------------
+# SECRET STORE MODE: EXPLICIT, OFF BY DEFAULT.
+#
+# Switched on by one non-secret variable, SYNAPSE_SECRETS_DIR (the directory the
+# operator mounts read-only, normally /run/secrets). Unset or empty, nothing in
+# this block runs and every other line of this script behaves as it always did.
+# docs/synapse-secret-files.md is the reference: file names, variables, the
+# inventory, what is refused and why.
+#
+# In store mode Synapse reads every secret from a file the container only reads:
+#   * homeserver.yaml gets `*_path` references and no inline secret (the three
+#     keys `/start.py generate` writes inline are deleted again on this very
+#     boot, before Synapse ever starts);
+#   * a secret in the environment is a start error, named, never its value;
+#   * a missing, empty or unreadable secret file is a start error naming the
+#     file, never its content;
+#   * Synapse starts with --no-secrets-in-config, so an inline secret that still
+#     got into homeserver.yaml is a start error of Synapse itself;
+#   * the container must run as the Synapse user (compose `user: "991:991"`),
+#     never as root: /start.py drops root with gosu, which clears supplementary
+#     groups, and a secret file readable through `group_add` would then be
+#     unreadable AFTER this script's own check had passed.
+# This script never prints a value: no `set -x`, no echo of a secret variable, no
+# `cat` of a secret file; homeserver.yaml is edited with yq only.
+# -----------------------------------------------------------------------------
+SECRET_STORE=0
+[ -z "${SYNAPSE_SECRETS_DIR:-}" ] || SECRET_STORE=1
+
+# Environment variables that would carry a secret. Present in the environment of
+# a store-mode container (even empty) means the operator has not finished the
+# switch: the value is then in `docker inspect` and in /proc/<pid>/environ, which
+# is exactly what the store removes. The first five are the secrets this image
+# consumes (this script, and /start.py in its migrate_config mode); the last two
+# are other services' secrets that reach Synapse when a compose file still gives
+# it `env_file: .env`. SYNAPSE_SECRET_ENV_DENY adds more names (non-secret).
+SS_REFUSED_ENV_NAMES="MAS_SHARED_SECRET LK_JWT_AS_TOKEN LK_JWT_HS_TOKEN SYNAPSE_REGISTRATION_SHARED_SECRET SYNAPSE_MACAROON_SECRET_KEY SIWEOIDC_SIGNING_KEY_PEM LIVEKIT_SECRET"
+
+# Inline secret keys that Synapse's --no-secrets-in-config does NOT check (v1.163.0
+# synapse/config: only macaroon_secret_key, form_secret, registration_shared_secret,
+# matrix_authentication_service.secret, redis.password, recaptcha_*_key,
+# turn_shared_secret and worker_replication_secret are covered). None of these is
+# written by this image; a homeserver.yaml that carries one is refused, because
+# store mode promises that no secret stays inline.
+SS_INLINE_KEYS=(
+  '.password_config.pepper'
+  '.email.smtp_pass'
+  '.jwt_config.secret'
+  '.turn_password'
+  '.database.args.password'
+  '.oidc_providers[].client_secret'
+)
+
+secret_store_refuse() {
+  echo "REFUSING TO START (secret store mode): $*" >&2
+  exit 1
+}
+
+# One secret file: a regular file, readable by THIS process, not empty. The open
+# below reads no byte. Only the path is ever printed.
+secret_store_check_file() { # $1 the setting that names the file, $2 its path
+  local what="$1" f="$2"
+  [[ "$f" =~ ^/[A-Za-z0-9._/-]+$ ]] \
+    || secret_store_refuse "${what} must be an absolute path made of [A-Za-z0-9._/-]."
+  [ -e "$f" ] \
+    || secret_store_refuse "secret file ${f} (${what}) does not exist, or its directory cannot be searched. Mount it read-only into the container."
+  [ -f "$f" ] \
+    || secret_store_refuse "${f} (${what}) is not a regular file."
+  { : < "$f"; } 2>/dev/null \
+    || secret_store_refuse "secret file ${f} (${what}) is not readable by uid $(id -u), gid $(id -g), groups $(id -G | tr ' ' ','). Check its owner and mode, and the container's user and group_add."
+  [ -s "$f" ] \
+    || secret_store_refuse "secret file ${f} (${what}) is empty."
+}
+
+# Every refusal that does not need homeserver.yaml, before anything is written
+# (and so before `/start.py generate` on a first boot).
+secret_store_preflight() {
+  local dir="${SYNAPSE_SECRETS_DIR%/}" n f
+  local -a names
+
+  [[ "$dir" =~ ^/[A-Za-z0-9._/-]+$ ]] \
+    || secret_store_refuse "SYNAPSE_SECRETS_DIR must be an absolute directory path made of [A-Za-z0-9._/-]."
+
+  # Names only, never values. read -a splits on comma and space and never globs.
+  IFS=', ' read -r -a names <<< "${SS_REFUSED_ENV_NAMES} ${SYNAPSE_SECRET_ENV_DENY:-}" || true
+  for n in "${names[@]}"; do
+    [[ "$n" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] \
+      || secret_store_refuse "SYNAPSE_SECRET_ENV_DENY holds an entry that is not an environment variable name."
+    if [ -n "${!n+x}" ]; then
+      secret_store_refuse "the environment variable ${n} is set. In store mode no secret is passed in the environment: remove it from env_file and environment, and put the value in a file under ${dir}/."
+    fi
+  done
+
+  if [ "$(id -u)" = 0 ]; then
+    secret_store_refuse "the container runs as root. Run it as the Synapse user (compose: user: \"991:991\"): /start.py would drop root with gosu, which clears supplementary groups, and a secret file readable only through group_add would then be unreadable."
+  fi
+  # With UID in the environment /start.py always calls gosu, which a non-root user cannot.
+  if tr '\0' '\n' </proc/$$/environ 2>/dev/null | grep -q '^UID='; then
+    secret_store_refuse "the environment variable UID is set. /start.py would then try to switch users with gosu; run the container with compose user: \"991:991\" and leave UID and GID unset."
+  fi
+
+  # yq -i writes through a temp file and copies it back, so it needs write
+  # permission on the file itself (a homeserver.yaml owned by another uid fails
+  # with "permission denied" even when /data is ours).
+  [ -d /data ] && [ -w /data ] \
+    || secret_store_refuse "/data is not writable by uid $(id -u). Give the Synapse user (991) ownership of the data volume once."
+  if [ -f /data/homeserver.yaml ] && [ ! -w /data/homeserver.yaml ]; then
+    secret_store_refuse "/data/homeserver.yaml is not writable by uid $(id -u). Give the Synapse user (991) ownership of it once."
+  fi
+
+  SS_MAS_FILE="${SYNAPSE_MAS_SECRET_FILE:-${dir}/mas_shared_secret}"
+  SS_MACAROON_FILE="${SYNAPSE_MACAROON_SECRET_FILE:-${dir}/macaroon_secret_key}"
+  SS_FORM_FILE="${SYNAPSE_FORM_SECRET_FILE:-${dir}/form_secret}"
+  SS_APPSERVICE_FILES=()
+  if [ -n "${SYNAPSE_APPSERVICE_FILES+x}" ]; then
+    # Set but empty is a valid choice: no registration file.
+    IFS=', ' read -r -a SS_APPSERVICE_FILES <<< "${SYNAPSE_APPSERVICE_FILES}" || true
+  else
+    SS_APPSERVICE_FILES=("${dir}/lk_jwt_as_registration.yaml")
+  fi
+  secret_store_check_file SYNAPSE_MAS_SECRET_FILE "$SS_MAS_FILE"
+  secret_store_check_file SYNAPSE_MACAROON_SECRET_FILE "$SS_MACAROON_FILE"
+  secret_store_check_file SYNAPSE_FORM_SECRET_FILE "$SS_FORM_FILE"
+  for f in "${SS_APPSERVICE_FILES[@]}"; do
+    secret_store_check_file SYNAPSE_APPSERVICE_FILES "$f"
+  done
+  secret_store_check_inline_keys
+  echo "Secret store mode: MAS, macaroon and form secrets and the appservice registration(s) are read from files under ${dir}/; none is in the environment; Synapse will start with --no-secrets-in-config."
+}
+
+# homeserver.yaml must carry none of the inline secret keys that Synapse's own flag
+# does not check. Run before anything is written (an existing config), and again on
+# the final re-read.
+secret_store_check_inline_keys() {
+  local hs=/data/homeserver.yaml k n
+  [ -f "$hs" ] || return 0
+  for k in "${SS_INLINE_KEYS[@]}"; do
+    n=$(yq "[${k}] | map(select(. != null and . != \"\")) | length" "$hs" 2>/dev/null) || n=error
+    [ "$n" = 0 ] \
+      || secret_store_refuse "/data/homeserver.yaml holds an inline secret at ${k} (or could not be read). Synapse's --no-secrets-in-config does not check this key; move the value to a file or remove it."
+  done
+}
+
+# What is ON DISK, after every writer has had its turn: none of the inline keys,
+# and the `*_path` references this mode owns.
+secret_store_verify_on_disk() {
+  local hs=/data/homeserver.yaml n
+  [ -f "$hs" ] || return 0
+  n=$(yq '[.macaroon_secret_key, .form_secret, .registration_shared_secret, .registration_shared_secret_path, .matrix_authentication_service.secret] | map(select(. != null)) | length' "$hs" 2>/dev/null) || n=error
+  [ "$n" = 0 ] \
+    || secret_store_refuse "/data/homeserver.yaml still holds an inline secret key (macaroon_secret_key, form_secret, registration_shared_secret(_path) or matrix_authentication_service.secret), or could not be read."
+  [ "$(yq '.macaroon_secret_key_path' "$hs" 2>/dev/null)" = "$SS_MACAROON_FILE" ] \
+    && [ "$(yq '.form_secret_path' "$hs" 2>/dev/null)" = "$SS_FORM_FILE" ] \
+    && [ "$(yq '.matrix_authentication_service.secret_path' "$hs" 2>/dev/null)" = "$SS_MAS_FILE" ] \
+    || secret_store_refuse "/data/homeserver.yaml does not reference the secret files (macaroon_secret_key_path, form_secret_path, matrix_authentication_service.secret_path) after writing them."
+  secret_store_check_inline_keys
+}
+
+# Delete every inline secret this image knows, point the `*_path` keys at the
+# files. One yq edit: all of it or none of it. registration_shared_secret and its
+# _path are deleted outright (nothing uses them).
+apply_secret_store_config() {
+  local hs=/data/homeserver.yaml
+  SS_MAC="$SS_MACAROON_FILE" SS_FORM="$SS_FORM_FILE" SS_MAS="$SS_MAS_FILE" yq -i '
+      del(.macaroon_secret_key) | del(.form_secret)
+    | del(.registration_shared_secret) | del(.registration_shared_secret_path)
+    | del(.matrix_authentication_service.secret)
+    | .macaroon_secret_key_path = strenv(SS_MAC)
+    | .form_secret_path = strenv(SS_FORM)
+    | .matrix_authentication_service.secret_path = strenv(SS_MAS)
+  ' "$hs" || secret_store_refuse "could not write the secret file references to ${hs}."
+  secret_store_verify_on_disk
+  echo "Secret store mode: homeserver.yaml now has macaroon_secret_key_path, form_secret_path and matrix_authentication_service.secret_path, and no inline secret."
+}
+
+# The registration file(s) are mounted secrets (they hold the as_token and the
+# hs_token): listed once each, never rendered, rewritten or deleted here. The old
+# rendered /data/lk-jwt-as.yaml is only unlisted by apply_lk_jwt_membership, and
+# the file itself stays until the operator deletes it: listing both would make
+# Synapse refuse the duplicate as_token, and its error message prints that token.
+apply_secret_store_appservices() {
+  local hs=/data/homeserver.yaml f
+  for f in "${SS_APPSERVICE_FILES[@]}"; do
+    SS_F="$f" yq -i '(.app_service_config_files // []) as $l | .app_service_config_files = (($l - [strenv(SS_F)]) + [strenv(SS_F)])' "$hs" \
+      || secret_store_refuse "could not add ${f} to app_service_config_files."
+    [ "$(SS_F="$f" yq '[(.app_service_config_files // [])[] | select(. == strenv(SS_F))] | length' "$hs" 2>/dev/null)" = "1" ] \
+      || secret_store_refuse "${f} is not listed once in app_service_config_files after writing it."
+    echo "Secret store mode: appservice registration ${f} is listed in app_service_config_files."
+  done
+}
+
+if [ "$SECRET_STORE" = 1 ]; then
+  secret_store_preflight
+fi
+
 if [ ! -f /data/homeserver.yaml ]; then
 
 /start.py generate
@@ -195,7 +389,10 @@ apply_mas_config() {
   # explicit "was removed. Use the matrix_authentication_service configuration
   # instead." ConfigError. Either way no good state is destroyed and no failure
   # is hidden.
-  if [ -z "${mas_endpoint}" ] || [ -z "${MAS_SHARED_SECRET:-}" ]; then
+  #
+  # Store mode: the secret is a file (checked by secret_store_preflight and
+  # referenced by apply_secret_store_config), so only the endpoint can be missing.
+  if [ -z "${mas_endpoint}" ] || { [ "${SECRET_STORE:-0}" != 1 ] && [ -z "${MAS_SHARED_SECRET:-}" ]; }; then
     echo "ERROR: refusing to write matrix_authentication_service — endpoint (SIWEOIDC_INTERNAL_URL/SIWEOIDC_BASE_URL) or MAS_SHARED_SECRET is empty." >&2
     echo "ERROR: leaving /data/homeserver.yaml untouched; restore the environment and restart." >&2
     return 0
@@ -206,7 +403,10 @@ apply_mas_config() {
 
   yq -i ".matrix_authentication_service.enabled = true" /data/homeserver.yaml
   yq -i ".matrix_authentication_service.endpoint = \"${mas_endpoint}\"" /data/homeserver.yaml
-  yq -i ".matrix_authentication_service.secret = \"${MAS_SHARED_SECRET}\"" /data/homeserver.yaml
+  # Store mode never writes the secret: apply_secret_store_config sets secret_path.
+  if [ "${SECRET_STORE:-0}" != 1 ]; then
+    yq -i ".matrix_authentication_service.secret = \"${MAS_SHARED_SECRET}\"" /data/homeserver.yaml
+  fi
 }
 
 # -----------------------------------------------------------------------------
@@ -491,6 +691,15 @@ apply_lk_jwt_membership() {
   yq -i "(.app_service_config_files // []) as \$l | .app_service_config_files = (\$l - [\"${reg}\"])" /data/homeserver.yaml \
     || lk_jwt_refuse "could not remove the old entry from app_service_config_files."
 
+  # Store mode: the registration is a mounted file (apply_secret_store_appservices
+  # lists it). Nothing is rendered, chowned or deleted here: LK_JWT_AS_TOKEN and
+  # LK_JWT_HS_TOKEN are refused in the environment, and the old rendered
+  # ${reg} (unlisted above) is left for the operator to delete.
+  if [ "${SECRET_STORE:-0}" = 1 ]; then
+    apply_secret_store_appservices
+    return 0
+  fi
+
   # Not configured is a supported state, not an error: a deployment whose env
   # predates these variables must keep starting exactly as before (a merge to
   # main auto-deploys to dev-staging). Only the lk-jwt membership check is lost,
@@ -687,6 +896,9 @@ if [ -f /data/homeserver.yaml ]; then
   apply_matrixrtc_config
   apply_lk_jwt_membership
   apply_guest_policy
+  if [ "$SECRET_STORE" = 1 ]; then
+    apply_secret_store_config
+  fi
   # KEEP LAST among the apply_* functions. apply_mas_config deletes
   # .experimental_features.msc3861 and apply_matrixrtc_config writes four
   # .experimental_features.* keys (apply_lk_jwt_membership one more); running the denylist write after both means a
@@ -807,6 +1019,11 @@ if [ -f /data/homeserver.yaml ]; then
   fi
 fi
 
+# Store mode: the same re-read of the FILE as the gate above, for the secret keys.
+if [ "$SECRET_STORE" = 1 ]; then
+  secret_store_verify_on_disk
+fi
+
 # Repeat the warning here so it is the LAST thing in the log before Synapse's own
 # (very noisy) startup output, rather than something that scrolled away minutes
 # ago. An unprotected DID field is a standing condition, not a startup event.
@@ -814,4 +1031,11 @@ if [ "${SIWX_DID_FIELD_UNPROTECTED_WARN:-}" = "1" ]; then
   did_field_unprotected_banner "STARTING WITH THE FIELD UNPROTECTED because SIWX_ALLOW_UNPROTECTED_DID_FIELD=1 was set. This Synapse does not carry the MSC4133 write-ACL patch."
 fi
 
-/start.py
+# `run` is /start.py's default mode, spelled out so that the flag can follow it:
+# /start.py hands everything after `run` to `python -m synapse.app.homeserver`
+# (docker/start.py of v1.163.0, main(): args = args[2:]).
+if [ "$SECRET_STORE" = 1 ]; then
+  /start.py run --no-secrets-in-config
+else
+  /start.py
+fi

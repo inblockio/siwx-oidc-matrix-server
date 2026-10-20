@@ -42,11 +42,11 @@ stores; nothing here can patch it.
 | `dockerfiles/Dockerfile.livekit` | The livekit-server image: upstream at a pinned commit with the patches in `patches/livekit/` (the relay policy), their tests run in the build, upstream's runtime stage. |
 | `dockerfiles/Dockerfile.caddy-l4` | Caddy built with the `layer4` and `rate_limit` modules, for an edge that splits TURN-TLS by SNI and rate-limits `GET /resolve`. |
 | `real-stack/Dockerfile.synapse` | Builds `FROM` the published Synapse image, for siwx-oidc's hand-run real-stack tests. |
-| `entrypoints/matrix_server.sh` | Synapse entrypoint: writes `homeserver.yaml` (see [What runs on every boot](#what-runs-on-every-boot)). Baked into the image, not bind-mounted. |
+| `entrypoints/matrix_server.sh` | Synapse entrypoint: writes `homeserver.yaml` (see [What runs on every boot](#what-runs-on-every-boot)), and in the optional secret store mode reads every secret from a file ([docs/synapse-secret-files.md](docs/synapse-secret-files.md)). Baked into the image, not bind-mounted. |
 | `entrypoints/element_entrypoint.sh` | Element entrypoint: templates `config.json`, favicons, the theme stylesheet link. Bind-mounted by `docker-compose.yml`. |
 | `config/` | Element config, nginx config and security headers, service-worker boot shim, theme CSS, LiveKit config, brand assets. |
 | `patches/synapse/`, `patches/element-web/` | Vendored patches and their registries (`README.md` in each). |
-| `scripts/` | Registry, hunk and Copy Markdown vector checks and the Element patch unit tests (`element-patch-tests.sh`, run in CI), DID-field guard acceptance test, localpart-vector check, deployment audits, the storage controller, e2e helpers. |
+| `scripts/` | Registry, hunk and Copy Markdown vector checks and the Element patch unit tests (`element-patch-tests.sh`, run in CI), DID-field guard acceptance test, the secret store mode tests (`synapse-secret-store-accept.sh`, `synapse-secret-store-e2e.sh`, run in CI), localpart-vector check, deployment audits, the storage controller, e2e helpers. |
 | `verify-deployment.sh`, `verify-theme.sh` | Probe of a live deployment's public endpoints, read-only unless `--e2ee` (which signs in and sends a message); static theme check. |
 | `docs/` | Element theme contract, Element source build, the Copy Markdown algorithm and its conformance vectors, audits, drafts filed upstream. |
 | `skills/` | Task guides for agents (see [Skills](#skills)). |
@@ -80,7 +80,7 @@ change reaches an existing deployment.
 | Part | Settings | How a change reaches an existing deployment |
 |---|---|---|
 | First boot only (`/data/homeserver.yaml` absent) | `/start.py generate`, `server_name`, `public_baseurl`, the listener, `serve_server_wellknown: false`, retention, server notices | Edit `/data/homeserver.yaml` in the `matrix_data` volume, then restart |
-| Every boot | `apply_mas_config` (delegated auth, and the migration off `experimental_features.msc3861`), `apply_matrixrtc_config` (MSC4108/4143/3266/4222, delayed events, `rc_*` limits, `matrix_rtc` transport), `apply_did_field_protection`, admin promotion, the final on-disk denylist check | Change the entrypoint and rebuild the image; a restart re-applies it |
+| Every boot | `apply_mas_config` (delegated auth, and the migration off `experimental_features.msc3861`), `apply_matrixrtc_config` (MSC4108/4143/3266/4222, delayed events, `rc_*` limits, `matrix_rtc` transport), in secret store mode `secret_store_preflight` (before anything is written) and `apply_secret_store_config`, `apply_did_field_protection`, admin promotion, the final on-disk denylist check | Change the entrypoint and rebuild the image; a restart re-applies it |
 
 - **`apply_mas_config` refuses to write empty values.** With `SIWEOIDC_BASE_URL` (or
   `SIWEOIDC_INTERNAL_URL`) or `MAS_SHARED_SECRET` missing, it leaves the file untouched
@@ -88,6 +88,12 @@ change reaches an existing deployment.
   boot on. Keep that guard.
 - **`apply_did_field_protection` stays last among the `apply_*` functions**, so no later
   write can clobber the denylist. The final re-read before `/start.py` backs this up.
+- **Secret store mode is explicit and must stay byte-neutral when off.** It is switched on
+  only by `SYNAPSE_SECRETS_DIR` (see [Secrets and admin promotion](#secrets-and-admin-promotion)).
+  With the variable unset, the rendered `homeserver.yaml` and `lk-jwt-as.yaml` must equal what
+  the entrypoint rendered before the mode existed; `scripts/synapse-secret-store-accept.sh`
+  compares them to a committed golden, and a deliberate change to the mode-off output
+  updates that golden in the same commit.
 - **Rolling Synapse back to before 1.157 is not just an image revert.** A migrated
   `homeserver.yaml` has no `msc3861` block, and an old entrypoint will not recreate it on
   an existing volume. Restore a pre-migration `homeserver.yaml` as well.
@@ -280,6 +286,16 @@ Guides and scripts here must not contradict it:
   localparts, so `MATRIX_ADMIN_MXID` is used verbatim, otherwise the entrypoint looks the
   account up; `/set-admin` asks siwx-oidc's `/resolve`. Values reach Python through the
   environment, never interpolated into source.
+- **Synapse secret store mode** (`SYNAPSE_SECRETS_DIR`, [docs/synapse-secret-files.md](docs/synapse-secret-files.md))
+  reads the macaroon, form and MAS secrets and the application-service registration from
+  read-only files, writes only `*_path` references, and starts Synapse with
+  `--no-secrets-in-config`. Do not "simplify" these: (1) the refusal to run as root, because
+  `/start.py` drops root with `gosu`, which clears the supplementary groups a group-readable
+  secret file depends on, after this script's own readability check has already passed as
+  root; (2) the refusal of a secret in the environment, named and never valued; (3) the
+  entrypoint never prints a value, so there is no `set -x`, no echo of a secret and no `cat`
+  of a secret file; (4) the old rendered `/data/lk-jwt-as.yaml` is unlisted but never
+  deleted, because Synapse's error for a duplicate `as_token` prints the token.
 - **Retention is off by default.** `MATRIX_MESSAGE_LIFETIME` is only the upper bound a
   room may request; purging needs `MATRIX_RETENTION_ENABLED=true` and
   `MATRIX_RETENTION_MAX_LIFETIME`. Both are first-boot settings.
@@ -295,6 +311,8 @@ docker build --target patch-tests -f dockerfiles/Dockerfile.element .  # unit te
 node --test scripts/browser-eventindex-invariants.mjs
 scripts/did-field-guard-accept.sh        # needs a container runtime; see its header
 scripts/storage-controller-credential-test.sh  # where the storage controller reads the MAS secret from (CI)
+scripts/synapse-secret-store-accept.sh   # secret store mode, no runtime; needs mikefarah yq v4 and python3 (CI)
+scripts/synapse-secret-store-e2e.sh --image IMG  # secret store mode in containers, as 991:991 with group_add (CI)
 scripts/check-did-localpart-vectors.sh   # needs `gh`; compares against siwx-oidc's fixture
 e2e-harness/run.sh smoke                 # hermetic stack; needs podman and a siwx-oidc checkout
 ```
