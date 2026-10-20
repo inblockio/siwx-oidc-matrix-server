@@ -13,9 +13,14 @@
 #   * homeserver.yaml gets `*_path` references and no inline secret (the three
 #     keys `/start.py generate` writes inline are deleted again on this very
 #     boot, before Synapse ever starts);
-#   * a secret in the environment is a start error, named, never its value;
-#   * a missing, empty or unreadable secret file is a start error naming the
-#     file, never its content;
+#   * a secret-looking variable in the environment (a fixed list, any name with
+#     SECRET, TOKEN, PASSWORD, ... in it, any URL with a password) is a start
+#     error, named, never its value;
+#   * a missing, empty, blank, unreadable or writable secret file is a start error
+#     naming the file, never its content; two registrations that share an id or a
+#     token are refused by file name before Synapse can print the token;
+#   * with the mode off, a homeserver.yaml that a store-mode boot wrote is refused
+#     (fix forward), not completed with an inline secret beside the file reference;
 #   * Synapse starts with --no-secrets-in-config, so an inline secret that still
 #     got into homeserver.yaml is a start error of Synapse itself;
 #   * the container must run as the Synapse user (compose `user: "991:991"`),
@@ -37,6 +42,17 @@ SECRET_STORE=0
 # it `env_file: .env`. SYNAPSE_SECRET_ENV_DENY adds more names (non-secret).
 SS_REFUSED_ENV_NAMES="MAS_SHARED_SECRET LK_JWT_AS_TOKEN LK_JWT_HS_TOKEN SYNAPSE_REGISTRATION_SHARED_SECRET SYNAPSE_MACAROON_SECRET_KEY SIWEOIDC_SIGNING_KEY_PEM LIVEKIT_SECRET"
 
+# A fixed list cannot name every secret a shared `.env` carries, so a name that
+# LOOKS like a secret is refused too: any variable whose name contains one of these
+# words (case-insensitive), whatever its value. The store mode's own settings
+# contain SECRET and are the allowlist below: each holds a path or a list of names,
+# never a value. Every other name this script or /start.py reads is free of these
+# words (checked against the script when this list was written).
+SS_NAME_WORDS=(SECRET TOKEN PASSWORD PASSWD PEM PRIVATE_KEY API_KEY)
+SS_ENV_ALLOWED_NAMES=" SYNAPSE_SECRETS_DIR SYNAPSE_MAS_SECRET_FILE SYNAPSE_MACAROON_SECRET_FILE SYNAPSE_FORM_SECRET_FILE SYNAPSE_SECRET_ENV_DENY "
+# A URL whose userinfo part holds a password (user, colon, password, then the at sign), in any variable.
+SS_URL_USERINFO_RE='[A-Za-z][A-Za-z0-9+.-]*://[^/?#[:space:]@]*:[^/?#[:space:]@]+@'
+
 # Inline secret keys that Synapse's --no-secrets-in-config does NOT check (v1.163.0
 # synapse/config: only macaroon_secret_key, form_secret, registration_shared_secret,
 # matrix_authentication_service.secret, redis.password, recaptcha_*_key,
@@ -49,18 +65,28 @@ SS_INLINE_KEYS=(
   '.jwt_config.secret'
   '.turn_password'
   '.database.args.password'
+  '.databases.*.args.password'
+  '.oidc_config.client_secret'
   '.oidc_providers[].client_secret'
+  '.oidc_providers[].client_secret_jwt_key.key'
 )
+
+# The registration file the mode-off boots render. Store mode never writes it and
+# unlists it; the file itself stays until the operator deletes it.
+SS_LEGACY_REGISTRATION=/data/lk-jwt-as.yaml
 
 secret_store_refuse() {
   echo "REFUSING TO START (secret store mode): $*" >&2
   exit 1
 }
 
-# One secret file: a regular file, readable by THIS process, not empty. The open
-# below reads no byte. Only the path is ever printed.
-secret_store_check_file() { # $1 the setting that names the file, $2 its path
-  local what="$1" f="$2"
+# One secret file: a regular file, readable by THIS process, that THIS process
+# cannot write, not empty, not blank. $3 is "raw" (the whole file is the value:
+# MAS, macaroon, form) or "yaml" (a registration). The checks below read no byte
+# into the shell or the log: they test permissions and count bytes through pipes.
+# Only the path is ever printed.
+secret_store_check_file() { # $1 the setting that names the file, $2 its path, $3 raw|yaml
+  local what="$1" f="$2" kind="${3:-raw}"
   [[ "$f" =~ ^/[A-Za-z0-9._/-]+$ ]] \
     || secret_store_refuse "${what} must be an absolute path made of [A-Za-z0-9._/-]."
   [ -e "$f" ] \
@@ -69,21 +95,144 @@ secret_store_check_file() { # $1 the setting that names the file, $2 its path
     || secret_store_refuse "${f} (${what}) is not a regular file."
   { : < "$f"; } 2>/dev/null \
     || secret_store_refuse "secret file ${f} (${what}) is not readable by uid $(id -u), gid $(id -g), groups $(id -G | tr ' ' ','). Check its owner and mode, and the container's user and group_add."
+  # A read-only bind mount answers "not writable" to every user. A file this process
+  # can write is not a store mount (for example a setting pointed into /data), and
+  # the container could then change a secret it only should read.
+  [ ! -w "$f" ] \
+    || secret_store_refuse "secret file ${f} (${what}) is writable by uid $(id -u). A secret file is mounted read-only (compose: read_only: true) and carries no write permission for the container user."
   [ -s "$f" ] \
     || secret_store_refuse "secret file ${f} (${what}) is empty."
+  # `-s` passes a file of blanks and newlines; Synapse strips such a value to "".
+  LC_ALL=C grep -q '[^[:space:]]' "$f" 2>/dev/null \
+    || secret_store_refuse "secret file ${f} (${what}) holds nothing but whitespace."
+  if [ "$kind" = raw ]; then
+    # The value is the file: no leading whitespace, and no trailing whitespace beyond
+    # one final newline. Synapse strips both ends, a reader that does not (the other
+    # consumer of the MAS secret) would see a different value.
+    # Each count is 1 when the byte looked at is not whitespace.
+    local lead core
+    lead=$(head -c1 "$f" | LC_ALL=C tr -d '[:space:]' | wc -c)
+    if [ "$(tail -c1 "$f" | LC_ALL=C tr -d '\n' | wc -c)" -eq 0 ]; then
+      core=$(tail -c2 "$f" | head -c1 | LC_ALL=C tr -d '[:space:]' | wc -c)   # the byte before the final newline
+    else
+      core=$(tail -c1 "$f" | LC_ALL=C tr -d '[:space:]' | wc -c)
+    fi
+    if [ "$lead" -ne 1 ] || [ "$core" -ne 1 ]; then
+      secret_store_refuse "secret file ${f} (${what}) has leading or trailing whitespace (one final newline is the only one allowed). Write the value alone, for example with printf '%s\\n'."
+    fi
+  fi
+}
+
+# Every variable of the environment THIS process was started with, as NAME=value
+# records ended by NUL. Read from /proc, so that a name bash cannot import (a dot
+# or a dash in it) is seen too; compgen is the fallback. Nothing here is printed.
+secret_store_env_records() {
+  if [ -r "/proc/$$/environ" ]; then
+    cat "/proc/$$/environ"
+  else
+    local n
+    for n in $(compgen -e); do printf '%s=%s\0' "$n" "${!n}"; done
+  fi
+}
+
+# Secret-looking names and URLs with a password, in ANY variable. A fixed list
+# cannot name what a shared `.env` carries. Only the NAME is ever printed.
+secret_store_scan_environment() {
+  local dir="$1" rec n v u p shown
+  while IFS= read -r -d '' rec; do
+    n="${rec%%=*}"
+    [ "$n" != "$rec" ] || continue
+    v="${rec#*=}"
+    shown="${n//[^A-Za-z0-9_.-]/?}"
+    case "$SS_ENV_ALLOWED_NAMES" in *" ${n} "*) ;; *)
+      u="${n^^}"
+      for p in "${SS_NAME_WORDS[@]}"; do
+        if [[ "$u" == *"$p"* ]]; then
+          secret_store_refuse "the environment variable ${shown} is set, and its name looks like a secret (it contains ${p}). In store mode no secret is passed in the environment: remove it from env_file and environment (a compose environment: list names only what Synapse needs), and put the value in a file under ${dir}/."
+        fi
+      done ;;
+    esac
+    if [[ "$v" =~ $SS_URL_USERINFO_RE ]]; then
+      secret_store_refuse "the environment variable ${shown} is set to a URL that carries a password in its userinfo part. In store mode no secret is passed in the environment: remove the password from the URL and the variable, and put it in a file under ${dir}/."
+    fi
+  done < <(secret_store_env_records)
+}
+
+# sha256 of one string field of a registration file, nothing else on stdout; fails
+# when the field is not a non-empty string. The value stays in the pipe.
+secret_store_reg_hash() { # $1 file, $2 key
+  [ "$(yq ".${2} | select(tag == \"!!str\" and length > 0) | tag" "$1" 2>/dev/null)" = '!!str' ] || return 1
+  yq ".${2}" "$1" 2>/dev/null | sha256sum | cut -d' ' -f1
+}
+
+# Synapse refuses two registrations with one id or one as_token, and the error it
+# raises for the second as_token PRINTS THE TOKEN (appservice.py "Cannot reuse
+# as_token across application services"). So the registrations are compared here,
+# by id and by a sha256 of each token, before Synapse can print one: the files to be
+# listed (SS_APPSERVICE_FILES) and the other registrations that stay listed in an
+# existing homeserver.yaml. Only file names are printed.
+secret_store_check_registrations() {
+  local -A seen_id=() seen_as=() seen_hs=()
+  local -a others=() all=()
+  local e f i n="${#SS_APPSERVICE_FILES[@]}" h_id h_as h_hs
+  if [ -f /data/homeserver.yaml ]; then
+    while IFS= read -r e; do
+      [ -n "$e" ] || continue
+      [ "$e" != "$SS_LEGACY_REGISTRATION" ] || continue    # unlisted by this mode
+      case "$e" in "${SS_DIR}/"*) continue ;; esac         # this mode's own entries are replaced
+      case " ${SS_APPSERVICE_FILES[*]} " in *" ${e} "*) continue ;; esac   # the same file, compared once
+      [[ "$e" =~ ^/[A-Za-z0-9._/-]+$ ]] && [ -f "$e" ] && [ -r "$e" ] || continue
+      others+=("$e")
+    done < <(yq '(.app_service_config_files // [])[] | select(tag == "!!str")' /data/homeserver.yaml 2>/dev/null)
+  fi
+  all=("${SS_APPSERVICE_FILES[@]}" "${others[@]}")
+  for ((i = 0; i < ${#all[@]}; i++)); do
+    f="${all[i]}"
+    if ! { h_id=$(secret_store_reg_hash "$f" id) && h_as=$(secret_store_reg_hash "$f" as_token) && h_hs=$(secret_store_reg_hash "$f" hs_token); }; then
+      if [ "$i" -lt "$n" ]; then
+        secret_store_refuse "registration file ${f} (SYNAPSE_APPSERVICE_FILES) is not a registration Synapse can load: it needs the string fields id, as_token and hs_token."
+      fi
+      continue    # another registration of the config: Synapse judges it
+    fi
+    [ -z "${seen_id[$h_id]:-}" ] \
+      || secret_store_refuse "the registration files ${seen_id[$h_id]} and ${f} have the same id. Synapse refuses two application services with one id."
+    [ -z "${seen_as[$h_as]:-}" ] \
+      || secret_store_refuse "the registration files ${seen_as[$h_as]} and ${f} have the same as_token. Synapse refuses that with an error message that prints the token, so the files are refused here, by name only. Give each application service its own as_token."
+    [ -z "${seen_hs[$h_hs]:-}" ] \
+      || secret_store_refuse "the registration files ${seen_hs[$h_hs]} and ${f} have the same hs_token. Give each application service its own hs_token."
+    [ -z "${seen_hs[$h_as]:-}" ] \
+      || secret_store_refuse "the as_token of ${f} is the hs_token of ${seen_hs[$h_as]}. Give each token its own value."
+    [ -z "${seen_as[$h_hs]:-}" ] \
+      || secret_store_refuse "the hs_token of ${f} is the as_token of ${seen_as[$h_hs]}. Give each token its own value."
+    [ "$h_as" != "$h_hs" ] \
+      || secret_store_refuse "the registration file ${f} has the same value as as_token and as hs_token."
+    seen_id[$h_id]="$f"; seen_as[$h_as]="$f"; seen_hs[$h_hs]="$f"
+  done
 }
 
 # Every refusal that does not need homeserver.yaml, before anything is written
 # (and so before `/start.py generate` on a first boot).
 secret_store_preflight() {
-  local dir="${SYNAPSE_SECRETS_DIR%/}" n f
-  local -a names
+  local dir="${SYNAPSE_SECRETS_DIR%/}" n f tmpd tmpf
+  local -a names files
 
   [[ "$dir" =~ ^/[A-Za-z0-9._/-]+$ ]] \
     || secret_store_refuse "SYNAPSE_SECRETS_DIR must be an absolute directory path made of [A-Za-z0-9._/-]."
+  SS_DIR="$dir"
 
-  # Names only, never values. read -a splits on comma and space and never globs.
-  IFS=', ' read -r -a names <<< "${SS_REFUSED_ENV_NAMES} ${SYNAPSE_SECRET_ENV_DENY:-}" || true
+  # yq -i writes its temp file under $TMPDIR (default /tmp): with that unwritable
+  # (a read-only root file system without a tmpfs) every edit below would fail
+  # half way. Checked first, before anything else needs a temp file.
+  tmpd="${TMPDIR:-/tmp}"
+  if tmpf=$(mktemp "${tmpd%/}/.ss-preflight.XXXXXX" 2>/dev/null); then
+    rm -f "$tmpf" || secret_store_refuse "could not remove the test file ${tmpf} from ${tmpd}."
+  else
+    secret_store_refuse "${tmpd} is not a writable directory. yq -i writes its temp file there: give the container a writable /tmp (compose: tmpfs: /tmp) or point TMPDIR at a writable directory."
+  fi
+
+  # Names only, never values. read -a splits on comma, space, tab and newline and
+  # never globs; -d '' reads the whole value, not its first line.
+  IFS=$', \n\t' read -r -d '' -a names <<< "${SS_REFUSED_ENV_NAMES} ${SYNAPSE_SECRET_ENV_DENY:-}" || true
   for n in "${names[@]}"; do
     [[ "$n" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] \
       || secret_store_refuse "SYNAPSE_SECRET_ENV_DENY holds an entry that is not an environment variable name."
@@ -91,6 +240,7 @@ secret_store_preflight() {
       secret_store_refuse "the environment variable ${n} is set. In store mode no secret is passed in the environment: remove it from env_file and environment, and put the value in a file under ${dir}/."
     fi
   done
+  secret_store_scan_environment "$dir"
 
   if [ "$(id -u)" = 0 ]; then
     secret_store_refuse "the container runs as root. Run it as the Synapse user (compose: user: \"991:991\"): /start.py would drop root with gosu, which clears supplementary groups, and a secret file readable only through group_add would then be unreadable."
@@ -99,6 +249,15 @@ secret_store_preflight() {
   if tr '\0' '\n' </proc/$$/environ 2>/dev/null | grep -q '^UID='; then
     secret_store_refuse "the environment variable UID is set. /start.py would then try to switch users with gosu; run the container with compose user: \"991:991\" and leave UID and GID unset."
   fi
+
+  # This script edits /data/homeserver.yaml and nothing else. If /start.py were told
+  # to read another config, Synapse would run on a file nothing here has secured.
+  case "${SYNAPSE_CONFIG_DIR:-}" in ""|/data|/data/) ;; *)
+    secret_store_refuse "SYNAPSE_CONFIG_DIR is set to something other than /data. This entrypoint secures /data/homeserver.yaml only; unset it." ;;
+  esac
+  case "${SYNAPSE_CONFIG_PATH:-}" in ""|/data/homeserver.yaml) ;; *)
+    secret_store_refuse "SYNAPSE_CONFIG_PATH is set to something other than /data/homeserver.yaml. This entrypoint secures that file only; unset it." ;;
+  esac
 
   # yq -i writes through a temp file and copies it back, so it needs write
   # permission on the file itself (a homeserver.yaml owned by another uid fails
@@ -114,19 +273,41 @@ secret_store_preflight() {
   SS_FORM_FILE="${SYNAPSE_FORM_SECRET_FILE:-${dir}/form_secret}"
   SS_APPSERVICE_FILES=()
   if [ -n "${SYNAPSE_APPSERVICE_FILES+x}" ]; then
-    # Set but empty is a valid choice: no registration file.
-    IFS=', ' read -r -a SS_APPSERVICE_FILES <<< "${SYNAPSE_APPSERVICE_FILES}" || true
+    # Set but empty is a valid choice: no registration file. The whole value is read,
+    # a newline separates like a comma or a space; each file once.
+    IFS=$', \n\t' read -r -d '' -a files <<< "${SYNAPSE_APPSERVICE_FILES}" || true
+    for f in "${files[@]}"; do
+      case " ${SS_APPSERVICE_FILES[*]} " in *" ${f} "*) ;; *) SS_APPSERVICE_FILES+=("$f") ;; esac
+    done
   else
     SS_APPSERVICE_FILES=("${dir}/lk_jwt_as_registration.yaml")
   fi
-  secret_store_check_file SYNAPSE_MAS_SECRET_FILE "$SS_MAS_FILE"
-  secret_store_check_file SYNAPSE_MACAROON_SECRET_FILE "$SS_MACAROON_FILE"
-  secret_store_check_file SYNAPSE_FORM_SECRET_FILE "$SS_FORM_FILE"
+  secret_store_check_file SYNAPSE_MAS_SECRET_FILE "$SS_MAS_FILE" raw
+  secret_store_check_file SYNAPSE_MACAROON_SECRET_FILE "$SS_MACAROON_FILE" raw
+  secret_store_check_file SYNAPSE_FORM_SECRET_FILE "$SS_FORM_FILE" raw
   for f in "${SS_APPSERVICE_FILES[@]}"; do
-    secret_store_check_file SYNAPSE_APPSERVICE_FILES "$f"
+    secret_store_check_file SYNAPSE_APPSERVICE_FILES "$f" yaml
   done
+  secret_store_check_registrations
   secret_store_check_inline_keys
   echo "Secret store mode: MAS, macaroon and form secrets and the appservice registration(s) are read from files under ${dir}/; none is in the environment; Synapse will start with --no-secrets-in-config."
+}
+
+# The mode is off, but homeserver.yaml was written by a store-mode boot. Going on
+# would write `matrix_authentication_service.secret` next to the `secret_path` store
+# mode set (Synapse's MasConfigModel refuses both and its error repeats the block,
+# the secret included) and would list a second copy of the registration. Nothing
+# is written; this is a read of the file, and a config without those keys (every
+# deployment that never used the mode) passes untouched.
+secret_store_mode_off_check() {
+  local hs=/data/homeserver.yaml k n
+  [ -f "$hs" ] || return 0
+  for k in .matrix_authentication_service.secret_path .macaroon_secret_key_path .form_secret_path; do
+    n=$(yq "[${k}] | map(select(. != null)) | length" "$hs" 2>/dev/null) || n=0
+    if [ "${n:-0}" != 0 ]; then
+      secret_store_refuse "SYNAPSE_SECRETS_DIR is not set, but /data/homeserver.yaml has ${k}, which only the secret store mode writes. With the mode off this entrypoint would write the secret inline next to it, and Synapse refuses that with an error message that prints the secret. Rolling back is not supported: fix forward (set SYNAPSE_SECRETS_DIR again and mount the secret files), or restore a homeserver.yaml from before the switch. Nothing was changed."
+    fi
+  done
 }
 
 # homeserver.yaml must carry none of the inline secret keys that Synapse's own flag
@@ -179,8 +360,21 @@ apply_secret_store_config() {
 # rendered /data/lk-jwt-as.yaml is only unlisted by apply_lk_jwt_membership, and
 # the file itself stays until the operator deletes it: listing both would make
 # Synapse refuse the duplicate as_token, and its error message prints that token.
+#
+# The entries under the secrets directory are this mode's: SYNAPSE_APPSERVICE_FILES
+# is the whole list of them. An entry an earlier boot added there that is no longer
+# in the list (a registration the operator dropped, or renamed) is unlisted first,
+# or Synapse would load a registration nobody wants, fail on a file that is no
+# longer mounted, or refuse two files with one id. Entries elsewhere are not touched.
 apply_secret_store_appservices() {
-  local hs=/data/homeserver.yaml f
+  local hs=/data/homeserver.yaml f e
+  while IFS= read -r e; do
+    case "$e" in "${SS_DIR}/"*) ;; *) continue ;; esac
+    case " ${SS_APPSERVICE_FILES[*]} " in *" ${e} "*) continue ;; esac
+    SS_F="$e" yq -i 'del(.app_service_config_files[] | select(tag == "!!str" and . == strenv(SS_F)))' "$hs" \
+      || secret_store_refuse "could not remove ${e} from app_service_config_files."
+    echo "Secret store mode: ${e} is no longer in SYNAPSE_APPSERVICE_FILES and is unlisted from app_service_config_files."
+  done < <(yq '(.app_service_config_files // [])[] | select(tag == "!!str")' "$hs" 2>/dev/null)
   for f in "${SS_APPSERVICE_FILES[@]}"; do
     SS_F="$f" yq -i '(.app_service_config_files // []) as $l | .app_service_config_files = (($l - [strenv(SS_F)]) + [strenv(SS_F)])' "$hs" \
       || secret_store_refuse "could not add ${f} to app_service_config_files."
@@ -192,6 +386,8 @@ apply_secret_store_appservices() {
 
 if [ "$SECRET_STORE" = 1 ]; then
   secret_store_preflight
+else
+  secret_store_mode_off_check
 fi
 
 if [ ! -f /data/homeserver.yaml ]; then
@@ -697,6 +893,11 @@ apply_lk_jwt_membership() {
   # ${reg} (unlisted above) is left for the operator to delete.
   if [ "${SECRET_STORE:-0}" = 1 ]; then
     apply_secret_store_appservices
+    # The registration the mode-off boots rendered stays on the volume by design
+    # (the operator deletes it after the check). Say so on every boot, by name.
+    if [ -e "$reg" ]; then
+      echo "Secret store mode: ${reg} is left over from boots without the mode. It is no longer listed and still holds both registration tokens: delete it once the switch is verified."
+    fi
     return 0
   fi
 

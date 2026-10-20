@@ -334,7 +334,13 @@ check "switch: the log names no value" bash -c "! grep -qF -e '$V_MAS' -e '$V_GE
 
 echo "== store mode: settings"
 new_dir s3; mkdir -p "$D/alt"
-cp "$D/sec/mas_shared_secret" "$D/alt/mas.txt"; cp "$D/sec/lk_jwt_as_registration.yaml" "$D/alt/as-a.yaml"; cp "$D/sec/lk_jwt_as_registration.yaml" "$D/alt/as-b.yaml"
+cp "$D/sec/mas_shared_secret" "$D/alt/mas.txt"; cp "$D/sec/lk_jwt_as_registration.yaml" "$D/alt/as-a.yaml"
+# A second registration Synapse would accept: its own id, sender and tokens (two copies of one
+# file are refused by Synapse itself, "Cannot reuse ID").
+sed -e 's/^id: .*/id: second-service/' -e 's/^sender_localpart: .*/sender_localpart: _second_service/' \
+  -e "s/^as_token: .*/as_token: \"$V_LKAS\"/" -e "s/^hs_token: .*/hs_token: \"$V_LKHS\"/" \
+  "$D/sec/lk_jwt_as_registration.yaml" > "$D/alt/as-b.yaml"
+chmod 0440 "$D/alt/as-b.yaml"     # a store file: the container user cannot write it
 new_hs_fixture
 run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec" "SYNAPSE_MAS_SECRET_FILE=$D/alt/mas.txt" "SYNAPSE_APPSERVICE_FILES=$D/alt/as-a.yaml,$D/alt/as-b.yaml"
 S3=$D
@@ -385,7 +391,7 @@ for f in mas_shared_secret macaroon_secret_key form_secret lk_jwt_as_registratio
   new_dir "r-miss-$f"; new_hs_fixture; rm "$D/sec/$f"; cp "$D/homeserver.yaml" "$D/.hs.before"
   run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec"
   refuses "missing $f is refused and the file is named" "secret file $D/sec/$f"
-  new_dir "r-empty-$f"; new_hs_fixture; chmod u+w "$D/sec/$f"; : > "$D/sec/$f"; cp "$D/homeserver.yaml" "$D/.hs.before"
+  new_dir "r-empty-$f"; new_hs_fixture; chmod u+w "$D/sec/$f"; : > "$D/sec/$f"; chmod 0440 "$D/sec/$f"; cp "$D/homeserver.yaml" "$D/.hs.before"
   run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec"
   refuses "empty $f is refused and the file is named" "secret file $D/sec/$f"
 done
@@ -430,6 +436,192 @@ new_dir r-inline-empty; new_hs_fixture
 yqv -i '.password_config.pepper = ""' "$D/homeserver.yaml"
 run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec"
 check "an empty pepper is not a secret: exits 0" test "$RC" = 0
+
+echo "== audit (PR #73): cases the first version missed"
+# AUD-1: `read` stops at the first newline, so a deny entry on a second line is never checked.
+NL_LIST="$(printf 'OTHER\nEXTRA_PASSWORD')"
+refuse_case "AUD-1 SYNAPSE_SECRET_ENV_DENY on two lines checks both" "the environment variable EXTRA_PASSWORD is set" "SYNAPSE_SECRET_ENV_DENY=${NL_LIST}" "EXTRA_PASSWORD=$V_LEAK"
+# AUD-2: a compose file that keeps `env_file: .env` passes every secret of that file. The
+# fixed list names seven; a secret-shaped name outside it (one the dev compose reads from .env)
+# must be refused too, while the store mode's own *_FILE / *_DIR / *_DENY settings pass.
+refuse_case "AUD-2 a secret-shaped variable outside the fixed list is refused" "the environment variable AQUA_MAIL_WEBMAIL_CLIENT_SECRET is set" "AQUA_MAIL_WEBMAIL_CLIENT_SECRET=$V_LEAK"
+# AUD-3: two registrations with the same as_token. Synapse refuses them with an error that
+# prints the token (synapse/config/appservice.py, "Cannot reuse as_token"); the entrypoint
+# must refuse first, naming the files, never the token.
+new_dir r-dup-token; new_hs_fixture; cp "$D/homeserver.yaml" "$D/.hs.before"
+sed -e 's/^id: lk-jwt-service$/id: call-control/' -e 's/^sender_localpart: .*/sender_localpart: _call_control/' \
+  -e "s/^hs_token: .*/hs_token: \"$V_LKHS\"/" "$D/sec/lk_jwt_as_registration.yaml" > "$D/sec/cc.yaml"; chmod 0440 "$D/sec/cc.yaml"
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec" "SYNAPSE_APPSERVICE_FILES=$D/sec/lk_jwt_as_registration.yaml,$D/sec/cc.yaml"
+refuses "AUD-3 two registrations with one as_token are refused before Synapse prints the token" "as_token"
+# AUD-4: rolling the switch back (mode off on a config a store-mode boot wrote). apply_mas_config
+# writes `secret` next to the `secret_path` store mode left; Synapse's MasConfigModel refuses
+# both, and its pydantic error repeats the whole block as input_value, the secret included.
+new_dir s-rollback
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec"
+test "$RC" = 0 || bad "AUD-4 seed: the store-mode boot exits 0" "rc=$RC"
+run_entry "$ENTRYPOINT" "$D" "${NOSTORE_ENV[@]}"
+check "AUD-4 mode off after store mode: matrix_authentication_service never holds both secret and secret_path" \
+  test "$(yqv '.matrix_authentication_service | (has("secret") and has("secret_path"))' "$D/homeserver.yaml")" = false
+# AUD-5: the switch leaves the old rendered registration (both tokens, readable by Synapse) on
+# the volume by design; the boot must at least say so, naming the file, so the operator's
+# "delete the old copies" step is not forgotten.
+check "AUD-5 switch: the log names the left-over /data/lk-jwt-as.yaml" grep -qF "$S2/lk-jwt-as.yaml" "$LAST_LOG"
+# AUD-6: a file holding only whitespace passes `-s`, and Synapse strips it to "": the macaroon
+# key then silently falls back to one derived from the signing key (synapse/config/key.py).
+new_dir r-blank; new_hs_fixture; chmod u+w "$D/sec/macaroon_secret_key"; printf '\n' > "$D/sec/macaroon_secret_key"; chmod 0440 "$D/sec/macaroon_secret_key"; cp "$D/homeserver.yaml" "$D/.hs.before"
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec"
+refuses "AUD-6 a secret file holding only whitespace is refused like an empty one" "secret file $D/sec/macaroon_secret_key"
+check "AUD-6 the refusal says whitespace (not a permission or emptiness refusal)" grep -q 'holds nothing but whitespace' "$LOG"
+# AUD-7: inline secrets Synapse 1.163 reads that neither its flag nor SS_INLINE_KEYS checks.
+i=0
+for key in '.oidc_config.client_secret' '.databases.main.args.password'; do
+  i=$((i+1)); new_dir "r-aud7-$i"; new_hs_fixture
+  K="$key" V="$V_LEAK" yqv -i 'eval(strenv(K)) = strenv(V)' "$D/homeserver.yaml"
+  run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec"
+  if [ "$RC" != 0 ] && grep -qF -- "inline secret at" "$LOG" && ! has_value "$LOG"; then ok "AUD-7 inline $key is refused"; else bad "AUD-7 inline $key is refused" "rc=$RC"; fi
+done
+new_dir r-aud7-jwtkey; new_hs_fixture
+V="$V_LEAK" yqv -i '.oidc_providers = [{"idp_id": "a", "client_secret_jwt_key": {"key": strenv(V), "jwt_header": {"alg": "ES256"}}}]' "$D/homeserver.yaml"
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec"
+if [ "$RC" != 0 ] && grep -qF -- "inline secret at" "$LOG" && ! has_value "$LOG"; then ok "AUD-7 inline oidc_providers[].client_secret_jwt_key.key is refused"; else bad "AUD-7 inline oidc_providers[].client_secret_jwt_key.key is refused" "rc=$RC"; fi
+# AUD-8: a secret file the container user can write is not a read-only store mount (for
+# example SYNAPSE_MAS_SECRET_FILE pointed into the data volume).
+new_dir r-writable; new_hs_fixture; chmod 0640 "$D/sec/mas_shared_secret"; cp "$D/homeserver.yaml" "$D/.hs.before"
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec"
+refuses "AUD-8 a secret file writable by the container user is refused" "secret file $D/sec/mas_shared_secret"
+# AUD-10: the entries store mode adds are never taken out again. Dropping the registration
+# (SYNAPSE_APPSERVICE_FILES set empty) or moving it to a new file name leaves the old store path
+# listed: Synapse then loads a registration the operator removed, or fails on a file that is no
+# longer mounted, or refuses two files with one id.
+new_dir s-unlist
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec"
+test "$RC" = 0 || bad "AUD-10 seed: the store-mode boot exits 0" "rc=$RC"
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec" "SYNAPSE_APPSERVICE_FILES="
+check "AUD-10 SYNAPSE_APPSERVICE_FILES set empty unlists the registration an earlier store boot listed" \
+  test "$(yqv '[(.app_service_config_files // [])[] | select(. == "'"$D"'/sec/lk_jwt_as_registration.yaml")] | length' "$D/homeserver.yaml")" = 0
+cp "$D/sec/lk_jwt_as_registration.yaml" "$D/sec/lk_jwt_as_registration-2.yaml"
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec" "SYNAPSE_APPSERVICE_FILES=$D/sec/lk_jwt_as_registration-2.yaml"
+check "AUD-10 a renamed registration file replaces the old entry (one entry with id lk-jwt-service)" \
+  test "$(yqv '.app_service_config_files | length' "$D/homeserver.yaml")" = 1
+
+echo "== audit (PR #73): the fixes, further cases"
+second_registration() { # second_registration DEST : a valid registration with its own id, sender and tokens, read-only
+  sed -e 's/^id: .*/id: second-service/' -e 's/^sender_localpart: .*/sender_localpart: _second_service/' \
+    -e "s/^as_token: .*/as_token: \"$V_LKAS\"/" -e "s/^hs_token: .*/hs_token: \"$V_LKHS\"/" \
+    "$D/sec/lk_jwt_as_registration.yaml" > "$1"
+  chmod 0440 "$1"
+}
+# AUD-1: the whole SYNAPSE_APPSERVICE_FILES value is read, a newline separates.
+new_dir r-nl-files; new_hs_fixture; second_registration "$D/sec/second.yaml"
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec" "SYNAPSE_APPSERVICE_FILES=$(printf '%s\n%s' "$D/sec/lk_jwt_as_registration.yaml" "$D/sec/second.yaml")"
+check "AUD-1 SYNAPSE_APPSERVICE_FILES on two lines lists both files" bash -c "
+  test $RC = 0 && test \"\$(yq '.app_service_config_files | length' '$D/homeserver.yaml')\" = 3"
+new_dir r-nl-bad; new_hs_fixture; cp "$D/homeserver.yaml" "$D/.hs.before"
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec" "SYNAPSE_APPSERVICE_FILES=$(printf '%s\n%s' "$D/sec/lk_jwt_as_registration.yaml" "/run/*.yaml")"
+refuses "AUD-1 a bad entry on the second line of SYNAPSE_APPSERVICE_FILES is refused" "SYNAPSE_APPSERVICE_FILES must be an absolute path"
+
+# AUD-2: any secret-looking name, any URL with a password, in any variable.
+refuse_case "AUD-2 the name check is case-insensitive" "the environment variable my_api_key is set" "my_api_key=$V_LEAK"
+refuse_case "AUD-2 a name bash cannot import is seen too" "the environment variable a.b_PASSWORD is set" "a.b_PASSWORD=$V_LEAK"
+refuse_case "AUD-2 a secret-shaped name that is set but empty is refused" "the environment variable SOME_SERVICE_TOKEN is set" "SOME_SERVICE_TOKEN="
+# The URLs are assembled from parts and the generated value (a literal would read as a committed password).
+url_with_password() { printf '%s' "$1" : // "$2" : "$3" @ "$4"; }   # SCHEME USER PASSWORD HOST-AND-PATH
+refuse_case "AUD-2 a URL with a password in any variable is refused" "the environment variable UPSTREAM_DSN is set to a URL that carries a password" "UPSTREAM_DSN=$(url_with_password postgres synapse "$V_LEAK" db.example.org/synapse)"
+refuse_case "AUD-2 a URL with a password and no user is refused" "the environment variable CACHE_URL is set to a URL that carries a password" "CACHE_URL=$(url_with_password redis '' "$V_LEAK" cache.example.org)"
+refuse_case "AUD-2 a variable with the word PEM in its name is refused" "the environment variable TLS_CERT_PEM is set" "TLS_CERT_PEM=$V_LEAK"
+new_dir r-ok-env; new_hs_fixture
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec" "UPSTREAM_URL=https://deploy@example.org/repo" "OTHER_URL=https://example.org:8448/x@y" \
+  "SYNAPSE_SERVER_NAME=example.org" "SYNAPSE_REPORT_STATS=no" "MATRIX_RETENTION_ENABLED=false" "SYNAPSE_SECRET_ENV_DENY=${DENY_LIST}"
+check "AUD-2 non-secret names, URLs without a password and the store settings pass" test "$RC" = 0
+
+# AUD-3: the same id; the same as_token as a registration that stays listed; the realistic
+# switch, where the registration file keeps the tokens the legacy rendered file already has.
+new_dir r-dup-id; new_hs_fixture; second_registration "$D/sec/second.yaml"; cp "$D/homeserver.yaml" "$D/.hs.before"
+sed -i 's/^id: .*/id: lk-jwt-service/' "$D/sec/second.yaml"
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec" "SYNAPSE_APPSERVICE_FILES=$D/sec/lk_jwt_as_registration.yaml,$D/sec/second.yaml"
+refuses "AUD-3 two registrations with one id are refused, the files named" "have the same id"
+new_dir r-dup-hs; new_hs_fixture; second_registration "$D/sec/second.yaml"; cp "$D/homeserver.yaml" "$D/.hs.before"
+sed -i "s/^hs_token: .*/hs_token: \"$V_S_HS\"/" "$D/sec/second.yaml"
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec" "SYNAPSE_APPSERVICE_FILES=$D/sec/lk_jwt_as_registration.yaml,$D/sec/second.yaml"
+refuses "AUD-3 two registrations with one hs_token are refused" "have the same hs_token"
+new_dir r-dup-cross; new_hs_fixture; second_registration "$D/sec/second.yaml"; cp "$D/homeserver.yaml" "$D/.hs.before"
+sed -i "s/^hs_token: .*/hs_token: \"$V_S_AS\"/" "$D/sec/second.yaml"
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec" "SYNAPSE_APPSERVICE_FILES=$D/sec/lk_jwt_as_registration.yaml,$D/sec/second.yaml"
+refuses "AUD-3 the as_token of one registration as the hs_token of another is refused" "is the as_token of"
+new_dir r-dup-foreign; new_hs_fixture; second_registration "$D/other-as.yaml"
+sed -i "s/^as_token: .*/as_token: \"$V_S_AS\"/" "$D/other-as.yaml"; cp "$D/homeserver.yaml" "$D/.hs.before"
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec"
+refuses "AUD-3 a registration already listed in the config with the same as_token is refused" "have the same as_token"
+new_dir r-dup-bad; new_hs_fixture; printf 'id: x\n' > "$D/sec/second.yaml"; chmod 0440 "$D/sec/second.yaml"; cp "$D/homeserver.yaml" "$D/.hs.before"
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec" "SYNAPSE_APPSERVICE_FILES=$D/sec/second.yaml"
+refuses "AUD-3 a registration without as_token and hs_token is refused" "is not a registration Synapse can load"
+new_dir s-keep-tokens
+run_entry "$ENTRYPOINT" "$D" "MAS_SHARED_SECRET=$V_MAS" "LK_JWT_AS_TOKEN=$V_S_AS" "LK_JWT_HS_TOKEN=$V_S_HS"
+test "$RC" = 0 || bad "AUD-3 seed: the mode-off boot with the store's tokens exits 0" "rc=$RC"
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec"
+check "AUD-3 the switch with the SAME tokens in the store file and the old rendered file: exits 0, only the store file is listed" bash -c "
+  test $RC = 0 &&
+  test \"\$(yq '[.app_service_config_files[] | select(. == \"$D/lk-jwt-as.yaml\")] | length' '$D/homeserver.yaml')\" = 0 &&
+  test \"\$(yq '[.app_service_config_files[] | select(. == \"$D/sec/lk_jwt_as_registration.yaml\")] | length' '$D/homeserver.yaml')\" = 1"
+
+# AUD-4: the refusal when the mode is off on a config the store mode wrote.
+new_dir s-rollback-2
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec"
+test "$RC" = 0 || bad "AUD-4 seed: the store-mode boot exits 0" "rc=$RC"
+cp "$D/homeserver.yaml" "$D/.hs.before"
+run_entry "$ENTRYPOINT" "$D" "${NOSTORE_ENV[@]}"
+refuses "AUD-4 mode off on a store-mode config is refused, nothing written" "matrix_authentication_service.secret_path"
+check "AUD-4 the refusal says to fix forward" grep -q 'fix forward' "$LOG"
+for k in macaroon_secret_key_path form_secret_path; do
+  new_dir "r-off-$k"; new_hs_fixture; K=".$k" yqv -i 'eval(strenv(K)) = "/run/secrets/x"' "$D/homeserver.yaml"; cp "$D/homeserver.yaml" "$D/.hs.before"
+  run_entry "$ENTRYPOINT" "$D" "${NOSTORE_ENV[@]}"
+  refuses "AUD-4 mode off with $k set is refused" "has .$k"
+done
+
+# AUD-5: no left-over line when there is none.
+check "AUD-5 no left-over line on a first boot" bash -c "! grep -q 'left over' '$S1LOG'"
+
+# AUD-6: the shapes of whitespace, and the accepted ones.
+i=0
+for fmt in ' %s\n' '%s \n' '%s\n\n' '%s\r\n' '%s\t' '\n%s\n'; do
+  i=$((i+1)); new_dir "r-ws-$i"; new_hs_fixture
+  chmod u+w "$D/sec/form_secret"; printf "$fmt" "$V_S_FORM" > "$D/sec/form_secret"; chmod 0440 "$D/sec/form_secret"
+  cp "$D/homeserver.yaml" "$D/.hs.before"
+  run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec"
+  refuses "AUD-6 whitespace shape $i around a secret value is refused" "secret file $D/sec/form_secret"
+  check "AUD-6 shape $i: the message says leading or trailing whitespace" grep -q 'has leading or trailing whitespace' "$LOG"
+done
+new_dir r-ws-ok; new_hs_fixture
+chmod u+w "$D/sec/form_secret" "$D/sec/macaroon_secret_key"
+printf '%s' "$V_S_FORM" > "$D/sec/form_secret"                  # no final newline
+printf 'a b %s\n' "$V_S_MAC" > "$D/sec/macaroon_secret_key"     # whitespace inside is the value's own
+chmod 0440 "$D/sec/form_secret" "$D/sec/macaroon_secret_key"
+chmod u+w "$D/sec/lk_jwt_as_registration.yaml"; printf '\n\n' >> "$D/sec/lk_jwt_as_registration.yaml"; chmod 0440 "$D/sec/lk_jwt_as_registration.yaml"
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec"
+check "AUD-6 no final newline, inner spaces and blank lines at the end of a registration pass" test "$RC" = 0
+
+# AUD-9: an unwritable TMPDIR.
+new_dir r-tmpdir; new_hs_fixture; cp "$D/homeserver.yaml" "$D/.hs.before"
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec" "TMPDIR=$D/no-such-dir"
+refuses "AUD-9 an unwritable TMPDIR is refused and named" "$D/no-such-dir is not a writable directory"
+
+# SYNAPSE_CONFIG_DIR / SYNAPSE_CONFIG_PATH: only the config this script secures.
+refuse_case "a SYNAPSE_CONFIG_DIR other than /data is refused" "SYNAPSE_CONFIG_DIR is set to something other than" "SYNAPSE_CONFIG_DIR=/etc/synapse"
+refuse_case "a SYNAPSE_CONFIG_PATH other than /data/homeserver.yaml is refused" "SYNAPSE_CONFIG_PATH is set to something other than" "SYNAPSE_CONFIG_PATH=/etc/synapse/other.yaml"
+new_dir r-cfg-ok; new_hs_fixture
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec" "SYNAPSE_CONFIG_DIR=$D" "SYNAPSE_CONFIG_PATH=$D/homeserver.yaml"
+check "SYNAPSE_CONFIG_DIR and SYNAPSE_CONFIG_PATH naming /data and its config pass" test "$RC" = 0
+
+# AUD-10: a foreign entry stays, the store's own entry goes.
+new_dir s-unlist-2; new_hs_fixture
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec"
+test "$RC" = 0 || bad "AUD-10 seed: the store-mode boot exits 0" "rc=$RC"
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec" "SYNAPSE_APPSERVICE_FILES="
+check "AUD-10 the foreign entry stays, the store entry goes, and the log says which" bash -c "
+  test $RC = 0 &&
+  test \"\$(yq '.app_service_config_files | length' '$D/homeserver.yaml')\" = 1 &&
+  test \"\$(yq '.app_service_config_files[0]' '$D/homeserver.yaml')\" = '$D/other-as.yaml' &&
+  grep -qF '$D/sec/lk_jwt_as_registration.yaml is no longer in SYNAPSE_APPSERVICE_FILES' '$LOG'"
 
 echo "== no value anywhere"
 LEAKS=0

@@ -93,7 +93,9 @@ change reaches an existing deployment.
   With the variable unset, the rendered `homeserver.yaml` and `lk-jwt-as.yaml` must equal what
   the entrypoint rendered before the mode existed; `scripts/synapse-secret-store-accept.sh`
   compares them to a committed golden, and a deliberate change to the mode-off output
-  updates that golden in the same commit.
+  updates that golden in the same commit. The one thing the mode-off path does besides: it
+  refuses (writing nothing) a `homeserver.yaml` that a store-mode boot wrote, instead of
+  adding an inline secret beside the `secret_path`.
 - **Rolling Synapse back to before 1.157 is not just an image revert.** A migrated
   `homeserver.yaml` has no `msc3861` block, and an old entrypoint will not recreate it on
   an existing volume. Restore a pre-migration `homeserver.yaml` as well.
@@ -292,7 +294,8 @@ Guides and scripts here must not contradict it:
   `--no-secrets-in-config`. Do not "simplify" these: (1) the refusal to run as root, because
   `/start.py` drops root with `gosu`, which clears the supplementary groups a group-readable
   secret file depends on, after this script's own readability check has already passed as
-  root; (2) the refusal of a secret in the environment, named and never valued; (3) the
+  root; (2) the refusal of a secret-looking environment variable (fixed names, secret-like names,
+  URLs with a password), named and never valued; (3) the
   entrypoint never prints a value, so there is no `set -x`, no echo of a secret and no `cat`
   of a secret file; (4) the old rendered `/data/lk-jwt-as.yaml` is unlisted but never
   deleted, because Synapse's error for a duplicate `as_token` prints the token.

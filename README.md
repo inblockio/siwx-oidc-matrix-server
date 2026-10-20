@@ -497,8 +497,8 @@ By default Synapse gets its secrets the way the stack always did: `MAS_SHARED_SE
 the lk-jwt tokens in the environment, written into `homeserver.yaml`. The Synapse image
 also has an explicit **store mode** (`SYNAPSE_SECRETS_DIR`, off by default) that reads the
 macaroon, form and MAS secrets and the application-service registration from read-only
-files, writes only `*_path` references into `homeserver.yaml`, refuses a secret in the
-environment, and starts Synapse with `--no-secrets-in-config`. File names, variables, the
+files, writes only `*_path` references into `homeserver.yaml`, refuses secret-looking
+environment variables, and starts Synapse with `--no-secrets-in-config`. File names, variables, the
 inventory of every secret, the compose example (`user: "991:991"`, `group_add`, read-only
 long-syntax binds) and how to switch an existing deployment:
 [docs/synapse-secret-files.md](docs/synapse-secret-files.md).

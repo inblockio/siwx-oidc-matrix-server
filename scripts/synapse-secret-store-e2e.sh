@@ -236,6 +236,53 @@ test "$("$RT" exec "$F" sh -c 'test -s /data/lk-jwt-as.yaml && echo yes')" = yes
 if leaks_in "$T/f.log"; then bad "F: a value is in the log"; else ok "F: no value in the log"; fi
 "$RT" stop -t 30 "$F" >/dev/null 2>&1
 
+# =================================================================================================
+# Audit cases (PR #73). run_to_end: start detached, wait until it exits (or time runs out), keep the log.
+run_to_end() { # run_to_end NAME SECONDS LOGFILE run-args...
+  local n="$1" s="$2" l="$3"; shift 3
+  CTRS+=("$n")
+  "$RT" run -d --name "$n" "$@" >/dev/null 2>&1
+  timeout "$s" "$RT" wait "$n" >/dev/null 2>&1
+  "$RT" logs "$n" > "$l" 2>&1
+  "$RT" rm -f "$n" >/dev/null 2>&1
+}
+partial_in() { # partial_in VALUE FILE : any 12-character piece of VALUE is in FILE
+  local v="$1" i
+  for ((i=0; i+12<=${#v}; i++)); do grep -qF -- "${v:i:12}" "$2" && return 0; done
+  return 1
+}
+
+echo "== G. AUD-4: switching back (mode off) on a volume a store-mode boot wrote"
+# The operator removes SYNAPSE_SECRETS_DIR and gives the secrets back in the environment, as
+# before the switch; the store stays mounted. apply_mas_config writes `secret` next to the
+# `secret_path` store mode left, and Synapse's pydantic error repeats the block's tail.
+# Only SYNAPSE_SECRETS_DIR is removed; user, group_add and the mounts stay, so the secret files
+# stay readable and Synapse reaches the MAS block.
+run_to_end "$P-g" 180 "$T/g.log" "${STORE_RUN[@]}" -v "$DATA_A":/data "${COMMON_ENV[@]}" \
+  -e MAS_SHARED_SECRET="$V_NMAS" -e LK_JWT_AS_TOKEN="$V_NAS" -e LK_JWT_HS_TOKEN="$V_NHS" "$IMAGE"
+grep -E 'Error in configuration|cannot be set|REFUSING' "$T/g.log" | sed -E 's/input_value=.*/input_value=<elided by the test>/; s/^/      | /'
+if partial_in "$V_NMAS" "$T/g.log"; then bad "G: a piece of the MAS secret is in the log of the mode-off boot"; else ok "G: no piece of the MAS secret in the log of the mode-off boot"; fi
+
+echo "== H. AUD-3: two registrations with one as_token (lk-jwt and a call-control registration)"
+helper -v "$SEC":/sec -e V_AS="$V_AS" "$IMAGE" -c '
+  sed -e "s/^id: .*/id: call-control/" -e "s/^sender_localpart: .*/sender_localpart: _call_control/" \
+      -e "s/^hs_token: .*/hs_token: \"other-hs-token-fixture\"/" /sec/lk_jwt_as_registration.yaml > /sec/cc_as_registration.yaml
+  chown 0:5003 /sec/cc_as_registration.yaml && chmod 0440 /sec/cc_as_registration.yaml' >/dev/null 2>&1
+DATA_H="$(chowned_data data-h)"
+run_to_end "$P-h" 240 "$T/h.log" "${STORE_RUN[@]}" -v "$DATA_H":/data "${COMMON_ENV[@]}" -e SYNAPSE_SECRETS_DIR=/run/secrets \
+  -e SYNAPSE_APPSERVICE_FILES=/run/secrets/lk_jwt_as_registration.yaml,/run/secrets/cc_as_registration.yaml "$IMAGE"
+grep -E 'Cannot reuse|REFUSING' "$T/h.log" | sed -E "s/${V_AS}/<the as_token>/g; s/^/      | /"
+if leaks_in "$T/h.log"; then bad "H: the shared as_token is in the log"; else ok "H: the shared as_token is not in the log"; fi
+
+echo "== I. AUD-9: a read-only root file system without a writable /tmp (yq -i needs one)"
+DATA_I="$(chowned_data data-i)"
+helper -v "$DATA_A":/from -v "$DATA_I":/data "$IMAGE" -c 'cp -a /from/. /data/ && chown -R 991:991 /data' >/dev/null 2>&1
+# podman mounts a tmpfs on /tmp under --read-only unless told not to; Docker does not.
+RO=(--read-only); case "$RT" in *podman*) RO+=(--read-only-tmpfs=false) ;; esac
+run_to_end "$P-i" 120 "$T/i.log" "${STORE_RUN[@]}" "${RO[@]}" -v "$DATA_I":/data "${COMMON_ENV[@]}" -e SYNAPSE_SECRETS_DIR=/run/secrets "$IMAGE"
+grep -E 'REFUSING|ERROR' "$T/i.log" | sed 's/^/      | /'
+if grep -q 'REFUSING TO START (secret store mode).*/tmp' "$T/i.log"; then ok "I: refused, and the refusal names /tmp"; else bad "I: read-only /tmp" "the refusal does not name /tmp"; fi
+
 echo
 echo "passed: $PASS   failed: $FAILN"
 [ "$FAILN" = 0 ]
