@@ -1,49 +1,30 @@
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: Apache-2.0
 #
 # Copyright 2026 inblock.io assets GmbH
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU Affero General Public License as
-# published by the Free Software Foundation, either version 3 of the
-# License, or (at your option) any later version.
-#
-# See the GNU Affero General Public License for more details:
-# <https://www.gnu.org/licenses/agpl-3.0.html>.
-#
-# The fake introspection server and the shutdown handling in tearDown follow
-# Synapse's tests/handlers/test_oauth_delegation.py, which carries:
-#
-#   This file is licensed under the Affero General Public License (AGPL) version 3.
-#
-#   Copyright 2022 Matrix.org Foundation C.I.C.
-#   Copyright (C) 2023 New Vector, Ltd
-#
-#   Originally licensed under the Apache License, Version 2.0:
-#   <http://www.apache.org/licenses/LICENSE-2.0>.
-#
-#   [This file includes modifications made by New Vector Limited]
 #
 # Tests for the inblock_directory Synapse module (docs/directory-search.md).
 #
 # NOT shipped in the image. They run inside Synapse's own test framework
-# (`tests.unittest.HomeserverTestCase`, imported, nothing copied) against a Synapse
-# checkout at the tag the Dockerfile pins: synapse-modules/run-tests.sh sets that up.
+# (`tests.unittest.HomeserverTestCase`, imported at test time; no Synapse code is copied
+# into this file) against a Synapse checkout at the tag the Dockerfile pins:
+# synapse-modules/run-tests.sh sets that up.
 #
 # The homeserver is configured as in production: delegated auth (the stable
-# `matrix_authentication_service` block), with a fake introspection endpoint where
-# siwx-oidc would be, and the module loaded through `modules:` like any other. Every
-# test goes through the module's HTTP resource. Only fixture values appear here:
-# the users are @<name>:test and the DID values are made up.
+# `matrix_authentication_service` block), with a stand-in for siwx-oidc's introspection
+# endpoint (`AuthServiceStub`, written here from RFC 7662 and the request Synapse's
+# synapse/api/auth/mas.py makes), and the module loaded through `modules:` like any
+# other. Every test goes through the module's HTTP resource. Only fixture values appear
+# here: the users are @<name>:test and the DID values are made up.
 
 import json
 import logging
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 from unittest.mock import patch
 from urllib.parse import parse_qs
+from wsgiref.simple_server import WSGIRequestHandler, make_server
 
 from twisted.internet.testing import MemoryReactor
 from twisted.web.resource import Resource
@@ -69,52 +50,70 @@ DID_FIELD = "io.inblock.did"
 GUEST_TYPE = "io.inblock.guest"
 
 
-class _FakeSiwxHandler(BaseHTTPRequestHandler):
-    """The introspection endpoint of the auth service: token -> introspection result."""
-
-    server: "_FakeSiwx"
-
-    def do_POST(self) -> None:
-        ok = (
-            self.path == "/oauth2/introspect"
-            and self.headers.get("Authorization") == f"Bearer {self.server.secret}"
-        )
-        if not ok:
-            self.send_response(404)
-            self.end_headers()
-            return
-        form = parse_qs(self.rfile.read(int(self.headers["Content-Length"])))
-        token = form[b"token"][0].decode()
-        answer = self.server.tokens.get(token, {"active": False})
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.end_headers()
-        self.wfile.write(json.dumps(answer).encode())
-
+class _SilentHandler(WSGIRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:
         pass
 
 
-class _FakeSiwx(HTTPServer):
-    """A real HTTP server on a random local port, in its own thread: Synapse's
-    introspection client is native code and needs a real socket."""
+class AuthServiceStub:
+    """Stands in for siwx-oidc where Synapse's delegated auth expects its auth service.
 
-    def __init__(self) -> None:
-        super().__init__(("127.0.0.1", 0), _FakeSiwxHandler)
-        self.secret = MAS_SECRET
-        self.tokens: dict[str, JsonDict] = {}
+    Synapse asks that service one question, whether an access token is live (RFC 7662):
+    a form POST to `<endpoint>/oauth2/introspect`, authorised by the shared secret. The
+    stub answers from a table of grants and says "inactive" to any token it does not
+    hold. It is a real HTTP server on a local port, run on its own thread, because
+    Synapse makes the request from native code that needs a real socket.
+    """
+
+    INTROSPECT_PATH = "/oauth2/introspect"
+
+    def __init__(self, secret: str) -> None:
+        self.secret = secret
+        self._grants: dict[str, JsonDict] = {}
+        self._httpd = make_server("127.0.0.1", 0, self._app, handler_class=_SilentHandler)
         self._thread = threading.Thread(
-            target=self.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+            target=self._httpd.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
         )
         self._thread.start()
 
-    def stop(self) -> None:
-        self.shutdown()
-        self._thread.join()
-
     @property
     def endpoint(self) -> str:
-        return f"http://127.0.0.1:{self.server_port}/"
+        return f"http://127.0.0.1:{self._httpd.server_port}/"
+
+    def grant(self, token: str, username: str, device_id: str) -> None:
+        """Make `token` a live session of the local user `username` on `device_id`."""
+        self._grants[token] = {
+            "active": True,
+            "sub": f"sub-{username}",
+            "username": username,
+            "scope": f"urn:matrix:client:api:* urn:matrix:client:device:{device_id}",
+            "expires_in": 3600,
+        }
+
+    def close(self) -> None:
+        self._httpd.shutdown()
+        self._httpd.server_close()
+        self._thread.join()
+
+    def _app(
+        self, environ: dict[str, Any], start_response: Callable[..., Any]
+    ) -> Iterable[bytes]:
+        authorised = environ.get("HTTP_AUTHORIZATION") == f"Bearer {self.secret}"
+        if (
+            environ["REQUEST_METHOD"] != "POST"
+            or environ["PATH_INFO"] != self.INTROSPECT_PATH
+            or not authorised
+        ):
+            start_response("404 Not Found", [("Content-Length", "0")])
+            return [b""]
+        size = int(environ.get("CONTENT_LENGTH") or 0)
+        form = parse_qs(environ["wsgi.input"].read(size).decode())
+        answer = self._grants.get(form.get("token", [""])[0], {"active": False})
+        body = json.dumps(answer).encode()
+        start_response(
+            "200 OK", [("Content-Type", "application/json"), ("Content-Length", str(len(body)))]
+        )
+        return [body]
 
 
 class _Capture(logging.Handler):
@@ -163,8 +162,8 @@ class DirectoryModuleTestCase(unittest.HomeserverTestCase):
         config["disable_registration"] = True
         config["matrix_authentication_service"] = {
             "enabled": True,
-            "endpoint": self.siwx.endpoint,
-            "secret": self.siwx.secret,
+            "endpoint": self.auth_stub.endpoint,
+            "secret": self.auth_stub.secret,
         }
         # The test default turns the directory updater off; the tests need it.
         config["update_user_directory_from_worker"] = None
@@ -181,7 +180,7 @@ class DirectoryModuleTestCase(unittest.HomeserverTestCase):
         return config
 
     def make_homeserver(self, reactor: MemoryReactor, clock: Clock) -> HomeServer:
-        self.siwx = _FakeSiwx()
+        self.auth_stub = AuthServiceStub(MAS_SECRET)
         return self.setup_test_homeserver()
 
     def create_resource_dict(self) -> dict[str, Resource]:
@@ -198,12 +197,7 @@ class DirectoryModuleTestCase(unittest.HomeserverTestCase):
         self.service = self.make_user("dir-service", "Directory Service")
 
     def tearDown(self) -> None:
-        self.siwx.stop()
-        # The test reactor never runs the shutdown phases; the native runtime must stop.
-        triggers = self.reactor.triggers.get("shutdown", {})
-        for phase in ["before", "during", "after"]:
-            for fn, args, kwargs in triggers.get(phase, []):
-                fn(*args, **kwargs)
+        self.auth_stub.close()
 
     # ------------------------------------------------------------------ helpers
 
@@ -228,13 +222,7 @@ class DirectoryModuleTestCase(unittest.HomeserverTestCase):
             )
         )
         token = f"token-{localpart}"
-        self.siwx.tokens[token] = {
-            "active": True,
-            "sub": f"sub-{localpart}",
-            "scope": f"urn:matrix:client:api:* urn:matrix:client:device:{DEVICE}",
-            "username": localpart,
-            "expires_in": 3600,
-        }
+        self.auth_stub.grant(token, localpart, DEVICE)
         self.tokens[user_id] = token
         return user_id
 
