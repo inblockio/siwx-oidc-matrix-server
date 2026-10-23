@@ -111,7 +111,7 @@ new_case() {
 # run_fn [VAR=VAL ...]: runs the function in a subshell; sets RC, OUT (stderr+stdout).
 # The stub is on PYTHONPATH unless the case passes its own PYTHONPATH.
 run_fn() {
-  OUT="$(env -u DIRECTORY_ADMITTED_SERVICES -u DIRECTORY_MAX_LIMIT PYTHONPATH="$STUB" ACCEPT_DATA="$D" "$@" \
+  OUT="$(env -u DIRECTORY_ADMITTED_SERVICES -u DIRECTORY_MAX_LIMIT -u GUEST_POLICY_USER_TYPE -u SIWX_DID_PROFILE_FIELD PYTHONPATH="$STUB" ACCEPT_DATA="$D" "$@" \
     bash -c 'source "$1"; apply_directory_search' _ "$FNS" 2>&1)"
   RC=$?
 }
@@ -121,6 +121,8 @@ other()    { "$REAL_YQ" "[(.modules // [])[] | select(.module == \"${OTHER}\")] 
 svcs()     { "$REAL_YQ" -o=json -I=0 "(.modules[] | select(.module == \"${CLASS}\")).config.admitted_services" "$HS"; }
 maxlim()   { "$REAL_YQ" "(.modules[] | select(.module == \"${CLASS}\")).config.max_limit" "$HS"; }
 cfgkeys()  { "$REAL_YQ" -o=json -I=0 "(.modules[] | select(.module == \"${CLASS}\")).config | keys" "$HS"; }
+guesttype() { "$REAL_YQ" "(.modules[] | select(.module == \"${CLASS}\")).config.guest_user_type" "$HS"; }
+didfield()  { "$REAL_YQ" "(.modules[] | select(.module == \"${CLASS}\")).config.did_field" "$HS"; }
 
 # ---- (a) configured: entry written once, config exact, idempotent ----------------
 new_case a_one
@@ -128,7 +130,9 @@ run_fn DIRECTORY_ADMITTED_SERVICES="$SVC_A"
 check "a: exits 0" eq "$RC" 0
 check "a: entry registered exactly once" eq "$(count)" 1
 check "a: admitted_services is the single MXID" eq "$(svcs)" "[\"${SVC_A}\"]"
-check "a: without DIRECTORY_MAX_LIMIT the config has no max_limit (module default)" eq "$(cfgkeys)" '["admitted_services"]'
+check "a: without DIRECTORY_MAX_LIMIT the config has no max_limit (module default)" eq "$(cfgkeys)" '["admitted_services","guest_user_type","did_field"]'
+check "a: guest_user_type is the guest policy's default, io.inblock.guest" eq "$(guesttype)" io.inblock.guest
+check "a: did_field is the field protection's default, io.inblock.did" eq "$(didfield)" io.inblock.did
 check "a: says ENABLED and never prints an MXID" bash -c '[[ "$1" == *"Directory search: ENABLED for 1 service account(s)"* && "$1" != *"@"* ]]' _ "$OUT"
 cp "$HS" "$D/hs.1"
 run_fn DIRECTORY_ADMITTED_SERVICES="$SVC_A"
@@ -142,6 +146,22 @@ check "a: max_limit is a number" eq "$("$REAL_YQ" "(.modules[] | select(.module 
 check "a: max_limit 7" eq "$(maxlim)" 7
 run_fn DIRECTORY_ADMITTED_SERVICES="$SVC_A" DIRECTORY_MAX_LIMIT=50
 check "a: a changed setting replaces the entry, still one" bash -c '[ "$1" = 1 ] && [ "$2" = "[\"$3\"]" ] && [ "$4" = 50 ]' _ "$(count)" "$(svcs)" "$SVC_A" "$(maxlim)"
+
+# The module reads the same two values the guest policy and the DID field protection do.
+new_case a_markers_env
+run_fn DIRECTORY_ADMITTED_SERVICES="$SVC_A" GUEST_POLICY_USER_TYPE=org.example.visitor SIWX_DID_PROFILE_FIELD=org.example.identity
+check "a: exits 0 with both markers set" eq "$RC" 0
+check "a: guest_user_type is GUEST_POLICY_USER_TYPE" eq "$(guesttype)" org.example.visitor
+check "a: did_field is SIWX_DID_PROFILE_FIELD" eq "$(didfield)" org.example.identity
+check "a: both markers are said in the ENABLED line" bash -c '[[ "$1" == *"guest_user_type=org.example.visitor"* && "$1" == *"did_field=org.example.identity"* ]]' _ "$OUT"
+run_fn DIRECTORY_ADMITTED_SERVICES="$SVC_A" GUEST_POLICY_USER_TYPE= SIWX_DID_PROFILE_FIELD=
+check "a: set but empty means the default, as in the guest policy and the field protection" bash -c '[ "$1" = io.inblock.guest ] && [ "$2" = io.inblock.did ]' _ "$(guesttype)" "$(didfield)"
+run_fn DIRECTORY_ADMITTED_SERVICES="$SVC_A" GUEST_POLICY_USER_TYPE=org.example.visitor SIWX_DID_PROFILE_FIELD=org.example.identity
+cp "$HS" "$D/hs.1"
+run_fn DIRECTORY_ADMITTED_SERVICES="$SVC_A" GUEST_POLICY_USER_TYPE=org.example.visitor SIWX_DID_PROFILE_FIELD=org.example.identity
+check "a: a second run with both markers leaves homeserver.yaml byte-identical" cmp -s "$HS" "$D/hs.1"
+run_fn DIRECTORY_ADMITTED_SERVICES="$SVC_A"
+check "a: a boot without the variables writes the defaults back (re-asserted every boot)" bash -c '[ "$1" = io.inblock.guest ] && [ "$2" = io.inblock.did ] && [ "$3" = 1 ]' _ "$(guesttype)" "$(didfield)" "$(count)"
 
 new_case a_port
 run_fn DIRECTORY_ADMITTED_SERVICES="@dir-service:example.org:8448" DIRECTORY_MAX_LIMIT=1
@@ -203,10 +223,30 @@ refuses "max_limit 51"    DIRECTORY_ADMITTED_SERVICES="$SVC_A" DIRECTORY_MAX_LIM
 refuses "max_limit text"  DIRECTORY_ADMITTED_SERVICES="$SVC_A" DIRECTORY_MAX_LIMIT=twenty
 refuses "max_limit 20x"   DIRECTORY_ADMITTED_SERVICES="$SVC_A" DIRECTORY_MAX_LIMIT=20x
 refuses "max_limit 07"    DIRECTORY_ADMITTED_SERVICES="$SVC_A" DIRECTORY_MAX_LIMIT=07
+refuses "guest type space"     DIRECTORY_ADMITTED_SERVICES="$SVC_A" GUEST_POLICY_USER_TYPE="io inblock"
+refuses "guest type yaml"      DIRECTORY_ADMITTED_SERVICES="$SVC_A" GUEST_POLICY_USER_TYPE='a"b'
+refuses "guest type newline"   DIRECTORY_ADMITTED_SERVICES="$SVC_A" GUEST_POLICY_USER_TYPE=$'io.inblock.guest\nx'
+refuses "guest type too long"  DIRECTORY_ADMITTED_SERVICES="$SVC_A" GUEST_POLICY_USER_TYPE="$(printf 'x%.0s' $(seq 256))"
+refuses "did field uppercase"  DIRECTORY_ADMITTED_SERVICES="$SVC_A" SIWX_DID_PROFILE_FIELD=Io.Inblock.Did
+refuses "did field digit start" DIRECTORY_ADMITTED_SERVICES="$SVC_A" SIWX_DID_PROFILE_FIELD=1did
+refuses "did field space"      DIRECTORY_ADMITTED_SERVICES="$SVC_A" SIWX_DID_PROFILE_FIELD="io.inblock did"
+refuses "did field newline"    DIRECTORY_ADMITTED_SERVICES="$SVC_A" SIWX_DID_PROFILE_FIELD=$'io.inblock.did\nx'
+refuses "did field too long"   DIRECTORY_ADMITTED_SERVICES="$SVC_A" SIWX_DID_PROFILE_FIELD="$(printf 'x%.0s' $(seq 256))"
 # the refusal never echoes the offending value (it may be a secret pasted into the wrong variable)
 new_case d_no_echo
 run_fn DIRECTORY_ADMITTED_SERVICES='not-an-mxid-canary-7f3a'
 check "d: a refused value is not echoed" bash -c '[[ "$1" != *"canary-7f3a"* ]]' _ "$OUT"
+for var in GUEST_POLICY_USER_TYPE SIWX_DID_PROFILE_FIELD; do
+  new_case "d_no_echo_${var}"
+  run_fn DIRECTORY_ADMITTED_SERVICES="$SVC_A" "${var}=Bad Value canary-9c1e"
+  check "d: a refused ${var} is not echoed" bash -c '[ "$2" = 1 ] && [[ "$1" != *"canary-9c1e"* ]]' _ "$OUT" "$RC"
+done
+# off means off: a bad marker is nobody's business while the module is not asked for
+new_case d_markers_ignored_when_off
+cp "$HS" "$D/hs.0"
+run_fn GUEST_POLICY_USER_TYPE="a b" SIWX_DID_PROFILE_FIELD="Not Valid"
+check "d: bad markers are ignored while DIRECTORY_ADMITTED_SERVICES is empty" bash -c '[ "$1" = 0 ]' _ "$RC"
+check "d: ... and homeserver.yaml stays byte-identical" cmp -s "$HS" "$D/hs.0"
 
 # ---- (e) module not importable: refuses, writes nothing ---------------------------
 new_case e_no_module with_other
@@ -243,6 +283,15 @@ l_last="$(echo "$CALLS" | tail -n1 | awk '{print $2}')"
 check "g: apply_directory_search is called exactly once" eq "$n_dir" 1
 check "g: ... before apply_did_field_protection" bash -c '[ -n "$1" ] && [ -n "$2" ] && [ "$1" -lt "$2" ]' _ "$l_dir" "$l_did"
 check "g: apply_did_field_protection is still the last apply_* call" eq "$l_last" apply_did_field_protection
+
+# The two defaults the module is handed must be the ones the guest policy and the field
+# protection use: every ${VAR:-default} spelling in the entrypoint names the same default.
+for var in GUEST_POLICY_USER_TYPE SIWX_DID_PROFILE_FIELD; do
+  defaults="$(grep -o "\${${var}:-[^}]*}" "$ENTRYPOINT" | sort -u)"
+  check "g: ${var} has one default across the entrypoint" bash -c '[ "$(printf "%s\n" "$1" | grep -c .)" = 1 ]' _ "$defaults"
+done
+check "g: apply_directory_search reads both variables" bash -c \
+  'grep -q "GUEST_POLICY_USER_TYPE:-" "$1" && grep -q "SIWX_DID_PROFILE_FIELD:-" "$1"' _ "$FNS"
 
 echo
 echo "directory-search-accept: ${PASS} passed, ${FAILN} failed"

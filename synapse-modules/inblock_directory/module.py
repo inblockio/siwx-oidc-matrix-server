@@ -6,17 +6,19 @@
 #
 # A service (for example a node's share dialog) asks "whom may this asker find
 # under this term?" and gets exactly the rows Synapse's own user directory would
-# give that asker, each with the raw `io.inblock.did` profile field of the local
-# users. The module never verifies the proof in that field: the caller does.
+# give that asker, each with the raw DID profile field (`io.inblock.did`, or the
+# `did_field` setting) of the local users. The module never verifies the proof in
+# that field: the caller does.
 #
 # Contract: docs/directory-search.md. Tests: synapse-modules/inblock_directory_tests,
 # run by synapse-modules/run-tests.sh against Synapse at the tag the Dockerfile pins.
 #
-# Public ModuleApi calls used: register_web_resource, get_user_by_req,
-# get_userinfo_by_id, is_mine. Synapse-internal calls (they can change in any
-# release, which is why the bump procedure runs the tests): `api._hs` and from it
-# get_clock(), get_datastores().main.get_profile_field(), get_user_directory_handler()
-# .search_users(), config.userdirectory.user_directory_search_enabled,
+# Public ModuleApi calls used: register_web_resource, get_user_by_req (its Requester's
+# user and app_service_id), get_userinfo_by_id, is_mine. Synapse-internal calls (they
+# can change in any release, which is why the bump procedure runs the tests): `api._hs`
+# and from it get_clock(), get_datastores().main.get_profile_field(),
+# get_user_directory_handler().search_users(),
+# config.userdirectory.user_directory_search_enabled,
 # config.ratelimiting.rc_user_directory, plus Ratelimiter and StoreError.
 #
 # Nothing in this file may log, echo or put into an exception message the search
@@ -24,6 +26,7 @@
 
 import json
 import logging
+import re
 import unicodedata
 from dataclasses import dataclass
 from typing import Any
@@ -45,13 +48,22 @@ logger = logging.getLogger(__name__)
 
 SEARCH_PATH = "/_synapse/client/io.inblock/directory/v1/search"
 
-# The profile field siwx-oidc writes: {"did": ..., "proof": ...}.
-DID_FIELD = "io.inblock.did"
+# The profile field siwx-oidc writes: {"did": ..., "proof": ...}. The default of the
+# `did_field` setting; the entrypoint passes SIWX_DID_PROFILE_FIELD, the name the field
+# protection denylists, so the module reads the field that is protected.
+DEFAULT_DID_FIELD = "io.inblock.did"
 
 # Our guest marker (the guest policy module's default guest_user_type). Synapse's
 # own is_guest flag is never set under delegated auth, so the user type is the
-# only signal there is.
-GUEST_USER_TYPE = "io.inblock.guest"
+# only signal there is. The default of the `guest_user_type` setting; the entrypoint
+# passes GUEST_POLICY_USER_TYPE, the value the guest policy module is configured with.
+DEFAULT_GUEST_USER_TYPE = "io.inblock.guest"
+
+# The grammars the entrypoint enforces on the same two values: the guest type is
+# [A-Za-z0-9._-]+ (apply_guest_policy), the field is Synapse's Common Namespaced
+# Identifier Grammar (apply_did_field_protection).
+_GUEST_USER_TYPE_RE = re.compile(r"[A-Za-z0-9._-]{1,255}")
+_DID_FIELD_RE = re.compile(r"[a-z][a-z0-9_.-]{0,254}")
 
 MAX_BODY_BYTES = 4096
 TERM_MAX_CHARS = 64
@@ -61,7 +73,7 @@ DEFAULT_MAX_LIMIT = 20
 MAX_LIMIT_CEILING = 50
 MXID_MAX_CHARS = 255
 
-_CONFIG_KEYS = {"admitted_services", "max_limit"}
+_CONFIG_KEYS = {"admitted_services", "max_limit", "guest_user_type", "did_field"}
 
 
 def _is_mxid(value: object) -> bool:
@@ -80,6 +92,8 @@ def _is_mxid(value: object) -> bool:
 class DirectoryConfig:
     admitted_services: frozenset[str]
     max_limit: int
+    guest_user_type: str = DEFAULT_GUEST_USER_TYPE
+    did_field: str = DEFAULT_DID_FIELD
 
 
 class DirectoryModule:
@@ -116,7 +130,22 @@ class DirectoryModule:
         if type(max_limit) is not int or not 1 <= max_limit <= MAX_LIMIT_CEILING:
             raise ConfigError(f"max_limit must be an integer from 1 to {MAX_LIMIT_CEILING}")
 
-        return DirectoryConfig(frozenset(services), max_limit)
+        guest_user_type = config.get("guest_user_type", DEFAULT_GUEST_USER_TYPE)
+        if not isinstance(guest_user_type, str) or not _GUEST_USER_TYPE_RE.fullmatch(
+            guest_user_type
+        ):
+            raise ConfigError(
+                "guest_user_type must be a string of 1 to 255 characters from A-Za-z0-9._-"
+            )
+
+        did_field = config.get("did_field", DEFAULT_DID_FIELD)
+        if not isinstance(did_field, str) or not _DID_FIELD_RE.fullmatch(did_field):
+            raise ConfigError(
+                "did_field must be a profile field name: a lowercase letter, then up to 254 "
+                "characters from a-z0-9_.-"
+            )
+
+        return DirectoryConfig(frozenset(services), max_limit, guest_user_type, did_field)
 
 
 class _SearchResource(DirectServeJsonResource):
@@ -126,6 +155,8 @@ class _SearchResource(DirectServeJsonResource):
         self._api = api
         self._admitted = config.admitted_services
         self._max_limit = config.max_limit
+        self._guest_user_type = config.guest_user_type
+        self._did_field = config.did_field
         self._hs = hs
         self._profile_store = hs.get_datastores().main
         self._directory = hs.get_user_directory_handler()
@@ -145,6 +176,17 @@ class _SearchResource(DirectServeJsonResource):
             # itself would say M_MISSING_TOKEN for the first.
             raise SynapseError(401, "Unrecognised access token", Codes.UNKNOWN_TOKEN)
         service = requester.user.to_string()
+
+        # An application service names the user it acts as with `?user_id=`, so for
+        # one `requester.user` says nothing about who is calling: with the admitted
+        # service's MXID in its namespace it would be admitted. Services sign in as
+        # ordinary users; an application service never gets results.
+        if requester.app_service_id is not None:
+            logger.info(
+                "directory search refused: requester is application service %s",
+                requester.app_service_id,
+            )
+            raise SynapseError(403, "Not permitted", Codes.FORBIDDEN)
 
         if service not in self._admitted or not await self._account_ok(service):
             logger.info("directory search refused: requester=%s is not an admitted service", service)
@@ -201,7 +243,7 @@ class _SearchResource(DirectServeJsonResource):
             info is not None
             and not info.is_deactivated
             and not info.locked
-            and info.user_type != GUEST_USER_TYPE
+            and info.user_type != self._guest_user_type
         )
 
     def _parse_request(self, request: Any) -> tuple[str, str, int]:
@@ -224,6 +266,12 @@ class _SearchResource(DirectServeJsonResource):
         term = body.get("term")
         if not isinstance(term, str):
             raise SynapseError(400, "`term` must be a string", Codes.INVALID_PARAM)
+        try:
+            term.encode("utf-8")
+        except UnicodeEncodeError:
+            # JSON can escape a lone surrogate ("\ud800"). That is not text, and
+            # Synapse's search fails on it with a 500.
+            raise SynapseError(400, "`term` must be valid Unicode text", Codes.INVALID_PARAM)
         term = term.strip()
         if not 1 <= len(term) <= TERM_MAX_CHARS or any(
             unicodedata.category(c) == "Cc" for c in term
@@ -248,7 +296,7 @@ class _SearchResource(DirectServeJsonResource):
         if self._api.is_mine(user_id):
             try:
                 value = await self._profile_store.get_profile_field(
-                    UserID.from_string(user_id), DID_FIELD
+                    UserID.from_string(user_id), self._did_field
                 )
             except StoreError as e:
                 # 404: no profile row or no such field. Anything else is an error.

@@ -18,18 +18,20 @@
 
 import json
 import logging
+import re
 import threading
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from typing import Any
 from unittest.mock import patch
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, quote
 from wsgiref.simple_server import WSGIRequestHandler, make_server
 
 from twisted.internet.testing import MemoryReactor
 from twisted.web.resource import Resource
 
 from synapse.api.room_versions import RoomVersions
+from synapse.appservice import ApplicationService
 from synapse.module_api.errors import ConfigError
 from synapse.rest.client import room, user_directory
 from synapse.server import HomeServer
@@ -151,6 +153,13 @@ def capture_logs() -> Iterator[_Capture]:
     finally:
         root.removeHandler(handler)
         root.setLevel(old_level)
+
+
+def module_config(**settings: Any) -> JsonDict:
+    """An @override_config value that loads the module with these settings."""
+    return {
+        "modules": [{"module": "inblock_directory.DirectoryModule", "config": settings}]
+    }
 
 
 class DirectoryModuleTestCase(unittest.HomeserverTestCase):
@@ -302,8 +311,20 @@ class DirectoryModuleTestCase(unittest.HomeserverTestCase):
         ) as spy:
             yield spy
 
-    def set_did_field(self, user_id: str, value: Any) -> None:
-        self.get_success(self.store.set_profile_field(UserID.from_string(user_id), DID_FIELD, value))
+    def set_did_field(self, user_id: str, value: Any, field: str = DID_FIELD) -> None:
+        self.get_success(self.store.set_profile_field(UserID.from_string(user_id), field, value))
+
+    def make_appservice(self, sender: str, token: str = "as-token-fixture") -> str:
+        """An application service whose user namespace covers the directory service."""
+        self.hs.get_datastores().main.services_cache.append(
+            ApplicationService(
+                token,
+                id="fixture-bridge",
+                sender=UserID.from_string(sender),
+                namespaces={"users": [{"regex": re.escape(SERVICE), "exclusive": False}]},
+            )
+        )
+        return token
 
     # ---------------------------------------------------------------- scenarios
 
@@ -383,6 +404,75 @@ class DirectoryModuleTestCase(unittest.HomeserverTestCase):
                 channel = self.search(a, "bea")
         self.assertEqual(channel.code, 403, channel.result)
         spy.assert_not_called()
+
+    def test_service_in_use_is_refused_once_locked(self) -> None:
+        a, b, _c = self.acceptance_users()
+        # Synapse caches the token check, so this is the same token the second call uses.
+        self.assertEqual(self.user_ids(self.search(a, "bea")), [b])
+        self.get_success(self.store.set_user_locked_status(self.service, True))
+        with self.spy_on_search() as spy:
+            channel = self.search(a, "bea")
+        self.assertEqual(channel.code, 403, channel.result)
+        self.assertEqual(channel.json_body["errcode"], "M_FORBIDDEN")
+        spy.assert_not_called()
+
+    @override_config(module_config(admitted_services=[SERVICE, "@ghost:test"]))
+    def test_admitted_mxid_without_a_users_row_is_synapses_own_500(self) -> None:
+        """docs/directory-search.md: Synapse's auth answers before the module runs."""
+        a, _b, _c = self.acceptance_users()
+        self.auth_stub.grant("token-ghost", "ghost", DEVICE)  # a session, but no account
+        with self.spy_on_search() as spy:
+            channel = self.search(a, "bea", token="token-ghost")
+        self.assertEqual(channel.code, 500, channel.result)
+        self.assertEqual(channel.json_body["errcode"], "M_FORBIDDEN")
+        self.assertEqual(channel.json_body["error"], "User not found")
+        spy.assert_not_called()
+
+    def test_appservice_masquerading_as_the_admitted_service_is_403(self) -> None:
+        a, _b, _c = self.acceptance_users()
+        token = self.make_appservice("@dir-bridge:test")
+        with self.spy_on_search() as spy:
+            channel = self.post(
+                f"{SEARCH_PATH}?user_id={quote(SERVICE)}", {"asker": a, "term": "bea"}, token
+            )
+        self.assertEqual(channel.code, 403, channel.result)
+        self.assertEqual(channel.json_body["errcode"], "M_FORBIDDEN")
+        spy.assert_not_called()
+
+    def test_appservice_whose_sender_is_the_admitted_service_is_403(self) -> None:
+        a, _b, _c = self.acceptance_users()
+        token = self.make_appservice(SERVICE)
+        with self.spy_on_search() as spy:
+            channel = self.post(SEARCH_PATH, {"asker": a, "term": "bea"}, token)
+        self.assertEqual(channel.code, 403, channel.result)
+        self.assertEqual(channel.json_body["errcode"], "M_FORBIDDEN")
+        spy.assert_not_called()
+
+    @override_config(
+        module_config(
+            admitted_services=[SERVICE, "@dir-visitor:test", "@dir-oldmark:test"],
+            guest_user_type="org.example.visitor",
+        )
+    )
+    def test_guest_marker_comes_from_the_config(self) -> None:
+        a, _b, _c = self.acceptance_users()
+        visitor_service = self.make_user("dir-visitor", "Directory Visitor", "org.example.visitor")
+        old_marker_service = self.make_user("dir-oldmark", "Directory Oldmark", GUEST_TYPE)
+        visitor = self.make_user("v-user", "Vic Visitor", user_type="org.example.visitor")
+        old_marker = self.make_user("o-user", "Olga Oldmark", user_type=GUEST_TYPE)
+        self.make_room(a, [visitor, old_marker], public=False)
+
+        with self.spy_on_search() as spy:
+            refused = self.search(a, "ada", as_service=visitor_service)
+            empty = self.search(visitor, "ada")
+        self.assertEqual(refused.code, 403, refused.result)
+        self.assertEqual(refused.json_body["errcode"], "M_FORBIDDEN")
+        self.assertEmptyAnswer(empty)
+        spy.assert_not_called()
+
+        # The default marker is only a name once the config says otherwise.
+        self.assertEqual(self.search(a, "ada", as_service=old_marker_service).code, 200)
+        self.assertEqual(self.user_ids(self.search(old_marker, "ada")), [a])
 
     # --------------------------------------------------------- 4.2 : the asker
 
@@ -494,6 +584,26 @@ class DirectoryModuleTestCase(unittest.HomeserverTestCase):
             self.assertEqual(self.user_ids(self.search(a, "  bea  ")), [b])
         spy.assert_called_once_with(a, "bea", 10)
 
+    def test_term_must_be_encodable_as_utf8(self) -> None:
+        a, _b, _c = self.acceptance_users()
+        token = self.tokens[self.service]
+
+        def body(escaped_term: str) -> bytes:
+            return ('{"asker": "%s", "term": "%s"}' % (a, escaped_term)).encode()
+
+        for lone in ("zq\\ud800xj", "zq\\udc00xj", "\\udbff", "\\udfffzz", "ok\\ud83d"):
+            with self.subTest(term=lone):
+                channel = self.make_request(
+                    "POST", SEARCH_PATH, body(lone), access_token=token, shorthand=False
+                )
+                self.assertEqual(channel.code, 400, channel.result)
+                self.assertEqual(channel.json_body["errcode"], "M_INVALID_PARAM")
+        # A surrogate pair is one character, an emoji, and fine.
+        pair = self.make_request(
+            "POST", SEARCH_PATH, body("\\ud83d\\ude00"), access_token=token, shorthand=False
+        )
+        self.assertEqual(pair.code, 200, pair.result)
+
     def test_limit_bounds(self) -> None:
         a, _b, _c = self.acceptance_users()
         for bad in (0, -1, 21, 1.5, "5", True, [5], {"n": 5}):
@@ -512,7 +622,7 @@ class DirectoryModuleTestCase(unittest.HomeserverTestCase):
 
     def test_asker_must_be_a_user_id(self) -> None:
         self.acceptance_users()
-        for bad in ("", "a-user", "@a-user", "a-user:test", "@a user:test", "@a\nuser:test", 5, None):
+        for bad in ("", "a-user", "@a-user", "a-user:test", "@a user:test", "@a\nuser:test", "@a\ud800:test", 5, None):
             with self.subTest(asker=bad):
                 channel = self.post(SEARCH_PATH, {"asker": bad, "term": "bea"}, self.tokens[self.service])
                 self.assertEqual(channel.code, 400, channel.result)
@@ -523,12 +633,22 @@ class DirectoryModuleTestCase(unittest.HomeserverTestCase):
     def test_body_must_be_a_small_json_object(self) -> None:
         a, _b, _c = self.acceptance_users()
         token = self.tokens[self.service]
-        for raw in (b"not json", b"", b"[1]", b'"text"', b"\xff\xfe", b'{"asker": NaN}', b"[" * 4000):
+        for raw in (b"not json", b"", b"[1]", b'"text"', b"\xff\xfe", b"[" * 4000):
             with self.subTest(body=raw[:12]):
                 channel = self.make_request(
                     "POST", SEARCH_PATH, raw, access_token=token, shorthand=False
                 )
                 self.assertEqual(channel.code, 400, channel.result)
+        # A constant JSON does not define, in a key the module never reads: no type check
+        # could refuse it, only the decoder's parse_constant does.
+        for constant in (b"NaN", b"Infinity", b"-Infinity"):
+            with self.subTest(constant=constant):
+                raw = b'{"asker": "' + a.encode() + b'", "term": "bea", "pad": ' + constant + b"}"
+                channel = self.make_request(
+                    "POST", SEARCH_PATH, raw, access_token=token, shorthand=False
+                )
+                self.assertEqual(channel.code, 400, channel.result)
+                self.assertEqual(channel.json_body["errcode"], "M_NOT_JSON")
         too_big = json.dumps({"asker": a, "term": "bea", "pad": "x" * 5000}).encode()
         channel = self.make_request("POST", SEARCH_PATH, too_big, access_token=token, shorthand=False)
         self.assertEqual(channel.code, 413, channel.result)
@@ -568,6 +688,26 @@ class DirectoryModuleTestCase(unittest.HomeserverTestCase):
 
         no_field = self.search(a, "nia")
         self.assertEqual(no_field.json_body["results"], [{"user_id": bare, "display_name": "Nia Nofield"}])
+
+    @override_config(module_config(admitted_services=[SERVICE], did_field="org.example.identity"))
+    def test_did_field_name_comes_from_the_config(self) -> None:
+        a, b, _c = self.acceptance_users()
+        bare = self.make_user("n-user", "Nia Nofield")
+        self.make_room(a, [bare], public=False)
+        renamed = {"did": "did:key:zFixtureRenamed", "proof": "p.q.r"}
+        # b has both names; only the configured one counts. bare has the default name only.
+        self.set_did_field(b, {"did": "did:key:zFixtureDefault", "proof": "x.y.z"})
+        self.set_did_field(b, renamed, field="org.example.identity")
+        self.set_did_field(bare, {"did": "did:key:zFixtureOther", "proof": "x.y.z"})
+
+        found = self.search(a, "b")
+        self.assertEqual(found.code, 200, found.result)
+        rows = {row["user_id"]: row for row in found.json_body["results"]}
+        self.assertEqual(rows[b], {"user_id": b, "display_name": "Bea Beta", "did_field": renamed})
+        self.assertEqual(
+            self.search(a, "nia").json_body["results"],
+            [{"user_id": bare, "display_name": "Nia Nofield"}],
+        )
 
     def test_remote_users_are_included_without_did_field(self) -> None:
         a = self.make_user("a-user", "Ada Alpha")
@@ -704,6 +844,20 @@ class DirectoryModuleTestCase(unittest.HomeserverTestCase):
         self.assertEqual(cfg.max_limit, 7)
         self.assertEqual(DirectoryModule.parse_config({"admitted_services": [SERVICE]}).max_limit, 20)
 
+    def test_parse_config_markers_default_and_override(self) -> None:
+        default = DirectoryModule.parse_config({"admitted_services": [SERVICE]})
+        self.assertEqual(default.guest_user_type, "io.inblock.guest")
+        self.assertEqual(default.did_field, "io.inblock.did")
+        custom = DirectoryModule.parse_config(
+            {
+                "admitted_services": [SERVICE],
+                "guest_user_type": "org.example.visitor",
+                "did_field": "org.example.identity",
+            }
+        )
+        self.assertEqual(custom.guest_user_type, "org.example.visitor")
+        self.assertEqual(custom.did_field, "org.example.identity")
+
     def test_parse_config_refuses_anything_else(self) -> None:
         bad_configs: list[JsonDict] = [
             {},
@@ -719,6 +873,10 @@ class DirectoryModuleTestCase(unittest.HomeserverTestCase):
             {"admitted_services": [SERVICE], "max_limit": "20"},
             {"admitted_services": [SERVICE], "max_limit": True},
             {"admitted_services": [SERVICE], "admitted_service": [SERVICE]},
+            *({"admitted_services": [SERVICE], "guest_user_type": bad} for bad in
+              ("", " ", "a b", "x" * 256, "tab\there", "ünï", 5, None, ["io.inblock.guest"])),
+            *({"admitted_services": [SERVICE], "did_field": bad} for bad in
+              ("", "Io.Inblock.Did", "1abc", "a b", "x" * 256, "_a", "ünï", 5, None, ["io.inblock.did"])),
         ]
         for config in bad_configs:
             with self.subTest(config=config):

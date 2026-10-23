@@ -1154,6 +1154,17 @@ apply_guest_policy() {
 #   DIRECTORY_ADMITTED_SERVICES  comma separated MXIDs of the service accounts
 #                                that may query (spaces around a comma are ignored)
 #   DIRECTORY_MAX_LIMIT          optional, 1 to 50; unset = the module's default (20)
+#
+# Two values are READ here, never set here, and handed to the module as config on
+# every boot so that it cannot name something other than what the rest of this
+# script uses (the module's own defaults are the same strings):
+#   GUEST_POLICY_USER_TYPE       the guest marker, default io.inblock.guest, exactly
+#                                as apply_guest_policy reads it. Guests are neither
+#                                admitted services nor askers; if the marker moved
+#                                and the module kept the old name, guests would pass.
+#   SIWX_DID_PROFILE_FIELD       the DID profile field, default io.inblock.did, the
+#                                one apply_did_field_protection denylists. Rows carry
+#                                this field, so the module must read the protected one.
 # -----------------------------------------------------------------------------
 DIRECTORY_MODULE_CLASS="inblock_directory.DirectoryModule"
 
@@ -1166,6 +1177,8 @@ apply_directory_search() {
   local hs=/data/homeserver.yaml
   local raw="${DIRECTORY_ADMITTED_SERVICES:-}"
   local maxl="${DIRECTORY_MAX_LIMIT:-}"
+  local utype="${GUEST_POLICY_USER_TYPE:-io.inblock.guest}"
+  local dfield="${SIWX_DID_PROFILE_FIELD:-io.inblock.did}"
 
   if [ -z "${raw//[[:space:]]/}" ]; then
     # Drop only our own entry, leave every other module alone.
@@ -1194,6 +1207,12 @@ apply_directory_search() {
   done
   [ -z "$maxl" ] || [[ "$maxl" =~ ^([1-9]|[1-4][0-9]|50)$ ]] \
     || directory_refuse "DIRECTORY_MAX_LIMIT='${maxl}' is not an integer from 1 to 50."
+  # The same grammars apply_guest_policy and apply_did_field_protection enforce; the
+  # value is not echoed (it may be a secret pasted into the wrong variable).
+  [[ "$utype" =~ ^[A-Za-z0-9._-]{1,255}$ ]] \
+    || directory_refuse "GUEST_POLICY_USER_TYPE is not a user type name (1 to 255 characters from A-Za-z0-9._-)."
+  [[ "$dfield" =~ ^[a-z][a-z0-9_.-]{0,254}$ ]] \
+    || directory_refuse "SIWX_DID_PROFILE_FIELD is not a profile field name (Synapse's identifier grammar ^[a-z][a-z0-9_.-]{0,254}\$)."
 
   # The module must be importable BEFORE anything is written.
   if ! python3 -c 'from inblock_directory import DirectoryModule' 2>/dev/null; then
@@ -1202,10 +1221,12 @@ apply_directory_search() {
 
   # Our entry is always removed first and re-added, so it is never there twice and
   # another module in the list is left alone.
-  DIR_CLASS="$DIRECTORY_MODULE_CLASS" DIR_SERVICES="$services" DIR_MAXL="$maxl" yq -i '
+  DIR_CLASS="$DIRECTORY_MODULE_CLASS" DIR_SERVICES="$services" DIR_MAXL="$maxl" \
+  DIR_UTYPE="$utype" DIR_DFIELD="$dfield" yq -i '
     (.modules // []) as $m
     | .modules = ($m | map(select(.module != strenv(DIR_CLASS))))
-    | .modules += [{"module": strenv(DIR_CLASS), "config": ({"admitted_services": (strenv(DIR_SERVICES) | split(","))}
+    | .modules += [{"module": strenv(DIR_CLASS), "config": ({"admitted_services": (strenv(DIR_SERVICES) | split(",")),
+          "guest_user_type": strenv(DIR_UTYPE), "did_field": strenv(DIR_DFIELD)}
         + (strenv(DIR_MAXL) | select(. != "") | {"max_limit": to_number}))}]
   ' "$hs" || directory_refuse "could not write the modules entry to ${hs}."
 
@@ -1213,7 +1234,7 @@ apply_directory_search() {
   if [ "$(yq "[(.modules // [])[] | select(.module == \"${DIRECTORY_MODULE_CLASS}\")] | length" "$hs" 2>/dev/null)" != "1" ]; then
     directory_refuse "the ${DIRECTORY_MODULE_CLASS} entry is not in ${hs} after writing it."
   fi
-  echo "Directory search: ENABLED for ${n} service account(s), max_limit=${maxl:-<module default>}."
+  echo "Directory search: ENABLED for ${n} service account(s), max_limit=${maxl:-<module default>}, guest_user_type=${utype}, did_field=${dfield}."
 }
 
 if [ -f /data/homeserver.yaml ]; then

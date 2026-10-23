@@ -144,11 +144,16 @@ the MSC4133 write-policy patch (a backport of
 [element-hq/synapse#19980](https://github.com/element-hq/synapse/pull/19980), open) makes
 it read-only for non-admins.
 
-- **The field name is a three-sided contract**: siwx-oidc's
-  `src/did_assertion.rs::DID_PROFILE_FIELD`, the `siwx-oidc-auth` verifier's copy, and
-  the denylist written here (`SIWX_DID_PROFILE_FIELD`, default `io.inblock.did`). Renaming
-  it is a migration across all three, not an edit; a denylist naming the old key leaves
-  the new field user-writable.
+- **The field name is a four-sided contract**: siwx-oidc's
+  `src/did_assertion.rs::DID_PROFILE_FIELD`, the `siwx-oidc-auth` verifier's copy, the
+  denylist written here (`SIWX_DID_PROFILE_FIELD`, default `io.inblock.did`) and the
+  directory module's `did_field` setting, which `apply_directory_search` writes from the
+  same variable with the same default. Renaming it is a migration across all four, not an
+  edit; a denylist naming the old key leaves the new field user-writable, and a module
+  still reading the old key serves rows without the DID or from a field users can write.
+  The guest marker is a two-sided contract in the same way: `GUEST_POLICY_USER_TYPE`
+  (default `io.inblock.guest`) for the guest policy and the module's `guest_user_type`;
+  `scripts/directory-search-accept.sh` checks that the defaults in the entrypoint agree.
 - **Denylist, never allowlist.** `msc4133_key_allowlist` restricts every custom profile
   field on the server, and an empty list (`[]` is not `None`) blocks them all.
 - **The startup guard refuses to start** unless the field name fits Synapse's
