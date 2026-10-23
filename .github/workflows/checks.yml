@@ -132,7 +132,8 @@ jobs:
       # and run against fixture homeserver.yaml files: registration, removal when the
       # setting is emptied, every refusal, other modules kept, byte-neutral when off.
       # The module's own behaviour is tested by synapse-modules/run-tests.sh, which
-      # needs a Rust build of Synapse and is run in the Synapse bump procedure.
+      # needs a Rust build of Synapse; it has its own workflow with a path filter,
+      # directory-module-tests.yml.
       - name: apply_directory_search acceptance cases
         env:
           SIWX_ACCEPT_SCRATCH: ${{ runner.temp }}/directory-search-accept

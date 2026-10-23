@@ -325,7 +325,7 @@ scripts/storage-controller-credential-test.sh  # where the storage controller re
 scripts/synapse-secret-store-accept.sh   # secret store mode, no runtime; needs mikefarah yq v4 and python3 (CI)
 scripts/synapse-secret-store-e2e.sh --image IMG  # secret store mode in containers, as 991:991 with group_add (CI)
 scripts/directory-search-accept.sh       # apply_directory_search: registration, removal, refusals; needs mikefarah yq v4 and python3 (CI)
-synapse-modules/run-tests.sh             # inblock_directory tests in Synapse's own framework at the pinned tag; needs network, cargo, uv
+synapse-modules/run-tests.sh             # inblock_directory tests in Synapse's own framework at the pinned tag; needs network, cargo, uv (CI, path-filtered)
 scripts/check-did-localpart-vectors.sh   # needs `gh`; compares against siwx-oidc's fixture
 e2e-harness/run.sh smoke                 # hermetic stack; needs podman and a siwx-oidc checkout
 ```
@@ -339,7 +339,9 @@ e2e-harness/run.sh smoke                 # hermetic stack; needs podman and a si
 - Synapse patch tests run inside a Synapse checkout: see
   [patches/synapse/README.md](patches/synapse/README.md) rule 4.
 - The `inblock_directory` module tests also run inside a Synapse checkout, at the tag the
-  Dockerfile pins; `synapse-modules/run-tests.sh` sets that up. A Synapse bump is not merged
+  Dockerfile pins; `synapse-modules/run-tests.sh` sets that up, and
+  `.github/workflows/directory-module-tests.yml` runs it in CI (path-filtered: the module,
+  the Synapse patches, the Dockerfile, the entrypoint). A Synapse bump is not merged
   while they are red (the module uses Synapse internals).
 - Element patch behaviour is covered by Playwright suites in siwx-oidc (`e2e/element/`);
   each registry entry names its leg. The unit tests a patch carries run in CI as above.

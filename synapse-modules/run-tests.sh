@@ -19,6 +19,13 @@
 #   synapse-modules/run-tests.sh inblock_directory_tests.test_directory_module.DirectoryModuleTestCase.test_term_bounds
 #                                                 # arguments replace the default target and go to trial
 #   SYNAPSE_TAG=v1.164.0 synapse-modules/run-tests.sh   # a tag other than the Dockerfile's
+#   synapse-modules/run-tests.sh --print-tag      # print the tag that would be tested and exit
+#
+# CI. .github/workflows/directory-module-tests.yml runs this script, unchanged, on pull
+# requests and pushes that touch the module, the Synapse patches or the Dockerfile. It
+# gets the tag from --print-tag (so the Dockerfile's FROM line stays the only place the
+# Synapse version is written down), points SIWX_DIRECTORY_TESTS_DIR at a directory it
+# caches by tag, and relies on the exit code: trial's, 2 for a setup problem.
 #
 # Needs: git, network on the first run, a Rust toolchain (cargo) for the extension, and
 # either `uv` (preferred) or python3.13 with venv. The image runs Python 3.13.
@@ -40,6 +47,9 @@ esac
 TAG="${SYNAPSE_TAG:-$(sed -n 's#^FROM matrixdotorg/synapse:\(v[0-9][0-9.]*\)@.*#\1#p' "${REPO_ROOT}/dockerfiles/Dockerfile" | head -n1)}"
 [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "cannot determine the Synapse tag (got '${TAG}')" >&2; exit 2; }
 
+# Lets CI (and anyone) read the tag from the one place that parses it, with no clone.
+if [ "${1:-}" = "--print-tag" ]; then echo "$TAG"; exit 0; fi
+
 BASE="${SIWX_DIRECTORY_TESTS_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}}"
 SRC="${BASE}/synapse-${TAG}"
 VENV="${BASE}/synapse-${TAG}-venv"
@@ -55,7 +65,11 @@ fi
 [ "$(git -C "$SRC" describe --tags --exact-match 2>/dev/null)" = "$TAG" ] \
   || { echo "${SRC} is not a checkout of ${TAG}" >&2; exit 2; }
 
+# One line of context at the top of a CI log: which Synapse, where it lives.
+[ -z "${CI:-}" ] || echo "run-tests.sh: Synapse ${TAG}, working directory ${BASE}" >&2
+
 if [ ! -f "$STAMP" ]; then
+  command -v cargo >/dev/null || { echo "need cargo (a Rust toolchain) to build Synapse's Rust extension" >&2; exit 2; }
   if command -v uv >/dev/null; then
     uv venv --clear --python 3.13 "$VENV"
     VIRTUAL_ENV="$VENV" uv pip install -e "${SRC}[test]"
