@@ -34,6 +34,15 @@ patches/synapse/tests/test_msc4133_write_policy.py
     whose notice (Copyright 2014-2016 OpenMarket Ltd, Copyright (C) 2023 New
     Vector, Ltd) its header reproduces.
 
+synapse-modules/inblock_directory_tests/test_directory_module.py
+    AGPL-3.0-or-later, as its SPDX header says. It runs only inside Synapse's
+    own test tree (synapse-modules/run-tests.sh) and its fake introspection
+    server and shutdown handling follow Synapse's
+    tests/handlers/test_oauth_delegation.py, whose notice (Copyright 2022
+    Matrix.org Foundation C.I.C., Copyright (C) 2023 New Vector, Ltd) its
+    header reproduces. The module it tests, synapse-modules/inblock_directory/,
+    is this project's own work, Apache-2.0 like the rest of the repository.
+
 patches/livekit/0001-relay-policy.patch
     Apache-2.0, like livekit-server (Copyright 2023 LiveKit, Inc.), whose
     pkg/service/roommanager.go it changes. The files it adds,

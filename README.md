@@ -469,6 +469,18 @@ and uncomment the `GUEST_POLICY_SRC` volume of `matrix_synapse` in `docker-compo
   published from it, so it needs no entry in `NOTICE`. If you build your own image that contains
   it, that image falls under the module's licence and needs one.
 
+### Directory search module (optional)
+
+The Synapse image carries a small module, `inblock_directory` (Apache-2.0, `synapse-modules/`;
+its tests are AGPL-3.0-or-later, see `NOTICE`), that lets an admitted service account ask which people a given user may find under a search
+term, with each local hit's `io.inblock.did` profile field. It returns exactly the rows
+Synapse's own user directory gives that user; it grants nothing and verifies nothing. It is
+**off by default**: set `DIRECTORY_ADMITTED_SERVICES` (comma separated MXIDs of local service
+accounts) in `.env` and `entrypoints/matrix_server.sh` registers it on every boot; unset or
+empty removes the entry again. Contract, errors, logging rule and how to cut a service off:
+[docs/directory-search.md](docs/directory-search.md). Its tests run in Synapse's own test
+framework (`synapse-modules/run-tests.sh`) and are a step of the Synapse bump procedure.
+
 ### Element Web Client
 
 #### --CLIENT_HOST **Required**
