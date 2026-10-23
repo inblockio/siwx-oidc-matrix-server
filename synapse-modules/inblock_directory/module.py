@@ -205,7 +205,7 @@ class _SearchResource(DirectServeJsonResource):
         await self._ratelimiter.ratelimit(None, key=asker)
 
         try:
-            found = await self._directory.search_users_renamed_by_throwaway_commit(asker, term, limit)
+            found = await self._directory.search_users(asker, term, limit)
             rows = [await self._row(hit) for hit in found["results"]]
         except (SynapseError, CancelledError):
             raise
