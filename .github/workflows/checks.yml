@@ -128,6 +128,16 @@ jobs:
           SIWX_ACCEPT_SCRATCH: ${{ runner.temp }}/synapse-secret-store-accept
         run: scripts/synapse-secret-store-accept.sh
 
+      # apply_directory_search (docs/directory-search.md) extracted from the entrypoint
+      # and run against fixture homeserver.yaml files: registration, removal when the
+      # setting is emptied, every refusal, other modules kept, byte-neutral when off.
+      # The module's own behaviour is tested by synapse-modules/run-tests.sh, which
+      # needs a Rust build of Synapse and is run in the Synapse bump procedure.
+      - name: apply_directory_search acceptance cases
+        env:
+          SIWX_ACCEPT_SCRATCH: ${{ runner.temp }}/directory-search-accept
+        run: scripts/directory-search-accept.sh
+
   # scripts/storage-controller-credential-test.sh runs the storage controller against a
   # scratch stack with a stub `docker`: the MAS shared secret comes from the systemd
   # credential `mas_shared_secret` when the unit passes credentials (an error when it

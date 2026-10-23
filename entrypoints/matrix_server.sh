@@ -1130,11 +1130,119 @@ apply_guest_policy() {
   echo "Guest policy: ENABLED, module from ${path}, guest_user_type=${utype}, allowed event types=${events:-<module default>}."
 }
 
+# -----------------------------------------------------------------------------
+# Directory search module (inblock_directory) - OPTIONAL, ENV-GATED, ALWAYS
+# RE-ASSERTED, EVERY BOOT.
+#
+# The module answers "whom may this asker find under this term?" for admitted
+# service accounts, with the rows Synapse's own user directory gives that asker
+# plus each local hit's io.inblock.did profile field. The code is in the image
+# (dockerfiles/Dockerfile, synapse-modules/inblock_directory); this function only
+# registers it. Contract: docs/directory-search.md.
+#
+# FLAG OFF (DIRECTORY_ADMITTED_SERVICES unset or empty): the module is NOT
+# registered. A module entry this function wrote on an earlier boot is removed
+# again (a list that is emptied must switch the endpoint off), and nothing else in
+# `modules:` is touched.
+#
+# FAIL CLOSED. With services set, a malformed value or a module that cannot be
+# imported REFUSES TO START: an endpoint that was asked for must not silently be
+# missing, and one that is half configured must not serve. The module itself also
+# refuses a service that is not a local account.
+#
+# Env:
+#   DIRECTORY_ADMITTED_SERVICES  comma separated MXIDs of the service accounts
+#                                that may query (spaces around a comma are ignored)
+#   DIRECTORY_MAX_LIMIT          optional, 1 to 50; unset = the module's default (20)
+#
+# Two values are READ here, never set here, and handed to the module as config on
+# every boot so that it cannot name something other than what the rest of this
+# script uses (the module's own defaults are the same strings):
+#   GUEST_POLICY_USER_TYPE       the guest marker, default io.inblock.guest, exactly
+#                                as apply_guest_policy reads it. Guests are neither
+#                                admitted services nor askers; if the marker moved
+#                                and the module kept the old name, guests would pass.
+#   SIWX_DID_PROFILE_FIELD       the DID profile field, default io.inblock.did, the
+#                                one apply_did_field_protection denylists. Rows carry
+#                                this field, so the module must read the protected one.
+# -----------------------------------------------------------------------------
+DIRECTORY_MODULE_CLASS="inblock_directory.DirectoryModule"
+
+directory_refuse() {
+  echo "REFUSING TO START: $*" >&2
+  exit 1
+}
+
+apply_directory_search() {
+  local hs=/data/homeserver.yaml
+  local raw="${DIRECTORY_ADMITTED_SERVICES:-}"
+  local maxl="${DIRECTORY_MAX_LIMIT:-}"
+  local utype="${GUEST_POLICY_USER_TYPE:-io.inblock.guest}"
+  local dfield="${SIWX_DID_PROFILE_FIELD:-io.inblock.did}"
+
+  if [ -z "${raw//[[:space:]]/}" ]; then
+    # Drop only our own entry, leave every other module alone.
+    if [ "$(yq "[(.modules // [])[] | select(.module == \"${DIRECTORY_MODULE_CLASS}\")] | length" "$hs" 2>/dev/null)" -gt 0 ] 2>/dev/null; then
+      yq -i "del(.modules[] | select(.module == \"${DIRECTORY_MODULE_CLASS}\")) | del(.modules | select(length == 0))" "$hs" \
+        || directory_refuse "could not remove the ${DIRECTORY_MODULE_CLASS} entry from ${hs}."
+      echo "Directory search: DIRECTORY_ADMITTED_SERVICES is empty; removed the module entry from an earlier boot."
+    else
+      echo "Directory search: disabled (DIRECTORY_ADMITTED_SERVICES is empty)."
+    fi
+    return 0
+  fi
+
+  # Values end up in YAML: strict charsets, no interpolation. Each entry is
+  # trimmed, checked on its own and joined again with a plain comma.
+  local entry services="" n=0 item rest="${raw},"
+  while [ -n "$rest" ]; do
+    item="${rest%%,*}"
+    rest="${rest#*,}"
+    entry="${item#"${item%%[![:space:]]*}"}"
+    entry="${entry%"${entry##*[![:space:]]}"}"
+    [[ "$entry" =~ ^@[A-Za-z0-9._=/+-]+:[A-Za-z0-9.-]+(:[0-9]{1,5})?$ ]] \
+      || directory_refuse "DIRECTORY_ADMITTED_SERVICES holds an entry that is not a Matrix user ID (@localpart:server, no spaces, no empty entry)."
+    services="${services:+${services},}${entry}"
+    n=$((n + 1))
+  done
+  [ -z "$maxl" ] || [[ "$maxl" =~ ^([1-9]|[1-4][0-9]|50)$ ]] \
+    || directory_refuse "DIRECTORY_MAX_LIMIT='${maxl}' is not an integer from 1 to 50."
+  # The same grammars apply_guest_policy and apply_did_field_protection enforce; the
+  # value is not echoed (it may be a secret pasted into the wrong variable).
+  [[ "$utype" =~ ^[A-Za-z0-9._-]{1,255}$ ]] \
+    || directory_refuse "GUEST_POLICY_USER_TYPE is not a user type name (1 to 255 characters from A-Za-z0-9._-)."
+  [[ "$dfield" =~ ^[a-z][a-z0-9_.-]{0,254}$ ]] \
+    || directory_refuse "SIWX_DID_PROFILE_FIELD is not a profile field name (Synapse's identifier grammar ^[a-z][a-z0-9_.-]{0,254}\$)."
+
+  # The module must be importable BEFORE anything is written.
+  if ! python3 -c 'from inblock_directory import DirectoryModule' 2>/dev/null; then
+    directory_refuse "DIRECTORY_ADMITTED_SERVICES is set but the module 'inblock_directory' cannot be imported (it is baked into the image by dockerfiles/Dockerfile). Unset DIRECTORY_ADMITTED_SERVICES or use an image that carries the module."
+  fi
+
+  # Our entry is always removed first and re-added, so it is never there twice and
+  # another module in the list is left alone.
+  DIR_CLASS="$DIRECTORY_MODULE_CLASS" DIR_SERVICES="$services" DIR_MAXL="$maxl" \
+  DIR_UTYPE="$utype" DIR_DFIELD="$dfield" yq -i '
+    (.modules // []) as $m
+    | .modules = ($m | map(select(.module != strenv(DIR_CLASS))))
+    | .modules += [{"module": strenv(DIR_CLASS), "config": ({"admitted_services": (strenv(DIR_SERVICES) | split(",")),
+          "guest_user_type": strenv(DIR_UTYPE), "did_field": strenv(DIR_DFIELD)}
+        + (strenv(DIR_MAXL) | select(. != "") | {"max_limit": to_number}))}]
+  ' "$hs" || directory_refuse "could not write the modules entry to ${hs}."
+
+  # Re-read what is ON DISK, as the other gates do.
+  if [ "$(yq "[(.modules // [])[] | select(.module == \"${DIRECTORY_MODULE_CLASS}\")] | length" "$hs" 2>/dev/null)" != "1" ]; then
+    directory_refuse "the ${DIRECTORY_MODULE_CLASS} entry is not in ${hs} after writing it."
+  fi
+  echo "Directory search: ENABLED for ${n} service account(s), max_limit=${maxl:-<module default>}, guest_user_type=${utype}, did_field=${dfield}."
+}
+
 if [ -f /data/homeserver.yaml ]; then
   apply_mas_config
   apply_matrixrtc_config
   apply_lk_jwt_membership
   apply_guest_policy
+  apply_directory_search
   if [ "$SECRET_STORE" = 1 ]; then
     apply_secret_store_config
   fi

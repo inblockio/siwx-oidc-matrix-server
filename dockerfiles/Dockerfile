@@ -97,6 +97,25 @@ RUN apt-get update \
     && apt-get purge -y patch \
     && rm -rf /var/lib/apt/lists/* /tmp/synapse-msc4133-acl.patch
 
+# ---------------------------------------------------------------------------
+# inblock_directory: the directory search module (docs/directory-search.md), our
+# own code (Apache-2.0), baked into the image so a deployment needs no mount. It
+# is inert until the entrypoint registers it (DIRECTORY_ADMITTED_SERVICES).
+#
+# A .pth file in the interpreter's own site-packages puts /opt/inblock-modules on
+# sys.path for every process of this Python, whatever the user or environment
+# (Synapse runs as an unprivileged user after /start.py drops root, so the files
+# are made world-readable). Like the patch step above, the site-packages
+# directory is asked of the interpreter instead of being hard-coded, and the last
+# command imports the module with the installed Synapse: if a Synapse bump moved
+# something it imports, the build fails here and not at the first boot.
+COPY ./synapse-modules/inblock_directory /opt/inblock-modules/inblock_directory
+RUN SITE="$(python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')" \
+    && echo /opt/inblock-modules > "${SITE}/inblock-modules.pth" \
+    && python -m compileall -q /opt/inblock-modules \
+    && chmod -R a+rX /opt/inblock-modules \
+    && python -c 'from inblock_directory import DirectoryModule'
+
 COPY ./entrypoints/matrix_server.sh /matrix_server.sh
 
 # LICENSE and NOTICE travel with the image. It redistributes this repository's

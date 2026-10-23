@@ -57,6 +57,15 @@ The rules are the same as `patches/element-web/README.md`, and for the same reas
      tests.storage.test_profile tests.config.test_experimental tests.rest.synapse.mas
    ```
 
+   **4a.** Then run the directory module tests (risk R1): `synapse-modules/run-tests.sh`.
+   It builds the Synapse checkout at the tag the Dockerfile's `FROM` line pins (override
+   with `SYNAPSE_TAG=vX.Y.Z` to rehearse before editing the Dockerfile), runs the
+   `inblock_directory` tests in Synapse's own framework, and must be green. The module
+   calls Synapse internals (`UserDirectoryHandler.search_users`, the profile store's
+   `get_profile_field`, `Ratelimiter`, `rc_user_directory`; the list is at the top of
+   `synapse-modules/inblock_directory/module.py`), so a red test here after a bump means
+   the module needs a port, not that the test is wrong. See `docs/directory-search.md`.
+
    **4b.** Then run step 4b of `patches/element-web/README.md` rule 4 (upstream-status
    refresh over both registries, no-drift check for every entry that mirrors a PR).
 5. **`patch`, not `git apply`.** `matrixdotorg/synapse:v1.159.0` ships neither

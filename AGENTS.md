@@ -44,6 +44,7 @@ stores; nothing here can patch it.
 | `real-stack/Dockerfile.synapse` | Builds `FROM` the published Synapse image, for siwx-oidc's hand-run real-stack tests. |
 | `entrypoints/matrix_server.sh` | Synapse entrypoint: writes `homeserver.yaml` (see [What runs on every boot](#what-runs-on-every-boot)), and in the optional secret store mode reads every secret from a file ([docs/synapse-secret-files.md](docs/synapse-secret-files.md)). Baked into the image, not bind-mounted. |
 | `entrypoints/element_entrypoint.sh` | Element entrypoint: templates `config.json`, favicons, the theme stylesheet link. Bind-mounted by `docker-compose.yml`. |
+| `synapse-modules/` | Our own Synapse module baked into the Synapse image: `inblock_directory` (directory search for service accounts, [docs/directory-search.md](docs/directory-search.md)), its tests in Synapse's own framework (`inblock_directory_tests/`) and `run-tests.sh`. Registered by `apply_directory_search` in the entrypoint. |
 | `config/` | Element config, nginx config and security headers, service-worker boot shim, theme CSS, LiveKit config, brand assets. |
 | `patches/synapse/`, `patches/element-web/`, `patches/element-call/` | Vendored patches and their registries (`README.md` in the first two). The Element Call patch is built into the Element Web image and registered in `patches/element-web/README.md` (entry 12). |
 | `scripts/` | Registry, hunk and Copy Markdown vector checks and the Element patch unit tests (`element-patch-tests.sh`, run in CI), DID-field guard acceptance test, the secret store mode tests (`synapse-secret-store-accept.sh`, `synapse-secret-store-e2e.sh`, run in CI), localpart-vector check, deployment audits, the storage controller, e2e helpers. |
@@ -80,7 +81,7 @@ change reaches an existing deployment.
 | Part | Settings | How a change reaches an existing deployment |
 |---|---|---|
 | First boot only (`/data/homeserver.yaml` absent) | `/start.py generate`, `server_name`, `public_baseurl`, the listener, `serve_server_wellknown: false`, retention, server notices | Edit `/data/homeserver.yaml` in the `matrix_data` volume, then restart |
-| Every boot | `apply_mas_config` (delegated auth, and the migration off `experimental_features.msc3861`), `apply_matrixrtc_config` (MSC4108/4143/3266/4222, delayed events, `rc_*` limits, `matrix_rtc` transport), in secret store mode `secret_store_preflight` (before anything is written) and `apply_secret_store_config`, `apply_did_field_protection`, admin promotion, the final on-disk denylist check | Change the entrypoint and rebuild the image; a restart re-applies it |
+| Every boot | `apply_mas_config` (delegated auth, and the migration off `experimental_features.msc3861`), `apply_matrixrtc_config` (MSC4108/4143/3266/4222, delayed events, `rc_*` limits, `matrix_rtc` transport), `apply_directory_search` (registers or removes the `inblock_directory` module from `DIRECTORY_ADMITTED_SERVICES`), in secret store mode `secret_store_preflight` (before anything is written) and `apply_secret_store_config`, `apply_did_field_protection`, admin promotion, the final on-disk denylist check | Change the entrypoint and rebuild the image; a restart re-applies it |
 
 - **`apply_mas_config` refuses to write empty values.** With `SIWEOIDC_BASE_URL` (or
   `SIWEOIDC_INTERNAL_URL`) or `MAS_SHARED_SECRET` missing, it leaves the file untouched
@@ -143,11 +144,16 @@ the MSC4133 write-policy patch (a backport of
 [element-hq/synapse#19980](https://github.com/element-hq/synapse/pull/19980), open) makes
 it read-only for non-admins.
 
-- **The field name is a three-sided contract**: siwx-oidc's
-  `src/did_assertion.rs::DID_PROFILE_FIELD`, the `siwx-oidc-auth` verifier's copy, and
-  the denylist written here (`SIWX_DID_PROFILE_FIELD`, default `io.inblock.did`). Renaming
-  it is a migration across all three, not an edit; a denylist naming the old key leaves
-  the new field user-writable.
+- **The field name is a four-sided contract**: siwx-oidc's
+  `src/did_assertion.rs::DID_PROFILE_FIELD`, the `siwx-oidc-auth` verifier's copy, the
+  denylist written here (`SIWX_DID_PROFILE_FIELD`, default `io.inblock.did`) and the
+  directory module's `did_field` setting, which `apply_directory_search` writes from the
+  same variable with the same default. Renaming it is a migration across all four, not an
+  edit; a denylist naming the old key leaves the new field user-writable, and a module
+  still reading the old key serves rows without the DID or from a field users can write.
+  The guest marker is a two-sided contract in the same way: `GUEST_POLICY_USER_TYPE`
+  (default `io.inblock.guest`) for the guest policy and the module's `guest_user_type`;
+  `scripts/directory-search-accept.sh` checks that the defaults in the entrypoint agree.
 - **Denylist, never allowlist.** `msc4133_key_allowlist` restricts every custom profile
   field on the server, and an empty list (`[]` is not `None`) blocks them all.
 - **The startup guard refuses to start** unless the field name fits Synapse's
@@ -318,6 +324,8 @@ scripts/did-field-guard-accept.sh        # needs a container runtime; see its he
 scripts/storage-controller-credential-test.sh  # where the storage controller reads the MAS secret from (CI)
 scripts/synapse-secret-store-accept.sh   # secret store mode, no runtime; needs mikefarah yq v4 and python3 (CI)
 scripts/synapse-secret-store-e2e.sh --image IMG  # secret store mode in containers, as 991:991 with group_add (CI)
+scripts/directory-search-accept.sh       # apply_directory_search: registration, removal, refusals; needs mikefarah yq v4 and python3 (CI)
+synapse-modules/run-tests.sh             # inblock_directory tests in Synapse's own framework at the pinned tag; needs network, cargo, uv
 scripts/check-did-localpart-vectors.sh   # needs `gh`; compares against siwx-oidc's fixture
 e2e-harness/run.sh smoke                 # hermetic stack; needs podman and a siwx-oidc checkout
 ```
@@ -330,6 +338,9 @@ e2e-harness/run.sh smoke                 # hermetic stack; needs podman and a si
   defect and is never listed.
 - Synapse patch tests run inside a Synapse checkout: see
   [patches/synapse/README.md](patches/synapse/README.md) rule 4.
+- The `inblock_directory` module tests also run inside a Synapse checkout, at the tag the
+  Dockerfile pins; `synapse-modules/run-tests.sh` sets that up. A Synapse bump is not merged
+  while they are red (the module uses Synapse internals).
 - Element patch behaviour is covered by Playwright suites in siwx-oidc (`e2e/element/`);
   each registry entry names its leg. The unit tests a patch carries run in CI as above.
 - `scripts/element-deploy-audit.sh` and `verify-deployment.sh` probe a live deployment's
