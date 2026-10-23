@@ -46,3 +46,7 @@
 # TLS itself (a copy of the edge's ACME certificate). Never committed; same
 # rationale as signing_key.pem/.env.real above.
 /config/livekit-tls/
+
+# Python bytecode (synapse-modules tests and the patches/synapse test).
+__pycache__/
+*.pyc
