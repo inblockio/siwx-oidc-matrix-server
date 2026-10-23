@@ -1,0 +1,96 @@
+# The inblock_directory module's tests (docs/directory-search.md), in Synapse's own test
+# framework, at the Synapse tag dockerfiles/Dockerfile pins.
+#
+# WHY. The module calls Synapse internals, three of them looked up per request
+# (`search_users`, `get_profile_field`, `user_directory_search_enabled`). The image build
+# only imports the module, so a Synapse bump that skipped step 4a of
+# patches/synapse/README.md would ship an image that boots and answers 500 on every
+# directory search. This job makes that step a check instead of a habit.
+#
+# WHY A WORKFLOW OF ITS OWN. checks.yml runs every job on every pull request, on purpose
+# (no `paths-ignore`, see its header). This job needs a Rust build of Synapse, so it runs
+# only when something that can break the module changes. A path filter belongs on the
+# whole workflow, hence a second file. Nothing requires this check, so a pull request that
+# does not match the filter is not blocked waiting for it.
+#
+# THE VERSION. Written down once, in the Dockerfile's FROM line. The job asks
+# `run-tests.sh --print-tag` (the script's own parser) and never sets SYNAPSE_TAG, so the
+# tag it tests cannot diverge from the one the image is built from.
+#
+# THE CACHE. Two entries, both keyed by the tag:
+#   - the Synapse checkout and its virtualenv with the built Rust extension (the slow part,
+#     minutes cold, seconds warm), also keyed by the Python patch version and by
+#     run-tests.sh, which defines how they are built. Exact match only: a changed key is a
+#     clean rebuild, never a reuse of a half-matching tree;
+#   - pip's wheel cache, which a rebuild for a new tag starts from.
+# Nothing in either is a secret. A cache written by a pull request is readable only by that
+# pull request (and a fork's pull request cannot write to the base repository's cache).
+# run-tests.sh re-checks that the cached checkout is exactly the tag it wants.
+#
+# Public actions only, no secrets, read-only token: safe on pull requests from forks.
+name: Directory module tests
+
+on:
+  pull_request:
+    paths:
+      - 'synapse-modules/**'
+      - 'patches/synapse/**'
+      - 'dockerfiles/Dockerfile'
+      - 'entrypoints/matrix_server.sh'
+      - '.github/workflows/directory-module-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'synapse-modules/**'
+      - 'patches/synapse/**'
+      - 'dockerfiles/Dockerfile'
+      - 'entrypoints/matrix_server.sh'
+      - '.github/workflows/directory-module-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  directory-module-tests:
+    name: inblock_directory tests on the pinned Synapse
+    # Pinned like the other jobs (ubuntu-latest moves between releases). The image has
+    # a Rust toolchain; run-tests.sh refuses with a clear message when cargo is missing.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      # Pinned by commit, not by a movable tag; the comment names the release.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # On disk, never /tmp (RAM-backed on our own machines; run-tests.sh refuses it).
+      # Set before the cache step, which restores to the same directory.
+      - name: Where the Synapse checkout and virtualenv live
+        run: echo "SIWX_DIRECTORY_TESTS_DIR=$HOME/.cache/siwx-directory-tests" >> "$GITHUB_ENV"
+
+      # The Synapse image runs Python 3.13 and run-tests.sh builds a 3.13 virtualenv.
+      - name: Python 3.13
+        id: python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+
+      - name: Synapse tag from the Dockerfile
+        id: tag
+        run: echo "tag=$(synapse-modules/run-tests.sh --print-tag)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the Synapse checkout and virtualenv
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/siwx-directory-tests
+          key: directory-tests-${{ runner.os }}-${{ steps.tag.outputs.tag }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('synapse-modules/run-tests.sh') }}
+
+      - name: Cache pip wheels
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/pip
+          key: directory-tests-pip-${{ runner.os }}-${{ steps.tag.outputs.tag }}
+          restore-keys: directory-tests-pip-${{ runner.os }}-
+
+      - name: Run the module tests against Synapse ${{ steps.tag.outputs.tag }}
+        run: synapse-modules/run-tests.sh

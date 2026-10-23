@@ -165,4 +165,8 @@ time.
 The module uses a few Synapse internals (listed at the top of
 `synapse-modules/inblock_directory/module.py`). They can change in any release, so
 `run-tests.sh` is a step of the Synapse bump procedure
-(`patches/synapse/README.md`, rule 4).
+(`patches/synapse/README.md`, rule 4), and CI runs it
+(`.github/workflows/directory-module-tests.yml`) against the tag the Dockerfile pins, on
+pull requests and pushes that touch the module, the Synapse patches, the Dockerfile or the
+entrypoint. Three of the internals it covers are looked up per request, so an image that
+imports the module can still fail every search; only these tests show that.

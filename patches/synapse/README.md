@@ -57,10 +57,22 @@ The rules are the same as `patches/element-web/README.md`, and for the same reas
      tests.storage.test_profile tests.config.test_experimental tests.rest.synapse.mas
    ```
 
-   **4a.** Then run the directory module tests (risk R1): `synapse-modules/run-tests.sh`.
-   It builds the Synapse checkout at the tag the Dockerfile's `FROM` line pins (override
-   with `SYNAPSE_TAG=vX.Y.Z` to rehearse before editing the Dockerfile), runs the
-   `inblock_directory` tests in Synapse's own framework, and must be green. The module
+   **4a.** Then run the directory module tests (risk R1). CI now runs them: the
+   `Directory module tests` workflow (`.github/workflows/directory-module-tests.yml`)
+   runs `synapse-modules/run-tests.sh` against the tag the Dockerfile's `FROM` line pins,
+   on every pull request and push to `main` that touches `synapse-modules/`,
+   `patches/synapse/`, `dockerfiles/Dockerfile`, `entrypoints/matrix_server.sh` or the
+   workflow itself. A bump pull request therefore shows the result without anyone
+   remembering this step, and is not merged while it is red. To run the same thing
+   locally (a rehearsal before editing the Dockerfile, or to debug a red CI run):
+
+   ```sh
+   synapse-modules/run-tests.sh                        # the tag the Dockerfile pins
+   SYNAPSE_TAG=vX.Y.Z synapse-modules/run-tests.sh     # a tag other than the pin
+   ```
+
+   It builds a Synapse checkout at the tag and runs the `inblock_directory` tests in
+   Synapse's own framework. The module
    calls Synapse internals (`UserDirectoryHandler.search_users`, the profile store's
    `get_profile_field`, `Ratelimiter`, `rc_user_directory`; the list is at the top of
    `synapse-modules/inblock_directory/module.py`), so a red test here after a bump means

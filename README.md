@@ -479,7 +479,8 @@ Synapse's own user directory gives that user; it grants nothing and verifies not
 accounts) in `.env` and `entrypoints/matrix_server.sh` registers it on every boot; unset or
 empty removes the entry again. Contract, errors, logging rule and how to cut a service off:
 [docs/directory-search.md](docs/directory-search.md). Its tests run in Synapse's own test
-framework (`synapse-modules/run-tests.sh`) and are a step of the Synapse bump procedure.
+framework (`synapse-modules/run-tests.sh`), which CI runs on every change to the module, the
+Synapse patches or the Synapse pin, and are a step of the Synapse bump procedure.
 
 ### Element Web Client
 
