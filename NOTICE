@@ -137,6 +137,22 @@ patches/element-call/0180-bt-audio-output.patch
     here as well. The patch file in this repository is the source offer
     for the modification (patches/element-web/README.md, entry 12).
 
+patches/element-call/0190-media-key-recovery.patch
+    Modifies Element Call as well, in the same Element Call build stage and
+    after 0180. The Element Call files it changes (src/room/useLoadGroupCall.ts,
+    src/state/CallViewModel/remoteMembers/Connection.ts, src/widget.ts and
+    the tests Connection.test.ts and widget.test.ts) carry
+    "SPDX-License-Identifier: AGPL-3.0-only OR
+    LicenseRef-Element-Commercial". The second option names Element's
+    commercial license, which only Element can grant, so the changes to
+    these files are licensed AGPL-3.0-only. The patch adds four files
+    (src/e2ee/keyRecovery.ts, src/e2ee/keyRecovery.test.ts,
+    src/e2ee/keyRecoveryWiring.test.ts and src/room/useLoadGroupCall.test.tsx)
+    whose headers read "Copyright 2026 Aqua Meet contributors" and the same
+    SPDX line; they are AGPL-3.0-only here as well. The patch file in this
+    repository is the source offer for the modification
+    (patches/element-web/README.md, entry 13).
+
 
 Brand assets
 ------------

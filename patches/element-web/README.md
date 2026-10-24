@@ -2,7 +2,7 @@
 
 This directory is the **complete, canonical list of every modification we apply to
 upstream Element Web source** before building, and to the Element Call embedded build
-that the image serves (entry 12, whose patch file lives in
+that the image serves (entries 12 and 13, whose patch files live in
 [`patches/element-call/`](../element-call/)). `dockerfiles/Dockerfile.element` is the
 single build source for the element-web image that CI publishes from `main`, and it
 applies exactly the patches listed here, each with `git apply --verbose` so **a patch
@@ -12,8 +12,8 @@ that stops applying fails the image build loudly** — never silently at runtime
 repository. Each change is licensed like the Element Web file it changes, which for the
 code the image ships means AGPL-3.0-only OR GPL-3.0-only. A docs file, an Apache-2.0 test
 and two tests that adapt an AGPL-only harness differ; [`NOTICE`](../../NOTICE) lists them.
-Entry 12 changes Element Call, which is AGPL-3.0-only OR LicenseRef-Element-Commercial,
-so that change is AGPL-3.0-only (NOTICE).
+Entries 12 and 13 change Element Call, which is AGPL-3.0-only OR LicenseRef-Element-Commercial,
+so those changes are AGPL-3.0-only (NOTICE).
 
 Rules of this registry:
 
@@ -100,15 +100,16 @@ Rules of this registry:
    this file): the Dockerfile fails the build on a row that no longer holds, and a row that
    stock now also carries (upstream shipped the string) no longer discriminates.
 
-   **Entry 12 is not in that loop**: it patches Element Call, not Element Web, and its patch
-   file is in `patches/element-call/`. At every bump read the version of
+   **Entries 12 and 13 are not in that loop**: they patch Element Call, not Element Web, and
+   their patch files are in `patches/element-call/`. At every bump read the version of
    `@element-hq/element-call-embedded` in the new tag's `apps/web/package.json`. The build
    fails when it differs from `ARG ELEMENT_CALL_STOCK_VERSION` in `deps`, so a bump cannot
    silently serve an older Element Call than the one Element Web moved to. When it moved,
    rebase the `element-call` stage: new `ELEMENT_CALL_TAG` and `ELEMENT_CALL_COMMIT`
    together (`git ls-remote https://github.com/element-hq/element-call 'refs/tags/<tag>^{}'`),
-   try the patch against a fresh clone of that tag (`git apply --check`), and read the
-   retirement condition of entry 12 before forward-porting it.
+   try both patches, 12 and then 13, against a fresh clone of that tag (`git apply --check`
+   after applying 12), and read the retirement conditions of entries 12 and 13 before
+   forward-porting either (13 names the upstream issue to check first).
 
    **4b. Upstream refresh (every tag bump, from the repo root).** First, refresh the
    upstream status of every upstream link in both registries and update each entry's
@@ -224,6 +225,7 @@ re-litigated each time someone audits the registry.
 | 10 | `sw-media-401-token-retry` | A media request that 401s with the stored token waits (5 s bound) for the app's refresh and retries once. | none |
 | 11 | `copy-markdown` | Right-click "Copy Markdown" directly above Pin: copies a text, notice or emote message as clean CommonMark + GFM, converted from `formatted_body` (no HTML emitted), instead of the lossy rendered-text copy or the JSON of View source. | none |
 | 12 | `0180-bt-audio-output` | Patch to the **Element Call** embedded build, not to Element Web (file in `patches/element-call/`, built by the `element-call` stage): calls stay audible with Bluetooth headsets. A Windows hands-free output rule, an audio-output guard that holds LiveKit's remote audio on the chosen output and replays it after device or microphone changes, and autoplay-block reporting. | none |
+| 13 | `0190-media-key-recovery` | Second patch to the **Element Call** embedded build (file in `patches/element-call/`, built by the same `element-call` stage, applied after 12): a call recovers when a media E2EE key is lost. The widget client's call-key to-device sends are retried and sent again, and a watchdog re-sends our own call membership with a fresh `created_ts` when a remote stays undecryptable without a key. | none |
 
 Entry 6 is the only gated one:
 
@@ -244,7 +246,7 @@ recorded by that deployment, not here.
 
 ## Which Dockerfile applies what
 
-**One Dockerfile, all twelve patches.** `dockerfiles/Dockerfile.element` applies every
+**One Dockerfile, all thirteen patches.** `dockerfiles/Dockerfile.element` applies every
 numbered patch below, in this file's order. **8 depends on 7** and **10 depends on 9**;
 each must stay after the entry it depends on (see their Order notes). **11 is applied
 last of the Element Web patches**: its `en_EN.json` hunk was generated against the tree with
@@ -252,12 +254,14 @@ last of the Element Web patches**: its `en_EN.json` hunk was generated against t
 stage `element-call`, which precedes `deps`, to a clone of Element Call, and stage `deps`
 then replaces the `dist/` of the installed `@element-hq/element-call-embedded` package with
 that stage's build, right after `pnpm install`. It touches no Element Web file, so it is
-independent of 1-11 and of their order. Until 2026-09-01 a
+independent of 1-11 and of their order. **13 patches Element Call too**: it is applied in the
+same stage right after 12, because it is generated on top of the tree with 12 applied (the two
+change no file in common). Until 2026-09-01 a
 separate `dev` branch applied a different subset; that branch was merged into `main` and
 deleted, so there is a single Dockerfile.
 
-A tag bump must try every Element Web patch (1-11) in this file's order, and check entry 12
-as rule 4 says.
+A tag bump must try every Element Web patch (1-11) in this file's order, and check entries
+12 and 13 as rule 4 says.
 
 ---
 
@@ -1992,7 +1996,7 @@ from the Element Call patch registry of the aqua-meet repository, where it is ro
   (fails unless HEAD is `ELEMENT_CALL_COMMIT`), applies the patch with `git apply --verbose`
   and builds the way upstream's CI builds the embedded package (`corepack enable`, the
   `packageManager` its `package.json` pins (pnpm 11.21.0), `pnpm install --frozen-lockfile
-  --ignore-pnpmfile`, `VITE_APP_VERSION=embedded-v0.26.1-aqua.0180 pnpm run
+  --ignore-pnpmfile`, `VITE_APP_VERSION=embedded-v0.26.1-aqua.0180.0190 pnpm run
   build:embedded:production`). Stage `deps` copies that `dist/` in and replaces the package's
   `dist/` with it, in the real directory of the package as resolved from `apps/web`, which is
   how `getPackageRoot` in the webpack config finds it (pnpm's store layout, resolved, not
@@ -2053,10 +2057,12 @@ from the Element Call patch registry of the aqua-meet repository, where it is ro
   obsolete. Check both at every `ELEMENT_WEB_TAG` bump (rule 4): if the new tag installs an
   Element Call newer than v0.26.1, the build fails until the stage is rebased, and the rebase
   is the moment to test whether the patch still applies and is still needed. When the
-  patch is dropped, delete the `element-call` stage, the `deps` replacement,
-  `patches/element-call/`, the row of `markers.tsv`, the grammar line for
-  `widgets/element-call/assets/index-*.js` in the two marker scripts, and this entry's
-  README and NOTICE lines, and let Element Web's own `dist/` through again.
+  patch is dropped and entry 13 is gone too, delete the `element-call` stage, the `deps`
+  replacement, `patches/element-call/`, the rows of `markers.tsv`, the grammar line for
+  `widgets/element-call/assets/index-*.js` in the two marker scripts, and the entries'
+  README and NOTICE lines, and let Element Web's own `dist/` through again. While entry 13
+  stays, only this patch's `COPY` and `git apply` lines, its file, its marker row and its
+  README and NOTICE lines go.
 - **Coverage (rule 2):** none in this repository's CI beyond the marker, and plainly so. The
   18 unit tests belong to the patched Element Call tree, and the `Element patch unit tests`
   job runs Element Web's tree, not Element Call's; they run in the aqua-meet repository
@@ -2073,6 +2079,102 @@ from the Element Call patch registry of the aqua-meet repository, where it is ro
   with `patches/element-call/0180-bt-audio-output.patch` and the pinned tag and commit in
   `dockerfiles/Dockerfile.element`, is the corresponding source of the modification; it is
   public.
+
+### 13. `0190-media-key-recovery.patch` - UPSTREAM DEFECT (element-hq/element-call#4127 open; fix upstream, carry until it ships)
+
+The second entry that is not a patch to Element Web: the file is
+[`patches/element-call/0190-media-key-recovery.patch`](../element-call/0190-media-key-recovery.patch)
+(a `git format-patch` of one commit) and it applies to **Element Call v0.26.1**
+(`9f7c35cd8f84b12f9395e6aac56fd396a3921482`) **with entry 12 applied first**: it is generated on
+top of the tree that 0180 produces. It changes no file that 0180 changes. The same file is carried
+by the Element Call build of the aqua-meet repository (row `0190` of its Element Call patch
+registry).
+
+- **What:** A call recovers when a media E2EE key is lost. Inside Element Call only; nothing in
+  matrix-js-sdk or LiveKit changes. Nothing in `src/e2ee/matrixKeyProvider.ts` changes either.
+  1. New `src/e2ee/keyRecovery.ts`, `wrapKeySend`: wraps the widget client's
+     `encryptAndSendToDevice` once per client. Only the call-key event type is touched. The first
+     attempt is the stock call and its outcome reaches the caller at once (js-sdk holds its key
+     distribution and rotation on that promise). In the background a rejected send is retried
+     after 2 s and again after 10 s, and a successful one is sent again after 5 s and after 15 s
+     (for up to 8 target devices; a larger call keeps the plain single send). Only the latest key
+     of the current join is retried or repeated: a newer key drops the pending copies of an older
+     one. Every other to-device event type passes through unchanged.
+  2. The same module, `SessionGate`: follows whether our own MatrixRTC session is joined (its
+     `JoinStateChanged` event; never `client.clientRunning`, which the embedded client leaves
+     false). Every join and leave starts a new generation and drops all pending sends, timers and
+     episodes of the one before, so nothing of an earlier join runs after a hang up or overwrites
+     the key of an in-page rejoin. A join reported while already joined is a new join too (after a
+     fatal `MembershipManager` error the session reports no leave, and the Reconnect reports a
+     second join), and pending work runs only while the session itself says it is joined.
+  3. The same module, `KeyRecoveryWatchdog`: starts on the first decryption error of a remote
+     participant. If no new key for that participant arrives within 8 s, `refreshOwnMembership`
+     re-sends our own call membership state event with a fresh `created_ts`, which every peer
+     treats as a new joiner and answers by sending its key again. At most 2 actions per episode,
+     15 s apart, and 6 per call. A new key is one whose (index, key bytes) pair was not installed
+     for that participant before (indexes wrap at 256; only a fingerprint of the bytes is kept, at
+     most 256 pairs per participant). An episode ends on such a key, when the participant leaves or the LiveKit
+     connection it was seen on closes, and 60 s after its last action. The refresh runs only while
+     the session is joined (checked again right before the event is sent), in a call of at most 8
+     members (each refresh makes every peer rotate its key), and when our own membership state
+     event (looked up by its state key, as `MembershipManager` writes it) has content. A round in
+     which it cannot run, such as sticky event mode, is logged and not counted.
+  4. Wiring: `installKeyRecovery(client, roomId)` in `widget.ts` (once per client),
+     `bindKeyRecoverySession` in `room/useLoadGroupCall.ts` (the call's session: join state and
+     received keys), and the encryption error, participant-gone and connection-closed events in
+     `remoteMembers/Connection.ts`.
+  5. Tests the patch adds or changes: `keyRecovery.test.ts` (81 tests) and `keyRecoveryWiring.test.ts`
+     (8; the real `RoomWidgetClient` with a mocked widget API and the real `MatrixRTCSession`),
+     `room/useLoadGroupCall.test.tsx` (2) and added cases in `remoteMembers/Connection.test.ts` and
+     `widget.test.ts`; the five files together are 110 tests, all passing on the patched tree
+     (v0.26.1, 12 and 13).
+  The patch adds four files with the header "Copyright 2026 Aqua Meet contributors" and
+  "SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial".
+- **How it reaches the image:** exactly like entry 12 (read "How it reaches the image" there). The
+  `element-call` stage copies the patch and applies it with `git apply --verbose` right after 0180,
+  with no `--3way`, so a patch that stops applying fails the image build; `VITE_APP_VERSION` names
+  both patches (`embedded-v0.26.1-aqua.0180.0190`); stage `deps` replaces the installed package's
+  `dist/` with the stage's build. No other build step changes.
+- **Why:** MatrixRTC sends a member's media key once, to each device that joins. If that single
+  to-device message does not get through, nothing sends it again in a 1:1 call, and the media stays
+  undecryptable until someone hangs up and redials. Two causes in stock code: it re-sends a key
+  only on a membership change, and it swallows a failed send and counts it as delivered
+  (`.catch` of `encryptAndSendToDevice` rethrows only the "widget driver does not support
+  to-device" case, then `roomEventEncryptionKeysSent` is incremented).
+- **Evidence:**
+  - Production, 2026-10-23 and 2026-10-24: 8 connected 1:1 calls were silent until a redial.
+  - The stock code, matrix-js-sdk `24929be0e741be6a5d0a7226f1c682e245263b8a` (the revision
+    Element Call v0.26.1's `pnpm-lock.yaml` pins): `src/matrixrtc/RTCEncryptionManager.ts` lines
+    389 to 459 (a key is re-sent only on a membership change) and
+    `src/matrixrtc/ToDeviceKeyTransport.ts` lines 102 to 116 (the swallowed send).
+  - Upstream: [element-hq/element-call#4127](https://github.com/element-hq/element-call/issues/4127)
+    ("Media undecryptable (one-way video) in self-hosted MatrixRTC+LiveKit, 'No targets found for
+    sending key'"), open since 2026-07-28.
+  - Marker proof: "Marker discrimination record" below (2026-10-24).
+- **Upstream status:** UPSTREAM DEFECT, filed as #4127 (open, no fix). Product owner ruling
+  (Tim, CTO, 2026-10-24): "a, fix upstream and carry the patch". We carry this patch until
+  upstream ships a fix; proposing the fix upstream is a separate step that this entry does not
+  claim to have happened.
+- **Retirement:** upstream Element Call ships a fix for #4127 (a key re-send or a key request
+  when a participant's media cannot be decrypted) in the Element Call version this build pins
+  (`ELEMENT_CALL_TAG`) and in the one Meet pins. Check at every `ELEMENT_WEB_TAG` bump (rule 4)
+  and whenever #4127 closes. When dropping: delete the patch file, its `COPY` and `git apply`
+  lines in the `element-call` stage, the row of `markers.tsv`, and this entry's README and NOTICE
+  lines; keep the stage while entry 12 is carried (entry 12 says what goes when both are gone).
+- **Coverage (rule 2):** none in this repository's CI beyond the marker, and plainly so, as for
+  entry 12. The tests belong to the patched Element Call tree, and the `Element patch unit tests`
+  job runs Element Web's tree; they run in the aqua-meet repository against this same patch file
+  and were run for this entry on the tree of v0.26.1 with 12 and 13 applied. There is no leg in
+  the siwx-oidc Element suite (`e2e/element/`): the failure needs a lost to-device message, which
+  the suite does not produce. What this repository proves is that the patch applied and its code
+  reached the served bundle: the build fails on a missing marker (`[KeyRecovery]`, the log prefix of
+  `keyRecovery.ts`, a row of `markers.tsv` in `widgets/element-call/assets/index-*.js`), and
+  `scripts/element-patch-markers.sh <element_url>` runs it against a deployment. A deploy of this
+  entry needs the real-browser user check of a call like any other build.
+- **Source offer:** Element Call is AGPL-3.0-only OR LicenseRef-Element-Commercial and the image
+  conveys our modified build of it to every browser that loads it. This repository, with
+  `patches/element-call/0190-media-key-recovery.patch` and the pinned tag and commit in
+  `dockerfiles/Dockerfile.element`, is the corresponding source of the modification; it is public.
 
 ## Runtime-stage deltas (not `.patch` files, still upstream deviations)
 
@@ -2234,6 +2336,24 @@ What the table does not say, and the choices behind it:
   build carries entries 1-11 plus a marker for 12 that was measured. The stock
   `vectorim/element-web` image of this tag was not pulled for this entry; its Element Call
   directory is that same npm package.
+- **Entry 13 (2026-10-24), proved on other artefacts than the table above.** Its marker is
+  `[KeyRecovery]`, the log prefix of `src/e2ee/keyRecovery.ts` (a string literal in eleven log
+  messages, so it survives minification; the class and function names do not), in
+  `widgets/element-call/assets/index-*.js`, the same entry chunk as entry 12's marker, because
+  `widget.ts` imports the module. **Candidate:** a local `pnpm run build:embedded:production` of
+  Element Call v0.26.1 with entries 12 and 13 applied (`git apply`, the order of the `element-call`
+  stage; the reviewed 0190 of 2026-10-24, commit `5ffe31ad7d21`; the final commit `bcdadcda3d7d`
+  changes no log message, the prefix still occurs in the same 11), not the Docker image and not a
+  deployed artefact: the marker occurs 11 times in the entry chunk `index-UZyUr06z.js` that its
+  `index.html` names (and in the chunk's source map). **Stock:** the `dist/` of
+  `@element-hq/element-call-embedded@0.26.0` from `npm pack`: 0 occurrences in all 157 files; 0
+  occurrences in the v0.26.1 source tree, nor in the installed `matrix-js-sdk` and `livekit-client`.
+  `scripts/element-patch-markers.sh --markers <rows 12 and 13> <url>`, served from loopback (the
+  two `dist/` directories under a stub `index.html`): passes 12 and 13 on the candidate, fails
+  both on stock, passes both on stock with `--absent 12,13`, and fails 13 on the candidate with
+  `--absent 13`. (The stock measurement was made on the first version of 0190 and not repeated:
+  the stock `dist/` is the same package; the candidate side was repeated on the reviewed version.) The image build's own marker loop (`podman build --target builder`)
+  was not run for this entry: the image is built by CI.
 - **To re-prove after a tag bump or a new entry:** extract `/app` of the new build and of the stock
   image for the new tag, serve each from a loopback static server, and run
   `scripts/element-patch-markers.sh --absent <every entry> http://127.0.0.1:<port>` against stock

@@ -147,7 +147,7 @@ as real-time media.
 | `matrix_synapse` | `ghcr.io/inblockio/siwx-oidc-matrix-server/synapse`, built from `dockerfiles/Dockerfile` (Synapse + 1 patch) | Matrix homeserver; authentication delegated to siwx-oidc |
 | `siwx-oidc` | `ghcr.io/inblockio/siwx-oidc` | OIDC provider (passkey, wallet and agent-key sign-in); takes the place of MAS as Synapse's auth service |
 | `redis` | `redis:8.10.2` | Session and token store for siwx-oidc |
-| `element-web` | `ghcr.io/inblockio/siwx-oidc-matrix-server/element-web`, built from source by `dockerfiles/Dockerfile.element` (Element Web + 11 patches, and the Element Call embedded build + 1 patch) | Web client |
+| `element-web` | `ghcr.io/inblockio/siwx-oidc-matrix-server/element-web`, built from source by `dockerfiles/Dockerfile.element` (Element Web + 11 patches, and the Element Call embedded build + 2 patches) | Web client |
 | `livekit` | `ghcr.io/inblockio/siwx-oidc-matrix-server/livekit-server`, built from upstream v1.13.10 by `dockerfiles/Dockerfile.livekit` (+ relay-policy patch) | MatrixRTC SFU for Element Call; embedded TURN is off by default |
 | `lk-jwt-service` | `ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service`, built by `dockerfiles/Dockerfile.lk-jwt` (upstream v0.9.0, no patch) | Issues LiveKit access tokens to Matrix users, only to members of the room (MSC4502 check) |
 
@@ -171,7 +171,7 @@ deployment is known to run a different version.
 | Synapse image the stack runs | default `…/synapse:sha-70b897e@sha256:986294c6147b…` (CI build of main at 70b897e, v1.162.0) | `docker-compose.yml` (`SYNAPSE_IMAGE_REF`); `real-stack/Dockerfile.synapse` (`ARG SYNAPSE_IMAGE`, same default, for the local real stack) | Built here |
 | Element Web | `v1.12.32` (git tag of element-hq/element-web; the build fails unless it resolves to commit `ed0a1239e853…`) | `dockerfiles/Dockerfile.element` (`ARG ELEMENT_WEB_TAG`, `ARG ELEMENT_WEB_COMMIT`) | **Built from source and patched**: 11 source patches, plus a runtime overlay |
 | Element Web image the stack runs | default `…/element-web:sha-33a0c95@sha256:1761832069bd…` (CI build of main at 33a0c95) | `docker-compose.yml` (`ELEMENT_IMAGE_REF`) | Built here |
-| Element Call | `v0.26.1` (git tag of element-hq/element-call; the build fails unless it resolves to commit `9f7c35cd8f84…`), built from source for the embedded widget; Element Web `v1.12.32` itself installs `0.26.0` (`@element-hq/element-call-embedded`) | `dockerfiles/Dockerfile.element` (stage `element-call`: `ARG ELEMENT_CALL_TAG`, `ARG ELEMENT_CALL_COMMIT`; `ARG ELEMENT_CALL_STOCK_VERSION` in `deps` is the installed package it replaces) | **Built from source and patched**: 1 source patch (`0180-bt-audio-output`), whose `dist/` replaces the installed package's in the Element Web bundle (`element_call.use_exclusively` in `config/element-config.json`). The build fails when Element Web's tag installs another Element Call than `ELEMENT_CALL_STOCK_VERSION`, so a bump rebases the stage. Since `v1.12.31` the bundle also carries `@element-hq/element-call-component` (element-call commit `9b3c3569`, pinned by the lockfile) for the labs flag `feature_element_call_react`, which `config/element-config.json` does not set |
+| Element Call | `v0.26.1` (git tag of element-hq/element-call; the build fails unless it resolves to commit `9f7c35cd8f84…`), built from source for the embedded widget; Element Web `v1.12.32` itself installs `0.26.0` (`@element-hq/element-call-embedded`) | `dockerfiles/Dockerfile.element` (stage `element-call`: `ARG ELEMENT_CALL_TAG`, `ARG ELEMENT_CALL_COMMIT`; `ARG ELEMENT_CALL_STOCK_VERSION` in `deps` is the installed package it replaces) | **Built from source and patched**: 2 source patches (`0180-bt-audio-output`, `0190-media-key-recovery`), whose `dist/` replaces the installed package's in the Element Web bundle (`element_call.use_exclusively` in `config/element-config.json`). The build fails when Element Web's tag installs another Element Call than `ELEMENT_CALL_STOCK_VERSION`, so a bump rebases the stage. Since `v1.12.31` the bundle also carries `@element-hq/element-call-component` (element-call commit `9b3c3569`, pinned by the lockfile) for the labs flag `feature_element_call_react`, which `config/element-config.json` does not set |
 | matrix-js-sdk | `44.0.0` | Not pinned here: same, via the Element Web tag | Stock, bundled |
 | Element Web build toolchain | `node:24.20.0-bullseye@sha256:25f3016fcdae…`; pnpm `11.23.0` (upstream `devEngines`, via corepack); `pnpm install --frozen-lockfile` | `dockerfiles/Dockerfile.element` (builder `FROM`, `corepack enable` step) | Stock |
 | Element Web serving base | `nginxinc/nginx-unprivileged:1.31.6-alpine-slim@sha256:c81a27f28bc2…` | `dockerfiles/Dockerfile.element` (runtime `FROM`) | Stock, with our `config/element-nginx.conf` and security headers |
@@ -242,9 +242,9 @@ that refuses to run without the patch, MatrixRTC experimental features (MSC4108,
 MSC4143, MSC3266, MSC4222), delayed-event and message rate limits, retention off by
 default, server notices, and `serve_server_wellknown: false`.
 
-**Element Web: 11 patches, and 1 for the Element Call build it serves**, applied in this
+**Element Web: 11 patches, and 2 for the Element Call build it serves**, applied in this
 order by `dockerfiles/Dockerfile.element` with `git apply`; the order of 1-11 is
-load-bearing. Registry (all twelve entries):
+load-bearing, and 13 is applied after 12. Registry (all thirteen entries):
 [`patches/element-web/README.md`](patches/element-web/README.md).
 
 1. [`force-first-device-recovery.patch`](patches/element-web/force-first-device-recovery.patch):
@@ -290,6 +290,16 @@ load-bearing. Registry (all twelve entries):
     audio on the chosen output across device and microphone changes, and autoplay-block
     reporting. Element Call is AGPL-3.0-only OR LicenseRef-Element-Commercial; this file
     is the source offer for the modification. UPSTREAM DEFECT, deliberately not filed.
+13. [`0190-media-key-recovery.patch`](patches/element-call/0190-media-key-recovery.patch):
+    a second patch to **Element Call v0.26.1**, applied in the same `element-call` stage
+    after 12. A call recovers when a media E2EE key is lost: the widget client's call-key
+    to-device sends are retried and sent again, and a watchdog re-sends our own call
+    membership with a fresh `created_ts` when a remote stays undecryptable without a key.
+    Without it a 1:1 call whose key does not get through stays silent until a redial.
+    Element Call is AGPL-3.0-only OR LicenseRef-Element-Commercial; this file is the
+    source offer for the modification. UPSTREAM DEFECT
+    ([element-hq/element-call#4127](https://github.com/element-hq/element-call/issues/4127),
+    open); carried until upstream ships a fix.
 
 **lk-jwt-service: no patch.** Registry:
 [`patches/lk-jwt/README.md`](patches/lk-jwt/README.md). Built by
