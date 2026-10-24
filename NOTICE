@@ -137,6 +137,20 @@ patches/element-call/0180-bt-audio-output.patch
     here as well. The patch file in this repository is the source offer
     for the modification (patches/element-web/README.md, entry 12).
 
+patches/element-call/0190-media-key-recovery.patch
+    Modifies Element Call as well, in the same Element Call build stage and
+    after 0180. The Element Call files it changes (src/e2ee/matrixKeyProvider.ts,
+    src/state/CallViewModel/remoteMembers/Connection.ts, src/widget.ts and
+    their tests) carry "SPDX-License-Identifier: AGPL-3.0-only OR
+    LicenseRef-Element-Commercial". The second option names Element's
+    commercial license, which only Element can grant, so the changes to
+    these files are licensed AGPL-3.0-only. The patch adds two files
+    (src/e2ee/keyRecovery.ts and src/e2ee/keyRecovery.test.ts) whose headers
+    read "Copyright 2026 Element Creations Ltd." (the form Element Call's own
+    files carry) and the same SPDX line; they are AGPL-3.0-only here as
+    well. The patch file in this repository is the source offer for the
+    modification (patches/element-web/README.md, entry 13).
+
 
 Brand assets
 ------------

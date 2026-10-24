@@ -1,0 +1,1205 @@
+From a5cfd03f9772c1d22aa10c9dcbd7ebd2c94ad6f0 Mon Sep 17 00:00:00 2001
+From: Tim Bansemer <tim.bansemer@inblock.io>
+Date: Sat, 24 Oct 2026 18:11:31 +0200
+Subject: [PATCH] Recover automatically when a call's media key is lost
+
+A member's media key is sent once to each new joiner. In a 1:1 call a key
+that does not get through is never sent again, and a failed to-device send
+is swallowed and counted as delivered, so the call stays silent until
+someone hangs up and redials.
+
+Add src/e2ee/keyRecovery.ts, inside Element Call only:
+
+- wrapKeySend retries a rejected call key send after 2 s and 10 s, and
+  sends a successful one again after 5 s and 15 s (up to 8 target
+  devices). Other to-device event types pass through untouched.
+- KeyRecoveryWatchdog starts on the first decryption error of a remote
+  participant. If no key for that participant arrives within 8 s, it
+  refreshes our own call membership state event with a fresh created_ts,
+  so every peer sees a new joiner and sends its key again. At most 2
+  actions per episode, 15 s apart, and 6 per call. An episode ends when a
+  key arrives or the participant leaves.
+
+Wired in widget.ts (once per client), Connection.ts (encryption errors,
+participant gone) and matrixKeyProvider.ts (key installed).
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/e2ee/keyRecovery.test.ts                  | 591 ++++++++++++++++++
+ src/e2ee/keyRecovery.ts                       | 302 +++++++++
+ src/e2ee/matrixKeyProvider.test.ts            |  37 ++
+ src/e2ee/matrixKeyProvider.ts                 |   3 +
+ .../remoteMembers/Connection.test.ts          |  82 +++
+ .../CallViewModel/remoteMembers/Connection.ts |  10 +-
+ src/widget.test.ts                            |   6 +
+ src/widget.ts                                 |   2 +
+ 8 files changed, 1031 insertions(+), 2 deletions(-)
+ create mode 100644 src/e2ee/keyRecovery.test.ts
+ create mode 100644 src/e2ee/keyRecovery.ts
+
+diff --git a/src/e2ee/keyRecovery.test.ts b/src/e2ee/keyRecovery.test.ts
+new file mode 100644
+index 0000000..1bd3631
+--- /dev/null
++++ b/src/e2ee/keyRecovery.test.ts
+@@ -0,0 +1,591 @@
++/*
++Copyright 2026 Element Creations Ltd.
++
++SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE in the repository root for full details.
++*/
++
++import {
++  afterEach,
++  beforeEach,
++  describe,
++  expect,
++  it,
++  type Mock,
++  vi,
++} from "vitest";
++import {
++  EventType,
++  type IContent,
++  MatrixEvent,
++  type Room,
++  RoomState,
++} from "matrix-js-sdk";
++import { logger } from "matrix-js-sdk/lib/logger";
++
++import {
++  getKeyRecoveryWatchdog,
++  installKeyRecovery,
++  type KeySendClient,
++  KeyRecoveryWatchdog,
++  type OwnMembershipClient,
++  refreshOwnMembership,
++  wrapKeySend,
++} from "./keyRecovery";
++
++const USER_ID = "@alice:example.org";
++const DEVICE_ID = "ALICEDEVICE";
++const ROOM_ID = "!room:example.org";
++const STATE_KEY = `_${USER_ID}_${DEVICE_ID}_m.call`;
++const SECRET_KEY = "c2VjcmV0LW1lZGlhLWtleS1ub3QtZm9yLWxvZ3M=";
++
++const PEER = { userId: "@bob:example.org", deviceId: "BOBDEVICE" };
++const PAYLOAD = { keys: { index: 0, key: SECRET_KEY }, sent_ts: 1 };
++
++beforeEach(() => {
++  vi.useFakeTimers();
++  vi.setSystemTime(new Date("2026-10-24T12:00:00Z"));
++  vi.spyOn(logger, "info").mockImplementation(() => {});
++  vi.spyOn(logger, "warn").mockImplementation(() => {});
++});
++
++afterEach(() => {
++  vi.useRealTimers();
++  vi.restoreAllMocks();
++});
++
++describe("wrapKeySend", () => {
++  it("retries a failed key send after 2 s and again after 10 s", async () => {
++    const { client, send } = keySendClient();
++    send.mockRejectedValueOnce(new Error("timeout 1"));
++    send.mockRejectedValueOnce(new Error("timeout 2"));
++    wrapKeySend(client);
++
++    const result = sendKey(client, [PEER]);
++    await vi.advanceTimersByTimeAsync(1_999);
++    expect(send).toHaveBeenCalledTimes(1);
++    await vi.advanceTimersByTimeAsync(1);
++    expect(send).toHaveBeenCalledTimes(2);
++    await vi.advanceTimersByTimeAsync(9_999);
++    expect(send).toHaveBeenCalledTimes(2);
++    await vi.advanceTimersByTimeAsync(1);
++    expect(send).toHaveBeenCalledTimes(3);
++    await expect(result).resolves.toBeUndefined();
++  });
++
++  it("rejects with the last error after three failed attempts", async () => {
++    const { client, send } = keySendClient();
++    send.mockRejectedValueOnce(new Error("first"));
++    send.mockRejectedValueOnce(new Error("second"));
++    send.mockRejectedValueOnce(new Error("third"));
++    wrapKeySend(client);
++
++    const result = sendKey(client, [PEER]).catch((e: unknown) => e);
++    await vi.advanceTimersByTimeAsync(12_000);
++    expect(await result).toEqual(new Error("third"));
++
++    // No fourth attempt, and nothing is sent again later.
++    await vi.advanceTimersByTimeAsync(60_000);
++    expect(send).toHaveBeenCalledTimes(3);
++  });
++
++  it("does not retry a host without to-device support", async () => {
++    const { client, send } = keySendClient();
++    const unsupported = new Error("this action is not supported");
++    send.mockRejectedValue(unsupported);
++    wrapKeySend(client);
++
++    await expect(sendKey(client, [PEER])).rejects.toBe(unsupported);
++    await vi.advanceTimersByTimeAsync(60_000);
++    expect(send).toHaveBeenCalledTimes(1);
++  });
++
++  it("sends the same key again 5 s and 15 s after it got through", async () => {
++    const { client, send } = keySendClient();
++    wrapKeySend(client);
++
++    await sendKey(client, [PEER]);
++    expect(send).toHaveBeenCalledTimes(1);
++    await vi.advanceTimersByTimeAsync(4_999);
++    expect(send).toHaveBeenCalledTimes(1);
++    await vi.advanceTimersByTimeAsync(1);
++    expect(send).toHaveBeenCalledTimes(2);
++    await vi.advanceTimersByTimeAsync(9_999);
++    expect(send).toHaveBeenCalledTimes(2);
++    await vi.advanceTimersByTimeAsync(1);
++    expect(send).toHaveBeenCalledTimes(3);
++    await vi.advanceTimersByTimeAsync(60_000);
++    expect(send).toHaveBeenCalledTimes(3);
++
++    for (const call of send.mock.calls) {
++      expect(call).toEqual([
++        EventType.CallEncryptionKeysPrefix,
++        [PEER],
++        PAYLOAD,
++      ]);
++    }
++  });
++
++  it("counts the repeated sends from the send that got through", async () => {
++    const { client, send } = keySendClient();
++    send.mockRejectedValueOnce(new Error("timeout"));
++    wrapKeySend(client);
++
++    const result = sendKey(client, [PEER]);
++    await vi.advanceTimersByTimeAsync(2_000);
++    await result;
++    expect(send).toHaveBeenCalledTimes(2);
++    await vi.advanceTimersByTimeAsync(5_000);
++    expect(send).toHaveBeenCalledTimes(3);
++    await vi.advanceTimersByTimeAsync(10_000);
++    expect(send).toHaveBeenCalledTimes(4);
++  });
++
++  it("repeats the send for 8 target devices but not for 9", async () => {
++    const eight = peers(8);
++    const nine = peers(9);
++    const { client, send } = keySendClient();
++    wrapKeySend(client);
++
++    await sendKey(client, eight);
++    await vi.advanceTimersByTimeAsync(20_000);
++    expect(send).toHaveBeenCalledTimes(3);
++
++    send.mockClear();
++    await sendKey(client, nine);
++    await vi.advanceTimersByTimeAsync(20_000);
++    expect(send).toHaveBeenCalledTimes(1);
++  });
++
++  it("still retries a failed send to more than 8 devices", async () => {
++    const { client, send } = keySendClient();
++    send.mockRejectedValueOnce(new Error("timeout"));
++    wrapKeySend(client);
++
++    const result = sendKey(client, peers(9));
++    await vi.advanceTimersByTimeAsync(2_000);
++    await result;
++    await vi.advanceTimersByTimeAsync(20_000);
++    expect(send).toHaveBeenCalledTimes(2);
++  });
++
++  it("leaves other event types untouched", async () => {
++    const { client, send } = keySendClient();
++    send.mockRejectedValue(new Error("nope"));
++    wrapKeySend(client);
++
++    await expect(
++      client.encryptAndSendToDevice("m.call.invite", [PEER], { a: 1 }),
++    ).rejects.toThrow("nope");
++    await vi.advanceTimersByTimeAsync(60_000);
++    expect(send).toHaveBeenCalledOnce();
++    expect(send).toHaveBeenCalledWith("m.call.invite", [PEER], { a: 1 });
++  });
++
++  it("does not repeat a send once the client has stopped", async () => {
++    const { client, send } = keySendClient();
++    wrapKeySend(client);
++
++    await sendKey(client, [PEER]);
++    client.clientRunning = false;
++    await vi.advanceTimersByTimeAsync(60_000);
++    expect(send).toHaveBeenCalledOnce();
++  });
++
++  it("swallows a failed repeated send without retrying it", async () => {
++    const { client, send } = keySendClient();
++    wrapKeySend(client);
++
++    await sendKey(client, [PEER]);
++    send.mockRejectedValue(new Error("timeout"));
++    await vi.advanceTimersByTimeAsync(60_000);
++    expect(send).toHaveBeenCalledTimes(3);
++  });
++
++  it("wraps a client only once", async () => {
++    const { client, send } = keySendClient();
++    wrapKeySend(client);
++    wrapKeySend(client);
++
++    await sendKey(client, [PEER]);
++    await vi.advanceTimersByTimeAsync(60_000);
++    expect(send).toHaveBeenCalledTimes(3);
++  });
++
++  it("never logs the key", async () => {
++    const { client, send } = keySendClient();
++    send.mockRejectedValueOnce(new Error("timeout"));
++    wrapKeySend(client);
++
++    const result = sendKey(client, [PEER]);
++    await vi.advanceTimersByTimeAsync(2_000);
++    await result;
++    await vi.advanceTimersByTimeAsync(20_000);
++
++    const logged = [
++      ...vi.mocked(logger.info).mock.calls,
++      ...vi.mocked(logger.warn).mock.calls,
++    ];
++    expect(logged.length).toBeGreaterThan(0);
++    expect(JSON.stringify(logged)).not.toContain(SECRET_KEY);
++  });
++});
++
++describe("KeyRecoveryWatchdog", () => {
++  it("runs the recovery action once when no key arrives within 8 s", async () => {
++    const { watchdog, recover } = newWatchdog();
++
++    watchdog.onEncryptionError("bob");
++    await vi.advanceTimersByTimeAsync(7_999);
++    expect(recover).not.toHaveBeenCalled();
++    await vi.advanceTimersByTimeAsync(1);
++    expect(recover).toHaveBeenCalledExactlyOnceWith("bob");
++  });
++
++  it("does nothing when the key arrives within 8 s", async () => {
++    const { watchdog, recover } = newWatchdog();
++
++    watchdog.onEncryptionError("bob");
++    await vi.advanceTimersByTimeAsync(5_000);
++    watchdog.onKeyReceived("bob");
++    await vi.advanceTimersByTimeAsync(60_000);
++    expect(recover).not.toHaveBeenCalled();
++  });
++
++  it("is driven by the first error, later errors change nothing", async () => {
++    const { watchdog, recover } = newWatchdog();
++
++    watchdog.onEncryptionError("bob");
++    await vi.advanceTimersByTimeAsync(5_000);
++    watchdog.onEncryptionError("bob");
++    await vi.advanceTimersByTimeAsync(2_999);
++    expect(recover).not.toHaveBeenCalled();
++    await vi.advanceTimersByTimeAsync(1);
++    expect(recover).toHaveBeenCalledOnce();
++    // livekit sends no more errors, the second action comes anyway
++    await vi.advanceTimersByTimeAsync(15_000);
++    expect(recover).toHaveBeenCalledTimes(2);
++  });
++
++  it("spaces the two actions of an episode 15 s apart and stops there", async () => {
++    const { watchdog, recover } = newWatchdog();
++
++    watchdog.onEncryptionError("bob");
++    await vi.advanceTimersByTimeAsync(8_000);
++    expect(recover).toHaveBeenCalledTimes(1);
++    await vi.advanceTimersByTimeAsync(14_999);
++    expect(recover).toHaveBeenCalledTimes(1);
++    await vi.advanceTimersByTimeAsync(1);
++    expect(recover).toHaveBeenCalledTimes(2);
++
++    // more errors in the same episode start nothing
++    watchdog.onEncryptionError("bob");
++    await vi.advanceTimersByTimeAsync(120_000);
++    expect(recover).toHaveBeenCalledTimes(2);
++  });
++
++  it("ends the episode when the key arrives after the first action", async () => {
++    const { watchdog, recover } = newWatchdog();
++
++    watchdog.onEncryptionError("bob");
++    await vi.advanceTimersByTimeAsync(8_000);
++    watchdog.onKeyReceived("bob");
++    await vi.advanceTimersByTimeAsync(60_000);
++    expect(recover).toHaveBeenCalledTimes(1);
++  });
++
++  it("starts a new episode with a new error after the key arrived", async () => {
++    const { watchdog, recover } = newWatchdog();
++
++    watchdog.onEncryptionError("bob");
++    await vi.advanceTimersByTimeAsync(23_000);
++    expect(recover).toHaveBeenCalledTimes(2);
++    watchdog.onKeyReceived("bob");
++
++    watchdog.onEncryptionError("bob");
++    await vi.advanceTimersByTimeAsync(23_000);
++    expect(recover).toHaveBeenCalledTimes(4);
++  });
++
++  it("ends the episode when the participant leaves", async () => {
++    const { watchdog, recover } = newWatchdog();
++
++    watchdog.onEncryptionError("bob");
++    await vi.advanceTimersByTimeAsync(3_000);
++    watchdog.onParticipantGone("bob");
++    await vi.advanceTimersByTimeAsync(60_000);
++    expect(recover).not.toHaveBeenCalled();
++
++    // a participant that comes back with the same identity starts afresh
++    watchdog.onEncryptionError("bob");
++    await vi.advanceTimersByTimeAsync(8_000);
++    expect(recover).toHaveBeenCalledOnce();
++  });
++
++  it("tracks each participant on its own", async () => {
++    const { watchdog, recover } = newWatchdog();
++
++    watchdog.onEncryptionError("bob");
++    watchdog.onEncryptionError("carol");
++    watchdog.onKeyReceived("bob");
++    await vi.advanceTimersByTimeAsync(8_000);
++    expect(recover).toHaveBeenCalledExactlyOnceWith("carol");
++  });
++
++  it("allows at most 6 recovery actions per call", async () => {
++    const { watchdog, recover } = newWatchdog();
++
++    for (const identity of ["a", "b", "c", "d"]) {
++      watchdog.onEncryptionError(identity);
++      await vi.advanceTimersByTimeAsync(23_000);
++      watchdog.onKeyReceived(identity);
++    }
++    // a, b and c used the 6, d got none
++    expect(recover).toHaveBeenCalledTimes(6);
++    expect(recover).not.toHaveBeenCalledWith("d");
++  });
++
++  it("logs a failing recovery action and carries on", async () => {
++    const { watchdog, recover } = newWatchdog();
++    recover.mockRejectedValue(new Error("homeserver down"));
++
++    watchdog.onEncryptionError("bob");
++    await vi.advanceTimersByTimeAsync(23_000);
++    expect(recover).toHaveBeenCalledTimes(2);
++    expect(logger.warn).toHaveBeenCalledWith(
++      expect.stringContaining("homeserver down"),
++    );
++  });
++
++  it("drops running episodes on dispose", async () => {
++    const { watchdog, recover } = newWatchdog();
++
++    watchdog.onEncryptionError("bob");
++    watchdog.dispose();
++    await vi.advanceTimersByTimeAsync(60_000);
++    expect(recover).not.toHaveBeenCalled();
++  });
++});
++
++describe("refreshOwnMembership", () => {
++  it("sends the same content again with a new created_ts", async () => {
++    vi.setSystemTime(new Date("2026-10-24T12:00:00Z"));
++    const content = membershipContent({ created_ts: 1_000 });
++    const { client, sendStateEvent } = ownMembershipClient([
++      membershipEvent(content),
++    ]);
++
++    await expect(refreshOwnMembership(client, ROOM_ID)).resolves.toBe(true);
++
++    expect(sendStateEvent).toHaveBeenCalledExactlyOnceWith(
++      ROOM_ID,
++      EventType.GroupCallMemberPrefix,
++      { ...content, created_ts: Date.now() },
++      STATE_KEY,
++    );
++    expect(Date.now()).toBeGreaterThan(1_000);
++  });
++
++  it("adds a created_ts to a membership that has none", async () => {
++    const content = membershipContent();
++    const { client, sendStateEvent } = ownMembershipClient([
++      membershipEvent(content),
++    ]);
++
++    await refreshOwnMembership(client, ROOM_ID);
++
++    expect(sendStateEvent).toHaveBeenCalledExactlyOnceWith(
++      ROOM_ID,
++      EventType.GroupCallMemberPrefix,
++      { ...content, created_ts: Date.now() },
++      STATE_KEY,
++    );
++  });
++
++  it("does nothing when the membership is empty", async () => {
++    const { client, sendStateEvent } = ownMembershipClient([
++      membershipEvent({}),
++    ]);
++
++    await expect(refreshOwnMembership(client, ROOM_ID)).resolves.toBe(false);
++
++    expect(sendStateEvent).not.toHaveBeenCalled();
++    expect(logger.warn).toHaveBeenCalledOnce();
++  });
++
++  it("does nothing when we have no membership state event", async () => {
++    // sticky event mode: the room has no call member state event of ours
++    const { client, sendStateEvent } = ownMembershipClient([]);
++
++    await expect(refreshOwnMembership(client, ROOM_ID)).resolves.toBe(false);
++
++    expect(sendStateEvent).not.toHaveBeenCalled();
++    expect(logger.warn).toHaveBeenCalledOnce();
++  });
++
++  it("ignores the memberships of other users and other devices", async () => {
++    const { client, sendStateEvent } = ownMembershipClient([
++      membershipEvent(membershipContent(), {
++        sender: "@bob:example.org",
++        stateKey: `_@bob:example.org_${DEVICE_ID}_m.call`,
++      }),
++      membershipEvent(membershipContent({ device_id: "OTHERDEVICE" }), {
++        stateKey: `_${USER_ID}_OTHERDEVICE_m.call`,
++      }),
++      // the legacy format has no device_id at the top level
++      membershipEvent(
++        { memberships: [{ device_id: DEVICE_ID }] },
++        { stateKey: USER_ID },
++      ),
++    ]);
++
++    await expect(refreshOwnMembership(client, ROOM_ID)).resolves.toBe(false);
++    expect(sendStateEvent).not.toHaveBeenCalled();
++  });
++
++  it("rejects when the state event cannot be sent", async () => {
++    const { client, sendStateEvent } = ownMembershipClient([
++      membershipEvent(membershipContent()),
++    ]);
++    sendStateEvent.mockRejectedValue(new Error("forbidden"));
++
++    await expect(refreshOwnMembership(client, ROOM_ID)).rejects.toThrow(
++      "forbidden",
++    );
++  });
++});
++
++describe("installKeyRecovery", () => {
++  it("refreshes our membership when a participant's key does not arrive", async () => {
++    const { client, send, sendStateEvent } = installableClient();
++
++    installKeyRecovery(client, ROOM_ID);
++    await sendKey(client, [PEER]);
++    expect(send).toHaveBeenCalledOnce();
++
++    getKeyRecoveryWatchdog()?.onEncryptionError("bob");
++    await vi.advanceTimersByTimeAsync(8_000);
++    expect(sendStateEvent).toHaveBeenCalledOnce();
++  });
++
++  it("replaces the watchdog of an earlier install", async () => {
++    const { client, sendStateEvent } = installableClient();
++
++    installKeyRecovery(client, ROOM_ID);
++    const first = getKeyRecoveryWatchdog();
++    first?.onEncryptionError("bob");
++    installKeyRecovery(client, ROOM_ID);
++
++    expect(getKeyRecoveryWatchdog()).not.toBe(first);
++    await vi.advanceTimersByTimeAsync(60_000);
++    expect(sendStateEvent).not.toHaveBeenCalled();
++  });
++});
++
++function keySendClient(): {
++  client: KeySendClient;
++  send: Mock<KeySendClient["encryptAndSendToDevice"]>;
++} {
++  const send = vi
++    .fn<KeySendClient["encryptAndSendToDevice"]>()
++    .mockResolvedValue(undefined);
++  return {
++    client: { encryptAndSendToDevice: send, clientRunning: true },
++    send,
++  };
++}
++
++async function sendKey(
++  client: KeySendClient,
++  devices: { userId: string; deviceId: string }[],
++): Promise<void> {
++  await client.encryptAndSendToDevice(
++    EventType.CallEncryptionKeysPrefix,
++    devices,
++    PAYLOAD,
++  );
++}
++
++function peers(count: number): { userId: string; deviceId: string }[] {
++  return Array.from({ length: count }, (_, i) => ({
++    userId: `@peer${i}:example.org`,
++    deviceId: `PEER${i}`,
++  }));
++}
++
++function newWatchdog(): {
++  watchdog: KeyRecoveryWatchdog;
++  recover: Mock<(identity: string) => Promise<unknown>>;
++} {
++  const recover = vi
++    .fn<(identity: string) => Promise<unknown>>()
++    .mockResolvedValue(undefined);
++  return { watchdog: new KeyRecoveryWatchdog(recover), recover };
++}
++
++function membershipContent(extra: IContent = {}): IContent {
++  return {
++    application: "m.call",
++    call_id: "",
++    scope: "m.room",
++    device_id: DEVICE_ID,
++    membershipID: `${USER_ID}:${DEVICE_ID}`,
++    expires: 14_400_000,
++    focus_active: { type: "livekit", focus_selection: "oldest_membership" },
++    foci_preferred: [
++      { type: "livekit", livekit_service_url: "https://sfu.example.org" },
++    ],
++    ...extra,
++  };
++}
++
++function membershipEvent(
++  content: IContent,
++  {
++    sender = USER_ID,
++    stateKey = STATE_KEY,
++  }: { sender?: string; stateKey?: string } = {},
++): MatrixEvent {
++  return new MatrixEvent({
++    type: EventType.GroupCallMemberPrefix,
++    room_id: ROOM_ID,
++    sender,
++    state_key: stateKey,
++    content,
++  });
++}
++
++function ownMembershipClient(events: MatrixEvent[]): {
++  client: OwnMembershipClient;
++  sendStateEvent: Mock<OwnMembershipClient["sendStateEvent"]>;
++} {
++  const state = new RoomState(ROOM_ID);
++  state.setStateEvents(events);
++  const sendStateEvent = vi
++    .fn<OwnMembershipClient["sendStateEvent"]>()
++    .mockResolvedValue({ event_id: "$new" });
++  const client: OwnMembershipClient = {
++    getRoom: (roomId) =>
++      roomId === ROOM_ID ? ({ currentState: state } as Room) : null,
++    getUserId: () => USER_ID,
++    getDeviceId: () => DEVICE_ID,
++    sendStateEvent,
++  };
++  return { client, sendStateEvent };
++}
++
++function installableClient(): {
++  client: KeySendClient & OwnMembershipClient;
++  send: Mock<KeySendClient["encryptAndSendToDevice"]>;
++  sendStateEvent: Mock<OwnMembershipClient["sendStateEvent"]>;
++} {
++  const { client: sendClient, send } = keySendClient();
++  const { client: stateClient, sendStateEvent } = ownMembershipClient([
++    membershipEvent(membershipContent()),
++  ]);
++  return {
++    client: Object.assign(sendClient, stateClient),
++    send,
++    sendStateEvent,
++  };
++}
+diff --git a/src/e2ee/keyRecovery.ts b/src/e2ee/keyRecovery.ts
+new file mode 100644
+index 0000000..ea93273
+--- /dev/null
++++ b/src/e2ee/keyRecovery.ts
+@@ -0,0 +1,302 @@
++/*
++Copyright 2026 Element Creations Ltd.
++
++SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE in the repository root for full details.
++*/
++
++/**
++ * Recovery from a lost call media key.
++ *
++ * A member's media key is sent once to each new joiner (MatrixRTC, per user,
++ * device and created_ts). If that single to-device message does not get through,
++ * nothing sends it again in a 1:1 call: the media stays undecryptable until
++ * someone rejoins. This module closes that gap in two layers:
++ *
++ * 1. {@link wrapKeySend} retries a failed key send and repeats a successful one.
++ * 2. {@link KeyRecoveryWatchdog} notices a participant whose media cannot be
++ *    decrypted and whose key does not show up, and makes the peers send their
++ *    keys again by refreshing our own membership with a new `created_ts`
++ *    ({@link refreshOwnMembership}); a peer treats that as a new joiner.
++ */
++
++import { EventType, type MatrixClient } from "matrix-js-sdk";
++import { logger } from "matrix-js-sdk/lib/logger";
++import { type SessionMembershipData } from "matrix-js-sdk/lib/matrixrtc";
++
++/** Waits after a failed key send before the 2nd and the 3rd attempt. */
++const SEND_RETRY_DELAYS_MS = [2_000, 10_000];
++/** Delays, counted from the successful send, at which the same key is sent again. */
++const RESEND_DELAYS_MS = [5_000, 15_000];
++/** A larger call keeps the plain single send, the extra copies would add up. */
++const MAX_RESEND_TARGETS = 8;
++
++/** How long a key may take to arrive after the first decryption error. */
++const KEY_WAIT_MS = 8_000;
++/** Time between the two recovery actions of one episode. */
++const ACTION_SPACING_MS = 15_000;
++const MAX_ACTIONS_PER_EPISODE = 2;
++const MAX_ACTIONS_PER_CALL = 6;
++
++type SendToDevice = MatrixClient["encryptAndSendToDevice"];
++type SendToDeviceArgs = Parameters<SendToDevice>;
++export type KeySendClient = Pick<
++  MatrixClient,
++  "encryptAndSendToDevice" | "clientRunning"
++>;
++export type OwnMembershipClient = Pick<
++  MatrixClient,
++  "getRoom" | "getUserId" | "getDeviceId" | "sendStateEvent"
++>;
++
++const wrappedClients = new WeakSet<object>();
++
++/**
++ * Makes the sending of call media keys more robust. Only the key event type is
++ * touched, every other to-device message passes through as before.
++ *
++ * - A rejected send is retried after 2 s and again after 10 s, then rejects
++ *   with the last error. (Without this a failed send is swallowed by the key
++ *   transport and counted as delivered.)
++ * - A successful send is repeated after 5 s and after 15 s, so that a first
++ *   copy the receiver could not decrypt (for example an Olm session that was
++ *   repaired meanwhile) is covered. Equal keys are harmless for receivers.
++ *   Only for up to 8 target devices.
++ *
++ * Wrap a client once, right after creating it. A second call is a no-op.
++ */
++export function wrapKeySend(client: KeySendClient): void {
++  if (wrappedClients.has(client)) return;
++  wrappedClients.add(client);
++
++  const send = client.encryptAndSendToDevice;
++  client.encryptAndSendToDevice = async (...args: SendToDeviceArgs) => {
++    const [eventType, devices] = args;
++    if (eventType !== EventType.CallEncryptionKeysPrefix) {
++      return send.apply(client, args);
++    }
++    await sendWithRetries(client, send, args);
++    if (devices.length <= MAX_RESEND_TARGETS) {
++      for (const delay of RESEND_DELAYS_MS) {
++        setTimeout(() => void resend(client, send, args, delay), delay);
++      }
++    }
++  };
++}
++
++async function sendWithRetries(
++  client: KeySendClient,
++  send: SendToDevice,
++  args: SendToDeviceArgs,
++): Promise<void> {
++  for (let attempt = 0; ; attempt++) {
++    try {
++      return await send.apply(client, args);
++    } catch (e) {
++      const delay = SEND_RETRY_DELAYS_MS[attempt];
++      // A host without to-device support is reported by the key transport as a
++      // permanent condition, retrying would only delay that.
++      if (delay === undefined || isUnsupportedByHost(e)) throw e;
++      logger.info(
++        `[KeyRecovery] call key send to ${args[1].length} device(s) failed, retrying in ${delay} ms: ${errorMessage(e)}`,
++      );
++      await new Promise((resolve) => setTimeout(resolve, delay));
++    }
++  }
++}
++
++async function resend(
++  client: KeySendClient,
++  send: SendToDevice,
++  args: SendToDeviceArgs,
++  delay: number,
++): Promise<void> {
++  // The call may be over by now.
++  if (client.clientRunning === false) return;
++  logger.info(
++    `[KeyRecovery] sending the call key again to ${args[1].length} device(s), ${delay} ms after the first send`,
++  );
++  try {
++    await send.apply(client, args);
++  } catch (e) {
++    logger.warn(
++      `[KeyRecovery] repeated call key send to ${args[1].length} device(s) failed: ${errorMessage(e)}`,
++    );
++  }
++}
++
++/** The same test as ToDeviceKeyTransport uses for NotSupportedError. */
++function isUnsupportedByHost(e: unknown): boolean {
++  const message = errorMessage(e);
++  return (
++    (message.includes("unknown variant") &&
++      message.includes("send_to_device")) ||
++    message.includes("not supported")
++  );
++}
++
++function errorMessage(e: unknown): string {
++  return e instanceof Error ? e.message : String(e);
++}
++
++/**
++ * Watches for remote participants whose media cannot be decrypted because
++ * their key never arrived, and runs a recovery action for them.
++ *
++ * An episode starts with the FIRST decryption error of a participant. If no key
++ * for that participant arrives within 8 s, the recovery action runs, and once
++ * more after 15 s if there is still no key. An episode ends when a key for the
++ * participant arrives or the participant leaves. At most 2 actions per episode
++ * and 6 per call (the lifetime of the instance).
++ *
++ * The watchdog is driven by timers, not by a stream of errors: livekit
++ * throttles its encryption errors and stops emitting them once a key index
++ * is marked invalid.
++ */
++export class KeyRecoveryWatchdog {
++  private readonly episodes = new Map<string, Episode>();
++  private actionsInCall = 0;
++
++  /**
++   * @param recover - The recovery action. Called with the LiveKit identity of
++   *   the participant that cannot be decrypted.
++   */
++  public constructor(
++    private readonly recover: (identity: string) => Promise<unknown>,
++  ) {}
++
++  /** A decryption error for a remote participant, given by LiveKit identity. */
++  public onEncryptionError(identity: string): void {
++    // Later errors of a running episode change nothing, the timers drive it.
++    if (this.episodes.has(identity)) return;
++    const episode: Episode = { actions: 0, timer: undefined };
++    this.episodes.set(identity, episode);
++    this.scheduleAction(identity, episode, KEY_WAIT_MS);
++  }
++
++  /** A key for the participant was installed. */
++  public onKeyReceived(identity: string): void {
++    this.endEpisode(identity);
++  }
++
++  public onParticipantGone(identity: string): void {
++    this.endEpisode(identity);
++  }
++
++  /** Drops all running episodes. */
++  public dispose(): void {
++    for (const episode of this.episodes.values()) clearTimeout(episode.timer);
++    this.episodes.clear();
++  }
++
++  private endEpisode(identity: string): void {
++    clearTimeout(this.episodes.get(identity)?.timer);
++    this.episodes.delete(identity);
++  }
++
++  private scheduleAction(
++    identity: string,
++    episode: Episode,
++    delay: number,
++  ): void {
++    episode.timer = setTimeout(() => {
++      this.runAction(identity, episode);
++    }, delay);
++  }
++
++  private runAction(identity: string, episode: Episode): void {
++    if (this.actionsInCall >= MAX_ACTIONS_PER_CALL) {
++      logger.warn(
++        `[KeyRecovery] still no key from ${identity}, giving up (${MAX_ACTIONS_PER_CALL} recovery actions used in this call)`,
++      );
++      return;
++    }
++    episode.actions++;
++    this.actionsInCall++;
++    logger.info(
++      `[KeyRecovery] no key from ${identity} after a decryption error, recovery action ${episode.actions} of ${MAX_ACTIONS_PER_EPISODE} (${this.actionsInCall} of ${MAX_ACTIONS_PER_CALL} in this call)`,
++    );
++    this.recover(identity).catch((e: unknown) => {
++      logger.warn(`[KeyRecovery] recovery action failed: ${errorMessage(e)}`);
++    });
++    if (episode.actions < MAX_ACTIONS_PER_EPISODE) {
++      this.scheduleAction(identity, episode, ACTION_SPACING_MS);
++    }
++  }
++}
++
++interface Episode {
++  actions: number;
++  timer: ReturnType<typeof setTimeout> | undefined;
++}
++
++/**
++ * Sends our own call membership state event again with a fresh `created_ts`.
++ * The peers see a member they do not know (user, device and created_ts are new)
++ * and send us their media key again. Our delayed leave event stays in place.
++ *
++ * Does nothing, with a warning, when there is no such state event: a membership
++ * that is not a state event (sticky event mode), or an empty one (we left).
++ *
++ * @returns Whether the event was sent.
++ */
++export async function refreshOwnMembership(
++  client: OwnMembershipClient,
++  roomId: string,
++): Promise<boolean> {
++  const userId = client.getUserId();
++  const deviceId = client.getDeviceId();
++  const membership = client
++    .getRoom(roomId)
++    ?.currentState.getStateEvents(EventType.GroupCallMemberPrefix)
++    .find(
++      // An empty content (we left) and the legacy format have no device_id.
++      (event) =>
++        event.getSender() === userId &&
++        event.getContent<SessionMembershipData>().device_id === deviceId,
++    );
++  const stateKey = membership?.getStateKey();
++  if (membership === undefined || stateKey === undefined) {
++    logger.warn(
++      "[KeyRecovery] no call membership state event of our own, cannot refresh it",
++    );
++    return false;
++  }
++
++  await client.sendStateEvent(
++    roomId,
++    EventType.GroupCallMemberPrefix,
++    {
++      ...membership.getContent<SessionMembershipData>(),
++      created_ts: Date.now(),
++    },
++    stateKey,
++  );
++  logger.info(
++    "[KeyRecovery] sent our call membership again with a new created_ts",
++  );
++  return true;
++}
++
++let activeWatchdog: KeyRecoveryWatchdog | undefined;
++
++/**
++ * Switches key recovery on for the (widget) client of a call: wraps its key
++ * sending and starts the watchdog whose recovery action refreshes the
++ * membership of this client in the room.
++ */
++export function installKeyRecovery(
++  client: KeySendClient & OwnMembershipClient,
++  roomId: string,
++): void {
++  wrapKeySend(client);
++  activeWatchdog?.dispose();
++  activeWatchdog = new KeyRecoveryWatchdog(async () =>
++    refreshOwnMembership(client, roomId),
++  );
++}
++
++/** The watchdog of the installed key recovery, if any (not in a plain page). */
++export function getKeyRecoveryWatchdog(): KeyRecoveryWatchdog | undefined {
++  return activeWatchdog;
++}
+diff --git a/src/e2ee/matrixKeyProvider.test.ts b/src/e2ee/matrixKeyProvider.test.ts
+index f46218e..1863217 100644
+--- a/src/e2ee/matrixKeyProvider.test.ts
++++ b/src/e2ee/matrixKeyProvider.test.ts
+@@ -13,6 +13,7 @@ import {
+ import { KeyProviderEvent } from "livekit-client";
+ 
+ import { MatrixKeyProvider } from "./matrixKeyProvider";
++import { getKeyRecoveryWatchdog, installKeyRecovery } from "./keyRecovery";
+ 
+ function mockRTCSession(): MatrixRTCSession {
+   return {
+@@ -69,4 +70,40 @@ describe("matrixKeyProvider", () => {
+ 
+     expect(session.reemitEncryptionKeys).toHaveBeenCalled();
+   });
++
++  test("tells the key recovery watchdog about an installed key", async () => {
++    installKeyRecovery(
++      {
++        encryptAndSendToDevice: vi.fn(),
++        clientRunning: true,
++        getRoom: vi.fn(),
++        getUserId: vi.fn(),
++        getDeviceId: vi.fn(),
++        sendStateEvent: vi.fn(),
++      },
++      "!room:example.org",
++    );
++    const onKeyReceived = vi
++      .spyOn(getKeyRecoveryWatchdog()!, "onKeyReceived")
++      .mockImplementation(() => {});
++    const keyProvider = new MatrixKeyProvider();
++    const session = mockRTCSession();
++    Object.assign(session, { room: { roomId: "!room:example.org" } });
++    keyProvider.setRTCSession(session);
++    const onKeyChanged = vi.mocked(session.on).mock.calls[0][1] as (
++      ...args: unknown[]
++    ) => void;
++
++    onKeyChanged(
++      new Uint8Array(16),
++      0,
++      { userId: "@bob:example.org", deviceId: "DEV111" },
++      "bob-identity",
++    );
++
++    await vi.waitFor(() =>
++      expect(onKeyReceived).toHaveBeenCalledExactlyOnceWith("bob-identity"),
++    );
++    getKeyRecoveryWatchdog()?.dispose();
++  });
+ });
+diff --git a/src/e2ee/matrixKeyProvider.ts b/src/e2ee/matrixKeyProvider.ts
+index f1a66a2..daaa8f0 100644
+--- a/src/e2ee/matrixKeyProvider.ts
++++ b/src/e2ee/matrixKeyProvider.ts
+@@ -13,6 +13,8 @@ import {
+ import { logger as rootLogger, type Logger } from "matrix-js-sdk/lib/logger";
+ import { type CallMembershipIdentityParts } from "matrix-js-sdk/lib/matrixrtc/EncryptionManager";
+ 
++import { getKeyRecoveryWatchdog } from "./keyRecovery";
++
+ export class MatrixKeyProvider extends BaseKeyProvider {
+   private rtcSession?: MatrixRTCSession;
+   private logger: Logger;
+@@ -59,6 +61,7 @@ export class MatrixKeyProvider extends BaseKeyProvider {
+             rtcBackendIdentity,
+             encryptionKeyIndex,
+           );
++          getKeyRecoveryWatchdog()?.onKeyReceived(rtcBackendIdentity);
+ 
+           this.logger.debug(
+             `Sent new key to livekit room=${this.rtcSession?.room.roomId} participantId=${rtcBackendIdentity} (before hash: ${membershipParts.userId}:${membershipParts.deviceId}) encryptionKeyIndex=${encryptionKeyIndex}`,
+diff --git a/src/state/CallViewModel/remoteMembers/Connection.test.ts b/src/state/CallViewModel/remoteMembers/Connection.test.ts
+index f226b77..718b412 100644
+--- a/src/state/CallViewModel/remoteMembers/Connection.test.ts
++++ b/src/state/CallViewModel/remoteMembers/Connection.test.ts
+@@ -45,6 +45,10 @@ import {
+ } from "../../../utils/errors.ts";
+ import { testJWTToken } from "../../../utils/test-fixtures.ts";
+ import { mockRemoteParticipant, ownMemberMock } from "../../../utils/test.ts";
++import {
++  getKeyRecoveryWatchdog,
++  installKeyRecovery,
++} from "../../../e2ee/keyRecovery.ts";
+ 
+ let testScope: ObservableScope;
+ 
+@@ -631,6 +635,84 @@ describe("remote track logging", () => {
+   });
+ });
+ 
++describe("key recovery", () => {
++  function watchdogSpies(): {
++    onEncryptionError: ReturnType<typeof vi.fn>;
++    onParticipantGone: ReturnType<typeof vi.fn>;
++  } {
++    setupTest();
++    installKeyRecovery(
++      {
++        encryptAndSendToDevice: vi.fn(),
++        clientRunning: true,
++        getRoom: vi.fn(),
++        getUserId: vi.fn(),
++        getDeviceId: vi.fn(),
++        sendStateEvent: vi.fn(),
++      },
++      ROOM_ID,
++    );
++    const watchdog = getKeyRecoveryWatchdog()!;
++    new Connection(
++      {
++        client,
++        roomId: ROOM_ID,
++        transport: livekitFocus,
++        scope: testScope,
++        ownMembershipIdentity: ownMemberMock,
++        livekitRoomFactory: () => fakeLivekitRoom,
++      },
++      logger,
++    );
++    return {
++      onEncryptionError: vi
++        .spyOn(watchdog, "onEncryptionError")
++        .mockImplementation(() => {}),
++      onParticipantGone: vi
++        .spyOn(watchdog, "onParticipantGone")
++        .mockImplementation(() => {}),
++    };
++  }
++
++  afterEach(() => {
++    getKeyRecoveryWatchdog()?.dispose();
++  });
++
++  it("reports a decryption error of a remote participant", () => {
++    const { onEncryptionError } = watchdogSpies();
++    const bob = mockRemoteParticipant({ identity: "@bob:example.org:DEV111" });
++
++    fakeLivekitRoom.emit(RoomEvent.EncryptionError, new Error("no key"), bob);
++
++    expect(onEncryptionError).toHaveBeenCalledExactlyOnceWith(
++      "@bob:example.org:DEV111",
++    );
++  });
++
++  it("ignores encryption errors of our own participant or of nobody", () => {
++    const { onEncryptionError } = watchdogSpies();
++
++    fakeLivekitRoom.emit(RoomEvent.EncryptionError, new Error("no key"), {
++      ...fakeLocalParticipant,
++      isLocal: true,
++    } as unknown as LocalParticipant);
++    fakeLivekitRoom.emit(RoomEvent.EncryptionError, new Error("no key"));
++
++    expect(onEncryptionError).not.toHaveBeenCalled();
++  });
++
++  it("reports a remote participant that left", () => {
++    const { onParticipantGone } = watchdogSpies();
++    const bob = mockRemoteParticipant({ identity: "@bob:example.org:DEV111" });
++
++    fakeLivekitRoom.emit(RoomEvent.ParticipantDisconnected, bob);
++
++    expect(onParticipantGone).toHaveBeenCalledExactlyOnceWith(
++      "@bob:example.org:DEV111",
++    );
++  });
++});
++
+ //
+ // NOT USED ANYMORE ?
+ //
+diff --git a/src/state/CallViewModel/remoteMembers/Connection.ts b/src/state/CallViewModel/remoteMembers/Connection.ts
+index 7889f90..a41020a 100644
+--- a/src/state/CallViewModel/remoteMembers/Connection.ts
++++ b/src/state/CallViewModel/remoteMembers/Connection.ts
+@@ -27,6 +27,7 @@ import { BehaviorSubject, map } from "rxjs";
+ import { type Logger } from "matrix-js-sdk/lib/logger";
+ import { type CallMembershipIdentityParts } from "matrix-js-sdk/lib/matrixrtc/EncryptionManager";
+ 
++import { getKeyRecoveryWatchdog } from "../../../e2ee/keyRecovery.ts";
+ import {
+   getSFUConfigWithOpenID,
+   type OpenIDClientParts,
+@@ -194,8 +195,10 @@ export class Connection {
+ 
+     const onParticipantConnected = (p: RemoteParticipant): void =>
+       log.info(`Participant connected: ${p.identity} (${p.sid})`);
+-    const onParticipantDisconnected = (p: RemoteParticipant): void =>
++    const onParticipantDisconnected = (p: RemoteParticipant): void => {
+       log.info(`Participant disconnected: ${p.identity} (${p.sid})`);
++      getKeyRecoveryWatchdog()?.onParticipantGone(p.identity);
++    };
+     const onTrackPublished = (
+       pub: RemoteTrackPublication,
+       p: RemoteParticipant,
+@@ -244,11 +247,14 @@ export class Connection {
+       );
+     // livekit-client throttles these per cryptor; they indicate frames being
+     // dropped (missing/invalid key).
+-    const onEncryptionError = (error: Error, p?: Participant): void =>
++    const onEncryptionError = (error: Error, p?: Participant): void => {
+       log.warn(
+         `Encryption error for ${p?.identity ?? "unknown participant"}:`,
+         error,
+       );
++      if (p !== undefined && !p.isLocal)
++        getKeyRecoveryWatchdog()?.onEncryptionError(p.identity);
++    };
+ 
+     room
+       .on(RoomEvent.ParticipantConnected, onParticipantConnected)
+diff --git a/src/widget.test.ts b/src/widget.test.ts
+index c645c3b..41da6f0 100644
+--- a/src/widget.test.ts
++++ b/src/widget.test.ts
+@@ -12,6 +12,7 @@ import { getUrlParams } from "./UrlParams";
+ import { initializeWidget } from "./widget";
+ import { Config } from "./config/Config";
+ import { ElementCallReactionEventType } from "./reactions";
++import { getKeyRecoveryWatchdog } from "./e2ee/keyRecovery";
+ 
+ vi.mock("matrix-js-sdk", { spy: true });
+ const createRoomWidgetClientSpy = vi.mocked(createRoomWidgetClient);
+@@ -133,6 +134,11 @@ describe("widget", () => {
+     expect(createRoomWidgetClientSpy.mock.calls[0][4]).toStrictEqual(false);
+   });
+ 
++  it("should switch on media key recovery for the embedded client", () => {
++    initializeWidget("ANYRTCAPP");
++    expect(getKeyRecoveryWatchdog()).toBeDefined();
++  });
++
+   it("should request send message permission if requested", () => {
+     initializeWidget("ANYRTCAPP", true);
+     expect(createRoomWidgetClientSpy).toHaveBeenLastCalledWith(
+diff --git a/src/widget.ts b/src/widget.ts
+index b35e335..fabacc7 100644
+--- a/src/widget.ts
++++ b/src/widget.ts
+@@ -19,6 +19,7 @@ import {
+ 
+ import type { IWidgetApiRequest } from "matrix-widget-api";
+ import { LazyEventEmitter } from "./LazyEventEmitter";
++import { installKeyRecovery } from "./e2ee/keyRecovery";
+ import { getUrlParams } from "./UrlParams";
+ import { Config } from "./config/Config";
+ import { seedSettingsFromConfig } from "./settings/settings";
+@@ -192,6 +193,7 @@ export const initializeWidget = (
+         // ContentLoaded event will be sent as soon as the theme is set (see useTheme.ts)
+         false,
+       );
++      installKeyRecovery(client, roomId);
+ 
+       const clientPromise = async (): Promise<MatrixClient> => {
+         // Wait for the config file to be ready (we load very early on so it might not
+-- 
+2.53.0
+

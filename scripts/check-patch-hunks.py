@@ -29,11 +29,29 @@ HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 BOUNDARY = ("@@", "diff --git", "--- ", "+++ ", "index ", "new file", "deleted file")
 
 
+# `git format-patch` ends a patch with a mail signature, "-- " and the git version
+# on the next line. `git apply` ignores it; counted as a hunk body it is a deleted
+# line, so the last hunk of such a file would look one line too long. A real hunk
+# line always starts with " ", "+" or "-", so a bare version number on the last
+# line cannot be part of one.
+MAIL_SIGNATURE_VERSION = re.compile(r"^\d+(\.\d+)+\S*$")
+
+
+def strip_mail_signature(lines: list[str]) -> list[str]:
+    end = len(lines)
+    while end > 0 and lines[end - 1] == "":
+        end -= 1
+    if end >= 2 and lines[end - 2] == "-- " and MAIL_SIGNATURE_VERSION.match(lines[end - 1]):
+        return lines[: end - 2]
+    return lines
+
+
 def check(path: Path) -> list[str]:
     """Return a list of human-readable problems for one patch file."""
     lines = path.read_text().split("\n")
     if lines and lines[-1] == "":
         lines.pop()  # trailing newline is not a context line
+    lines = strip_mail_signature(lines)
 
     problems: list[str] = []
     i = 0
