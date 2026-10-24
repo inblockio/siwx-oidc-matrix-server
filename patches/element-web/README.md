@@ -2091,24 +2091,41 @@ by the Element Call build of the aqua-meet repository (row `0190` of its Element
 registry).
 
 - **What:** A call recovers when a media E2EE key is lost. Inside Element Call only; nothing in
-  matrix-js-sdk or LiveKit changes.
+  matrix-js-sdk or LiveKit changes. Nothing in `src/e2ee/matrixKeyProvider.ts` changes either.
   1. New `src/e2ee/keyRecovery.ts`, `wrapKeySend`: wraps the widget client's
-     `encryptAndSendToDevice` once per client. Only the call-key event type is touched. A rejected
-     send is retried after 2 s and again after 10 s, then rejects with the last error; a successful
-     send is sent again after 5 s and after 15 s (for up to 8 target devices; a larger call keeps
-     the plain single send). Every other to-device event type passes through unchanged.
-  2. The same module, `KeyRecoveryWatchdog`: starts on the first decryption error of a remote
-     participant. If no key for that participant arrives within 8 s, `refreshOwnMembership`
+     `encryptAndSendToDevice` once per client. Only the call-key event type is touched. The first
+     attempt is the stock call and its outcome reaches the caller at once (js-sdk holds its key
+     distribution and rotation on that promise). In the background a rejected send is retried
+     after 2 s and again after 10 s, and a successful one is sent again after 5 s and after 15 s
+     (for up to 8 target devices; a larger call keeps the plain single send). Only the latest key
+     of the current join is retried or repeated: a newer key drops the pending copies of an older
+     one. Every other to-device event type passes through unchanged.
+  2. The same module, `SessionGate`: follows whether our own MatrixRTC session is joined (its
+     `JoinStateChanged` event; never `client.clientRunning`, which the embedded client leaves
+     false). Every join and leave starts a new generation and drops all pending sends, timers and
+     episodes of the one before, so nothing of an earlier join runs after a hang up or overwrites
+     the key of an in-page rejoin.
+  3. The same module, `KeyRecoveryWatchdog`: starts on the first decryption error of a remote
+     participant. If no new key for that participant arrives within 8 s, `refreshOwnMembership`
      re-sends our own call membership state event with a fresh `created_ts`, which every peer
      treats as a new joiner and answers by sending its key again. At most 2 actions per episode,
-     15 s apart, and 6 per call. An episode ends when a key arrives or the participant leaves.
-  3. Wiring: `installKeyRecovery(client, roomId)` in `widget.ts` (once per client), the encryption
-     error and participant-gone events in `remoteMembers/Connection.ts`, and the key-installed
-     event in `e2ee/matrixKeyProvider.ts`.
-  4. Tests the patch adds or changes: `keyRecovery.test.ts` (31 tests) and added cases in
-     `matrixKeyProvider.test.ts`, `remoteMembers/Connection.test.ts` and `widget.test.ts`; the four
-     files together are 53 tests, all passing on the patched tree (v0.26.1, 12 and 13).
-  The patch adds two files with the header "Copyright 2026 Element Creations Ltd." and
+     15 s apart, and 6 per call. A new key is one with a higher index than any installed for that
+     participant. An episode ends on such a key, when the participant leaves or the LiveKit
+     connection it was seen on closes, and 60 s after its last action. The refresh runs only while
+     the session is joined (checked again right before the event is sent), in a call of at most 8
+     members (each refresh makes every peer rotate its key), and when our own membership state
+     event (looked up by its state key, as `MembershipManager` writes it) has content. A round in
+     which it cannot run, such as sticky event mode, is logged and not counted.
+  4. Wiring: `installKeyRecovery(client, roomId)` in `widget.ts` (once per client),
+     `bindKeyRecoverySession` in `room/useLoadGroupCall.ts` (the call's session: join state and
+     received keys), and the encryption error, participant-gone and connection-closed events in
+     `remoteMembers/Connection.ts`.
+  5. Tests the patch adds or changes: `keyRecovery.test.ts` (67 tests) and `keyRecoveryWiring.test.ts`
+     (6; the real `RoomWidgetClient` with a mocked widget API and the real `MatrixRTCSession`),
+     `room/useLoadGroupCall.test.tsx` (2) and added cases in `remoteMembers/Connection.test.ts` and
+     `widget.test.ts`; the five files together are 94 tests, all passing on the patched tree
+     (v0.26.1, 12 and 13).
+  The patch adds four files with the header "Copyright 2026 Aqua Meet contributors" and
   "SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial".
 - **How it reaches the image:** exactly like entry 12 (read "How it reaches the image" there). The
   `element-call` stage copies the patch and applies it with `git apply --verbose` right after 0180,
@@ -2317,19 +2334,21 @@ What the table does not say, and the choices behind it:
   `vectorim/element-web` image of this tag was not pulled for this entry; its Element Call
   directory is that same npm package.
 - **Entry 13 (2026-10-24), proved on other artefacts than the table above.** Its marker is
-  `[KeyRecovery]`, the log prefix of `src/e2ee/keyRecovery.ts` (a string literal in eight log
+  `[KeyRecovery]`, the log prefix of `src/e2ee/keyRecovery.ts` (a string literal in eleven log
   messages, so it survives minification; the class and function names do not), in
   `widgets/element-call/assets/index-*.js`, the same entry chunk as entry 12's marker, because
   `widget.ts` imports the module. **Candidate:** a local `pnpm run build:embedded:production` of
   Element Call v0.26.1 with entries 12 and 13 applied (`git apply`, the order of the `element-call`
-  stage), not the Docker image and not a deployed artefact: the marker occurs 8 times in the entry
-  chunk `index-BoeV8296.js` that its `index.html` names (and in the chunk's source map). **Stock:**
-  the `dist/` of `@element-hq/element-call-embedded@0.26.0` from `npm pack`: 0 occurrences in all
-  157 files; 0 occurrences in the v0.26.1 source tree, nor in the installed `matrix-js-sdk` and
-  `livekit-client`. `scripts/element-patch-markers.sh --markers <rows 12 and 13> <url>`, served from
-  loopback (the two `dist/` directories under a stub `index.html`): passes 12 and 13 on the
-  candidate, fails both on stock, passes both on stock with `--absent 12,13`, and fails 13 on the
-  candidate with `--absent 13`. The image build's own marker loop (`podman build --target builder`)
+  stage; the reviewed 0190 of 2026-10-24, commit `5ffe31ad7d21`), not the Docker image and not a
+  deployed artefact: the marker occurs 11 times in the entry chunk `index-UZyUr06z.js` that its
+  `index.html` names (and in the chunk's source map). **Stock:** the `dist/` of
+  `@element-hq/element-call-embedded@0.26.0` from `npm pack`: 0 occurrences in all 157 files; 0
+  occurrences in the v0.26.1 source tree, nor in the installed `matrix-js-sdk` and `livekit-client`.
+  `scripts/element-patch-markers.sh --markers <rows 12 and 13> <url>`, served from loopback (the
+  two `dist/` directories under a stub `index.html`): passes 12 and 13 on the candidate, fails
+  both on stock, passes both on stock with `--absent 12,13`, and fails 13 on the candidate with
+  `--absent 13`. (The stock measurement was made on the first version of 0190 and not repeated:
+  the stock `dist/` is the same package; the candidate side was repeated on the reviewed version.) The image build's own marker loop (`podman build --target builder`)
   was not run for this entry: the image is built by CI.
 - **To re-prove after a tag bump or a new entry:** extract `/app` of the new build and of the stock
   image for the new tag, serve each from a loopback static server, and run
