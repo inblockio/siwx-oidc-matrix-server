@@ -1,4 +1,4 @@
-From 5ffe31ad7d2183dedf9d9c00f585a1ac8b04e7ea Mon Sep 17 00:00:00 2001
+From bcdadcda3d7dbc274de8286b64cd8ca4813d4785 Mon Sep 17 00:00:00 2001
 From: Tim Bansemer <tim.bansemer@inblock.io>
 Date: Sat, 24 Oct 2026 18:11:31 +0200
 Subject: [PATCH] Recover automatically when a call's media key is lost
@@ -22,16 +22,21 @@ Add src/e2ee/keyRecovery.ts, inside Element Call only:
   client leaves false). Every join and leave starts a new generation and
   drops all pending sends, timers and episodes of the one before, so
   nothing of an earlier join runs after a hang up or overwrites the key of
-  an in-page rejoin.
+  an in-page rejoin. A join reported while already joined (the
+  MembershipManager failed for good, no leave, then Reconnect) is a new
+  join too, and pending work also stops as soon as the session itself no
+  longer says it is joined.
 - KeyRecoveryWatchdog starts on the first decryption error of a remote
   participant. If no new key for that participant arrives within 8 s, it
   refreshes our own call membership state event with a fresh created_ts,
   so every peer sees a new joiner and sends its key again. At most 2
-  actions per episode, 15 s apart, and 6 per call. A new key is one with a
-  higher index than any installed for that participant, so a late copy of
-  an older key does not end the episode. An episode ends on such a key,
-  when the participant leaves or the LiveKit connection it was seen on
-  closes, and 60 s after its last action.
+  actions per episode, 15 s apart, and 6 per call. A new key is one whose
+  index and key bytes were not installed for that participant before (the
+  last 256 are kept), so a late copy of an installed key does not end the
+  episode and an index that wrapped or restarted at 0 does not block it.
+  An episode ends on such a key, when the participant leaves or the
+  LiveKit connection it was seen on closes, and 60 s after its last
+  action.
 - The refresh only runs while the session is joined (checked again right
   before the event is sent), in a call of at most 8 members (each refresh
   makes every peer rotate its key), and when our own membership state event
@@ -46,16 +51,16 @@ RoomWidgetClient with a mocked widget API and the real MatrixRTCSession.
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 ---
- src/e2ee/keyRecovery.test.ts                  | 1309 +++++++++++++++++
- src/e2ee/keyRecovery.ts                       |  671 +++++++++
- src/e2ee/keyRecoveryWiring.test.ts            |  370 +++++
- src/room/useLoadGroupCall.test.tsx            |   87 ++
+ src/e2ee/keyRecovery.test.ts                  | 1569 +++++++++++++++++
+ src/e2ee/keyRecovery.ts                       |  729 ++++++++
+ src/e2ee/keyRecoveryWiring.test.ts            |  428 +++++
+ src/room/useLoadGroupCall.test.tsx            |   87 +
  src/room/useLoadGroupCall.ts                  |    4 +
  .../remoteMembers/Connection.test.ts          |  107 ++
  .../CallViewModel/remoteMembers/Connection.ts |   21 +-
  src/widget.test.ts                            |   33 +-
  src/widget.ts                                 |    2 +
- 9 files changed, 2598 insertions(+), 6 deletions(-)
+ 9 files changed, 2974 insertions(+), 6 deletions(-)
  create mode 100644 src/e2ee/keyRecovery.test.ts
  create mode 100644 src/e2ee/keyRecovery.ts
  create mode 100644 src/e2ee/keyRecoveryWiring.test.ts
@@ -63,10 +68,10 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 
 diff --git a/src/e2ee/keyRecovery.test.ts b/src/e2ee/keyRecovery.test.ts
 new file mode 100644
-index 0000000..2bd38da
+index 0000000..899e994
 --- /dev/null
 +++ b/src/e2ee/keyRecovery.test.ts
-@@ -0,0 +1,1309 @@
+@@ -0,0 +1,1569 @@
 +/*
 +Copyright 2026 Aqua Meet contributors
 +
@@ -121,6 +126,8 @@ index 0000000..2bd38da
 +const PEER = { userId: "@bob:example.org", deviceId: "BOBDEVICE" };
 +const PEER_2 = { userId: "@carol:example.org", deviceId: "CAROLDEVICE" };
 +const PAYLOAD = keyPayload(0);
++const KEY = keyBytes(1);
++const OTHER_KEY = keyBytes(2);
 +
 +beforeEach(() => {
 +  vi.useFakeTimers();
@@ -143,14 +150,15 @@ index 0000000..2bd38da
 +
 +    expect(gate.isJoined()).toBe(false);
 +    const idle = gate.generation;
++    // a leave without a join changes nothing
++    gate.setJoined(false);
++    expect(gate.generation).toBe(idle);
++    expect(listener).not.toHaveBeenCalled();
++
 +    gate.setJoined(true);
 +    expect(gate.isJoined()).toBe(true);
 +    expect(gate.isCurrent(gate.generation)).toBe(true);
 +    expect(gate.isCurrent(idle)).toBe(false);
-+    expect(listener).toHaveBeenCalledTimes(1);
-+
-+    // no change, no new generation
-+    gate.setJoined(true);
 +    expect(listener).toHaveBeenCalledTimes(1);
 +
 +    const joinedAs = gate.generation;
@@ -163,6 +171,44 @@ index 0000000..2bd38da
 +    stop();
 +    gate.setJoined(false);
 +    expect(listener).toHaveBeenCalledTimes(3);
++  });
++
++  it("counts a join reported while it is joined already as a new join", () => {
++    // the MembershipManager failed for good: true was reported, no leave, and
++    // the reconnect reports true again
++    const gate = joinedGate();
++    const listener = vi.fn();
++    gate.onReset(listener);
++    const firstJoin = gate.generation;
++
++    gate.setJoined(true);
++    expect(gate.isJoined()).toBe(true);
++    expect(gate.generation).toBe(firstJoin + 1);
++    expect(gate.isCurrent(firstJoin)).toBe(false);
++    expect(gate.isCurrent(gate.generation)).toBe(true);
++    expect(listener).toHaveBeenCalledTimes(1);
++
++    // a leave still ends a join, and a second leave is nothing
++    gate.setJoined(false);
++    gate.setJoined(false);
++    expect(listener).toHaveBeenCalledTimes(2);
++  });
++
++  it("asks the session it follows whether the work is still current", () => {
++    const gate = joinedGate();
++    const generation = gate.generation;
++    let sessionJoined = true;
++    gate.followSession(() => sessionJoined);
++    expect(gate.isCurrent(generation)).toBe(true);
++
++    // no join state event, the session just is not joined any more
++    sessionJoined = false;
++    expect(gate.isJoined()).toBe(true);
++    expect(gate.isCurrent(generation)).toBe(false);
++
++    // a gate that follows no session goes by the events alone
++    gate.followSession(undefined);
++    expect(gate.isCurrent(generation)).toBe(true);
 +  });
 +});
 +
@@ -363,6 +409,68 @@ index 0000000..2bd38da
 +    expect(send).toHaveBeenCalledOnce();
 +  });
 +
++  it("drops the copies of a join that is reported again without a leave", async () => {
++    // the MembershipManager failed for good (true, no leave) and Reconnect joined
++    // again, before the copies of the first join were due
++    const { client, send } = keySendClient();
++    const gate = joinedGate();
++    wrapKeySend(client, gate);
++
++    await sendKey(client, [PEER], keyPayload(0, SECRET_KEY));
++    await vi.advanceTimersByTimeAsync(1_000);
++    gate.setJoined(true);
++    await vi.advanceTimersByTimeAsync(60_000);
++    expect(send).toHaveBeenCalledOnce();
++
++    // the new join works as usual
++    await sendKey(client, [PEER], keyPayload(0, SECRET_KEY_1));
++    await vi.advanceTimersByTimeAsync(60_000);
++    expect(send).toHaveBeenCalledTimes(4);
++  });
++
++  it("drops a retry of the old join when the join is reported again", async () => {
++    const { client, send } = keySendClient();
++    send.mockRejectedValue(new Error("timeout"));
++    const gate = joinedGate();
++    wrapKeySend(client, gate);
++
++    await sendKey(client, [PEER]).catch(() => {});
++    await vi.advanceTimersByTimeAsync(1_000);
++    gate.setJoined(true);
++    await vi.advanceTimersByTimeAsync(60_000);
++    expect(send).toHaveBeenCalledOnce();
++  });
++
++  it("drops what was scheduled while joined when the session says it is not joined, without a join state event", async () => {
++    const { client, send } = keySendClient();
++    const gate = joinedGate();
++    let sessionJoined = true;
++    gate.followSession(() => sessionJoined);
++    wrapKeySend(client, gate);
++
++    await sendKey(client, [PEER]);
++    await vi.advanceTimersByTimeAsync(4_999);
++    sessionJoined = false;
++    await vi.advanceTimersByTimeAsync(60_000);
++    expect(send).toHaveBeenCalledOnce();
++    expect(vi.getTimerCount()).toBe(0);
++  });
++
++  it("drops the retry of a send when the session says it is not joined, without a join state event", async () => {
++    const { client, send } = keySendClient();
++    send.mockRejectedValue(new Error("timeout"));
++    const gate = joinedGate();
++    let sessionJoined = true;
++    gate.followSession(() => sessionJoined);
++    wrapKeySend(client, gate);
++
++    await sendKey(client, [PEER]).catch(() => {});
++    await vi.advanceTimersByTimeAsync(1_000);
++    sessionJoined = false;
++    await vi.advanceTimersByTimeAsync(60_000);
++    expect(send).toHaveBeenCalledOnce();
++  });
++
 +  it("does not let a key of an earlier join overwrite the key of the new join", async () => {
 +    // after an in-page rejoin the encryption manager starts again at index 0
 +    const oldKey = keyPayload(0, SECRET_KEY);
@@ -545,7 +653,7 @@ index 0000000..2bd38da
 +
 +    watchdog.onEncryptionError("bob");
 +    await vi.advanceTimersByTimeAsync(5_000);
-+    watchdog.onKeyReceived("bob", 0);
++    watchdog.onKeyReceived("bob", 0, KEY);
 +    await vi.advanceTimersByTimeAsync(60_000);
 +    expect(recover).not.toHaveBeenCalled();
 +  });
@@ -608,7 +716,7 @@ index 0000000..2bd38da
 +
 +    watchdog.onEncryptionError("bob");
 +    await vi.advanceTimersByTimeAsync(8_000);
-+    watchdog.onKeyReceived("bob", 0);
++    watchdog.onKeyReceived("bob", 0, KEY);
 +    await vi.advanceTimersByTimeAsync(60_000);
 +    expect(recover).toHaveBeenCalledTimes(1);
 +  });
@@ -619,7 +727,7 @@ index 0000000..2bd38da
 +    watchdog.onEncryptionError("bob");
 +    await vi.advanceTimersByTimeAsync(23_000);
 +    expect(recover).toHaveBeenCalledTimes(2);
-+    watchdog.onKeyReceived("bob", 0);
++    watchdog.onKeyReceived("bob", 0, KEY);
 +
 +    watchdog.onEncryptionError("bob");
 +    await vi.advanceTimersByTimeAsync(23_000);
@@ -629,47 +737,118 @@ index 0000000..2bd38da
 +  it("is not ended by a copy of a key that is installed already", async () => {
 +    const { watchdog, recover } = newWatchdog();
 +    // index 0 was delivered, the send of index 1 was lost
-+    watchdog.onKeyReceived("bob", 0);
++    watchdog.onKeyReceived("bob", 0, KEY);
 +
 +    watchdog.onEncryptionError("bob");
 +    await vi.advanceTimersByTimeAsync(3_000);
 +    // a delayed copy of index 0 arrives
-+    watchdog.onKeyReceived("bob", 0);
++    watchdog.onKeyReceived("bob", 0, KEY);
 +    await vi.advanceTimersByTimeAsync(5_000);
 +    expect(recover).toHaveBeenCalledTimes(1);
-+    watchdog.onKeyReceived("bob", 0);
++    watchdog.onKeyReceived("bob", 0, KEY);
 +    await vi.advanceTimersByTimeAsync(15_000);
 +    expect(recover).toHaveBeenCalledTimes(2);
 +  });
 +
-+  it("is not ended by a key below the highest one installed", async () => {
++  it("is not ended by an older key that is delivered again", async () => {
 +    const { watchdog, recover } = newWatchdog();
-+    watchdog.onKeyReceived("bob", 2);
++    watchdog.onKeyReceived("bob", 1, KEY);
++    watchdog.onKeyReceived("bob", 2, OTHER_KEY);
 +
 +    watchdog.onEncryptionError("bob");
-+    watchdog.onKeyReceived("bob", 1);
++    watchdog.onKeyReceived("bob", 1, KEY);
 +    await vi.advanceTimersByTimeAsync(8_000);
 +    expect(recover).toHaveBeenCalledTimes(1);
 +  });
 +
-+  it("is ended by a key above the highest one installed", async () => {
++  it("is not ended by a stale copy of a key whose index was used by another key since", async () => {
 +    const { watchdog, recover } = newWatchdog();
-+    watchdog.onKeyReceived("bob", 0);
++    watchdog.onKeyReceived("bob", 0, KEY);
++    // the peer's encryption manager started again at index 0
++    watchdog.onKeyReceived("bob", 0, OTHER_KEY);
++
++    watchdog.onEncryptionError("bob");
++    watchdog.onKeyReceived("bob", 0, KEY);
++    await vi.advanceTimersByTimeAsync(8_000);
++    expect(recover).toHaveBeenCalledTimes(1);
++  });
++
++  it("is ended by a key at a new index", async () => {
++    const { watchdog, recover } = newWatchdog();
++    watchdog.onKeyReceived("bob", 0, KEY);
 +
 +    watchdog.onEncryptionError("bob");
 +    await vi.advanceTimersByTimeAsync(3_000);
-+    watchdog.onKeyReceived("bob", 1);
++    watchdog.onKeyReceived("bob", 1, OTHER_KEY);
 +    await vi.advanceTimersByTimeAsync(60_000);
 +    expect(recover).not.toHaveBeenCalled();
 +  });
 +
-+  it("counts key indexes anew for a participant that left", async () => {
++  it("is ended by a key at a lower index that was not installed before", async () => {
++    // the index alone says nothing about which key is the newer one
 +    const { watchdog, recover } = newWatchdog();
-+    watchdog.onKeyReceived("bob", 3);
++    watchdog.onKeyReceived("bob", 2, KEY);
++
++    watchdog.onEncryptionError("bob");
++    watchdog.onKeyReceived("bob", 1, OTHER_KEY);
++    await vi.advanceTimersByTimeAsync(60_000);
++    expect(recover).not.toHaveBeenCalled();
++  });
++
++  it("is ended by the same index with other key bytes", async () => {
++    const { watchdog, recover } = newWatchdog();
++    watchdog.onKeyReceived("bob", 0, KEY);
++
++    watchdog.onEncryptionError("bob");
++    await vi.advanceTimersByTimeAsync(3_000);
++    watchdog.onKeyReceived("bob", 0, OTHER_KEY);
++    await vi.advanceTimersByTimeAsync(60_000);
++    expect(recover).not.toHaveBeenCalled();
++  });
++
++  it("keeps ending episodes after the key index wrapped around", async () => {
++    const { watchdog, recover } = newWatchdog();
++    watchdog.onKeyReceived("bob", 254, keyBytes(254));
++    watchdog.onKeyReceived("bob", 255, keyBytes(255));
++
++    watchdog.onEncryptionError("bob");
++    await vi.advanceTimersByTimeAsync(3_000);
++    watchdog.onKeyReceived("bob", 0, keyBytes(256));
++    await vi.advanceTimersByTimeAsync(60_000);
++    expect(recover).not.toHaveBeenCalled();
++
++    watchdog.onEncryptionError("bob");
++    await vi.advanceTimersByTimeAsync(3_000);
++    watchdog.onKeyReceived("bob", 1, keyBytes(257));
++    await vi.advanceTimersByTimeAsync(60_000);
++    expect(recover).not.toHaveBeenCalled();
++  });
++
++  it("remembers the last 256 keys of a participant, not more", async () => {
++    const { watchdog, recover } = newWatchdog();
++    // 257 different keys, the very first one falls out
++    for (let i = 0; i <= 256; i++) {
++      watchdog.onKeyReceived("bob", i % 256, keyBytes(i));
++    }
++
++    watchdog.onEncryptionError("bob");
++    // the second key is still known
++    watchdog.onKeyReceived("bob", 1, keyBytes(1));
++    await vi.advanceTimersByTimeAsync(8_000);
++    expect(recover).toHaveBeenCalledTimes(1);
++    // the first one is not, it counts as new
++    watchdog.onKeyReceived("bob", 0, keyBytes(0));
++    await vi.advanceTimersByTimeAsync(60_000);
++    expect(recover).toHaveBeenCalledTimes(1);
++  });
++
++  it("forgets the keys of a participant that left", async () => {
++    const { watchdog, recover } = newWatchdog();
++    watchdog.onKeyReceived("bob", 3, KEY);
 +    watchdog.onParticipantGone("bob");
 +
 +    watchdog.onEncryptionError("bob");
-+    watchdog.onKeyReceived("bob", 0);
++    watchdog.onKeyReceived("bob", 3, KEY);
 +    await vi.advanceTimersByTimeAsync(60_000);
 +    expect(recover).not.toHaveBeenCalled();
 +  });
@@ -711,7 +890,7 @@ index 0000000..2bd38da
 +
 +    watchdog.onEncryptionError("bob");
 +    watchdog.onEncryptionError("carol");
-+    watchdog.onKeyReceived("bob", 0);
++    watchdog.onKeyReceived("bob", 0, KEY);
 +    await vi.advanceTimersByTimeAsync(8_000);
 +    expect(recover).toHaveBeenCalledExactlyOnceWith("carol");
 +  });
@@ -722,7 +901,7 @@ index 0000000..2bd38da
 +    for (const identity of ["a", "b", "c", "d"]) {
 +      watchdog.onEncryptionError(identity);
 +      await vi.advanceTimersByTimeAsync(23_000);
-+      watchdog.onKeyReceived(identity, 0);
++      watchdog.onKeyReceived(identity, 0, KEY);
 +    }
 +    // a, b and c used the 6, d got none
 +    expect(recover).toHaveBeenCalledTimes(6);
@@ -760,7 +939,7 @@ index 0000000..2bd38da
 +    for (const identity of ["a", "b", "c"]) {
 +      watchdog.onEncryptionError(identity);
 +      await vi.advanceTimersByTimeAsync(23_000);
-+      watchdog.onKeyReceived(identity, 0);
++      watchdog.onKeyReceived(identity, 0, KEY);
 +    }
 +    expect(recover).toHaveBeenCalledTimes(6);
 +  });
@@ -777,18 +956,18 @@ index 0000000..2bd38da
 +    );
 +  });
 +
-+  it("drops episodes, key indexes and the action count on reset", async () => {
++  it("drops episodes, the keys seen and the action count on reset", async () => {
 +    const { watchdog, recover } = newWatchdog();
 +
-+    watchdog.onKeyReceived("bob", 5);
++    watchdog.onKeyReceived("bob", 5, KEY);
 +    watchdog.onEncryptionError("bob");
 +    watchdog.reset();
 +    await vi.advanceTimersByTimeAsync(60_000);
 +    expect(recover).not.toHaveBeenCalled();
 +
-+    // key index 0 counts again
++    // the same key counts as new again
 +    watchdog.onEncryptionError("bob");
-+    watchdog.onKeyReceived("bob", 0);
++    watchdog.onKeyReceived("bob", 5, KEY);
 +    await vi.advanceTimersByTimeAsync(60_000);
 +    expect(recover).not.toHaveBeenCalled();
 +
@@ -796,7 +975,7 @@ index 0000000..2bd38da
 +    for (const identity of ["a", "b", "c", "d"]) {
 +      watchdog.onEncryptionError(identity);
 +      await vi.advanceTimersByTimeAsync(23_000);
-+      watchdog.onKeyReceived(identity, 0);
++      watchdog.onKeyReceived(identity, 0, KEY);
 +    }
 +    expect(recover).toHaveBeenCalledTimes(6);
 +  });
@@ -1026,6 +1205,51 @@ index 0000000..2bd38da
 +    expect(vi.getTimerCount()).toBe(0);
 +  });
 +
++  it("drops what is pending when the MembershipManager failed for good and no leave was reported", async () => {
++    const { client, send, sendStateEvent } = installableClient();
++    const session = new FakeSession();
++    installKeyRecovery(client, ROOM_ID);
++    bindKeyRecoverySession(session.asSession());
++    session.join();
++
++    await sendKey(client, [PEER]);
++    getKeyRecoveryWatchdog()?.onEncryptionError("bob");
++    await vi.advanceTimersByTimeAsync(3_000);
++    session.failMembership();
++    await vi.advanceTimersByTimeAsync(120_000);
++
++    expect(send).toHaveBeenCalledOnce();
++    expect(sendStateEvent).not.toHaveBeenCalled();
++    expect(vi.getTimerCount()).toBe(0);
++  });
++
++  it("drops what the dead join left pending when Reconnect joins again before it is due", async () => {
++    const { client, send, sendStateEvent } = installableClient();
++    const session = new FakeSession();
++    installKeyRecovery(client, ROOM_ID);
++    bindKeyRecoverySession(session.asSession());
++    session.join();
++
++    await sendKey(client, [PEER], keyPayload(0, SECRET_KEY));
++    getKeyRecoveryWatchdog()?.onEncryptionError("bob");
++    await vi.advanceTimersByTimeAsync(3_000);
++    session.failMembership();
++    // true again, with no false in between
++    session.join();
++    await vi.advanceTimersByTimeAsync(120_000);
++
++    // neither the copies of the old key nor the recovery of the old episode
++    expect(send).toHaveBeenCalledOnce();
++    expect(sendStateEvent).not.toHaveBeenCalled();
++
++    // the new join is served as usual
++    await sendKey(client, [PEER], keyPayload(0, SECRET_KEY_1));
++    getKeyRecoveryWatchdog()?.onEncryptionError("bob");
++    await vi.advanceTimersByTimeAsync(20_000);
++    expect(send).toHaveBeenCalledTimes(4);
++    expect(sendStateEvent).toHaveBeenCalledOnce();
++  });
++
 +  it("does not refresh a membership that is already gone, even if the leave was not announced yet", async () => {
 +    const { client, sendStateEvent, state } = installableClient();
 +    const session = new FakeSession();
@@ -1104,7 +1328,7 @@ index 0000000..2bd38da
 +    for (const identity of ["a", "b", "c"]) {
 +      getKeyRecoveryWatchdog()?.onEncryptionError(identity);
 +      await vi.advanceTimersByTimeAsync(23_000);
-+      getKeyRecoveryWatchdog()?.onKeyReceived(identity, 0);
++      getKeyRecoveryWatchdog()?.onKeyReceived(identity, 0, KEY);
 +    }
 +    expect(sendStateEvent).toHaveBeenCalledTimes(6);
 +  });
@@ -1123,9 +1347,30 @@ index 0000000..2bd38da
 +    await vi.advanceTimersByTimeAsync(5_000);
 +    expect(sendStateEvent).toHaveBeenCalledOnce();
 +
-+    session.receiveKey(1, "bob");
++    session.receiveKey(1, "bob", OTHER_KEY);
 +    await vi.advanceTimersByTimeAsync(60_000);
 +    expect(sendStateEvent).toHaveBeenCalledOnce();
++  });
++
++  it("takes the key bytes of the session: the same index with other bytes ends the episode, also after a wrap", async () => {
++    const { client, sendStateEvent } = installableClient();
++    const session = new FakeSession();
++    installKeyRecovery(client, ROOM_ID);
++    bindKeyRecoverySession(session.asSession());
++    session.join();
++    session.receiveKey(255, "bob", KEY);
++
++    getKeyRecoveryWatchdog()?.onEncryptionError("bob");
++    await vi.advanceTimersByTimeAsync(3_000);
++    session.receiveKey(0, "bob", OTHER_KEY);
++    await vi.advanceTimersByTimeAsync(60_000);
++    expect(sendStateEvent).not.toHaveBeenCalled();
++
++    getKeyRecoveryWatchdog()?.onEncryptionError("bob");
++    await vi.advanceTimersByTimeAsync(3_000);
++    session.receiveKey(0, "bob", keyBytes(3));
++    await vi.advanceTimersByTimeAsync(60_000);
++    expect(sendStateEvent).not.toHaveBeenCalled();
 +  });
 +
 +  it("follows one session at a time and lets go of it on uninstall", () => {
@@ -1215,10 +1460,23 @@ index 0000000..2bd38da
 +    this.emit(MatrixRTCSessionEvent.JoinStateChanged, false);
 +  }
 +
-+  public receiveKey(index: number, identity: string): void {
++  /**
++   * The MembershipManager failed for good: the session reports its join state
++   * while that is still true, and is not joined right after. No leave follows.
++   */
++  public failMembership(): void {
++    this.emit(MatrixRTCSessionEvent.JoinStateChanged, this.isJoined());
++    this.joined = false;
++  }
++
++  public receiveKey(
++    index: number,
++    identity: string,
++    key: Uint8Array = KEY,
++  ): void {
 +    this.emit(
 +      MatrixRTCSessionEvent.EncryptionKeyChanged,
-+      new Uint8Array(16),
++      key,
 +      index,
 +      { userId: "@bob:example.org", deviceId: "BOBDEVICE", memberId: "m" },
 +      identity,
@@ -1241,6 +1499,13 @@ index 0000000..2bd38da
 +  slotDescription: typeof SLOT;
 +} {
 +  return { isJoined: vi.fn(() => true), slotDescription: SLOT };
++}
++
++/** Sixteen bytes of key material that differ for every `seed`. */
++function keyBytes(seed: number): Uint8Array {
++  const bytes = new Uint8Array(16);
++  new DataView(bytes.buffer).setUint32(0, seed);
++  return bytes;
 +}
 +
 +function keyPayload(
@@ -1378,10 +1643,10 @@ index 0000000..2bd38da
 +}
 diff --git a/src/e2ee/keyRecovery.ts b/src/e2ee/keyRecovery.ts
 new file mode 100644
-index 0000000..43da3f1
+index 0000000..83f8d39
 --- /dev/null
 +++ b/src/e2ee/keyRecovery.ts
-@@ -0,0 +1,671 @@
+@@ -0,0 +1,729 @@
 +/*
 +Copyright 2026 Aqua Meet contributors
 +
@@ -1426,6 +1691,8 @@ index 0000000..43da3f1
 +/** A larger call keeps the plain single send, the extra copies would add up. */
 +const MAX_RESEND_TARGETS = 8;
 +
++/** How many (index, key) pairs the watchdog remembers per participant. */
++const MAX_KEYS_SEEN_PER_PARTICIPANT = 256;
 +/** How long a key may take to arrive after the first decryption error. */
 +const KEY_WAIT_MS = 8_000;
 +/** Time between the two recovery actions of one episode. */
@@ -1466,10 +1733,17 @@ index 0000000..43da3f1
 + * pending work of the generation that ended: after an in-page rejoin the new
 + * encryption manager starts again at key index 0, an old send of index 0 would
 + * overwrite the new key at the receivers.
++ *
++ * A join reported while the gate is joined already is a new join as well. When
++ * the MembershipManager fails for good, the session reports its join state
++ * while that is still true, so no leave is reported, and the reconnect reports
++ * true again. For the same reason work only counts as current while the session
++ * itself, if it is followed ({@link SessionGate.followSession}), says it is joined.
 + */
 +export class SessionGate {
 +  private joined = false;
 +  private currentGeneration = 0;
++  private sessionJoined: (() => boolean) | undefined;
 +  private readonly resetListeners = new Set<() => void>();
 +
 +  public isJoined(): boolean {
@@ -1480,13 +1754,29 @@ index 0000000..43da3f1
 +    return this.currentGeneration;
 +  }
 +
-+  /** Whether work started in `generation` may still run: still joined, same join. */
++  /**
++   * Whether work started in `generation` may still run: still joined, same join,
++   * and the session (if it is followed) does not say otherwise right now.
++   */
 +  public isCurrent(generation: number): boolean {
-+    return this.joined && generation === this.currentGeneration;
++    return (
++      this.joined &&
++      generation === this.currentGeneration &&
++      (this.sessionJoined?.() ?? true)
++    );
++  }
++
++  /**
++   * Lets the gate ask the session whether it is joined, for the moments no join
++   * state event has told it yet. `undefined` lets go of the session.
++   */
++  public followSession(isJoined: (() => boolean) | undefined): void {
++    this.sessionJoined = isJoined;
 +  }
 +
 +  public setJoined(joined: boolean): void {
-+    if (joined === this.joined) return;
++    // Every join counts, a leave only when there was a join to end.
++    if (!joined && !this.joined) return;
 +    this.joined = joined;
 +    this.currentGeneration++;
 +    for (const listener of this.resetListeners) listener();
@@ -1701,6 +1991,20 @@ index 0000000..43da3f1
 +  );
 +}
 +
++/**
++ * A short, non-cryptographic fingerprint of key bytes (two FNV-1a lanes), enough
++ * to tell a key we have seen from another one without keeping the key itself.
++ */
++function fingerprintOf(key: Uint8Array): string {
++  let a = 0x811c9dc5;
++  let b = 0x01000193;
++  for (const byte of key) {
++    a = Math.imul(a ^ byte, 0x01000193);
++    b = Math.imul(b ^ byte, 0x85ebca6b);
++  }
++  return `${key.length}.${(a >>> 0).toString(16)}.${(b >>> 0).toString(16)}`;
++}
++
 +function errorMessage(e: unknown): string {
 +  return e instanceof Error ? e.message : String(e);
 +}
@@ -1716,11 +2020,14 @@ index 0000000..43da3f1
 + * seen on closes, and 60 s after its last action. At most 2 actions per episode
 + * and 6 per call.
 + *
-+ * A "new" key is one with a higher index than every key installed for that
-+ * participant before: LiveKit's errors do not say which index is missing, and a
-+ * delayed copy of an older key (that is already installed) does not mean that the
-+ * key in use has arrived. The count of indexes starts anew for a participant that
-+ * left.
++ * A "new" key is one that was not installed for that participant before, by its
++ * index and its key bytes together: LiveKit's errors do not say which index is
++ * missing, and a delayed copy of a key that is installed already does not mean
++ * that the key in use has arrived. Indexes wrap at 256 and a peer's encryption
++ * manager can start at 0 again, so an index alone says nothing about age; the
++ * same index with other bytes is a new key. The last 256 pairs are kept per
++ * participant (only a fingerprint of the bytes, never the key), and they are
++ * forgotten for a participant that left.
 + *
 + * The watchdog is driven by timers, not by a stream of errors: livekit
 + * throttles its encryption errors and stops emitting them once a key index
@@ -1728,7 +2035,8 @@ index 0000000..43da3f1
 + */
 +export class KeyRecoveryWatchdog {
 +  private readonly episodes = new Map<string, Episode>();
-+  private readonly highestKeyIndex = new Map<string, number>();
++  /** Per participant: the (index, key fingerprint) pairs installed so far. */
++  private readonly keysSeen = new Map<string, Set<string>>();
 +  private actionsInCall = 0;
 +
 +  /**
@@ -1758,17 +2066,30 @@ index 0000000..43da3f1
 +  }
 +
 +  /** A key for the participant was installed. */
-+  public onKeyReceived(identity: string, keyIndex: number): void {
-+    const highest = this.highestKeyIndex.get(identity);
++  public onKeyReceived(
++    identity: string,
++    keyIndex: number,
++    key: Uint8Array,
++  ): void {
++    const pair = `${keyIndex}:${fingerprintOf(key)}`;
++    let seen = this.keysSeen.get(identity);
++    if (seen === undefined) {
++      seen = new Set();
++      this.keysSeen.set(identity, seen);
++    }
 +    // A copy of a key we already have says nothing about the one in use.
-+    if (highest !== undefined && keyIndex <= highest) return;
-+    this.highestKeyIndex.set(identity, keyIndex);
++    if (seen.has(pair)) return;
++    seen.add(pair);
++    if (seen.size > MAX_KEYS_SEEN_PER_PARTICIPANT) {
++      const oldest = seen.values().next();
++      if (!oldest.done) seen.delete(oldest.value);
++    }
 +    this.endEpisode(identity);
 +  }
 +
 +  public onParticipantGone(identity: string): void {
 +    this.endEpisode(identity);
-+    this.highestKeyIndex.delete(identity);
++    this.keysSeen.delete(identity);
 +  }
 +
 +  /**
@@ -1781,11 +2102,11 @@ index 0000000..43da3f1
 +    }
 +  }
 +
-+  /** Drops all running episodes, the key indexes seen and the call's action count. */
++  /** Drops all running episodes, the keys seen and the call's action count. */
 +  public reset(): void {
 +    for (const episode of this.episodes.values()) clearTimeout(episode.timer);
 +    this.episodes.clear();
-+    this.highestKeyIndex.clear();
++    this.keysSeen.clear();
 +    this.actionsInCall = 0;
 +  }
 +
@@ -1974,16 +2295,17 @@ index 0000000..43da3f1
 +    const onJoinStateChanged = (joined: boolean): void =>
 +      this.gate.setJoined(joined);
 +    const onEncryptionKeyChanged = (
-+      _key: unknown,
++      key: Uint8Array,
 +      keyIndex: number,
 +      _membership: unknown,
 +      rtcBackendIdentity: string,
-+    ): void => this.watchdog.onKeyReceived(rtcBackendIdentity, keyIndex);
++    ): void => this.watchdog.onKeyReceived(rtcBackendIdentity, keyIndex, key);
 +    session.on(MatrixRTCSessionEvent.JoinStateChanged, onJoinStateChanged);
 +    session.on(
 +      MatrixRTCSessionEvent.EncryptionKeyChanged,
 +      onEncryptionKeyChanged,
 +    );
++    this.gate.followSession(() => session.isJoined());
 +    this.gate.setJoined(session.isJoined());
 +    this.unbindSession = (): void => {
 +      session.off(MatrixRTCSessionEvent.JoinStateChanged, onJoinStateChanged);
@@ -1992,6 +2314,7 @@ index 0000000..43da3f1
 +        onEncryptionKeyChanged,
 +      );
 +      this.session = undefined;
++      this.gate.followSession(undefined);
 +      this.gate.setJoined(false);
 +    };
 +  }
@@ -2055,10 +2378,10 @@ index 0000000..43da3f1
 +}
 diff --git a/src/e2ee/keyRecoveryWiring.test.ts b/src/e2ee/keyRecoveryWiring.test.ts
 new file mode 100644
-index 0000000..04de427
+index 0000000..164247c
 --- /dev/null
 +++ b/src/e2ee/keyRecoveryWiring.test.ts
-@@ -0,0 +1,370 @@
+@@ -0,0 +1,428 @@
 +/*
 +Copyright 2026 Aqua Meet contributors
 +
@@ -2427,6 +2750,64 @@ index 0000000..04de427
 +    // nothing of the old key after the new one went out
 +    expect(lastOldKey).toBeLessThan(firstNewKey);
 +    expect(keys.filter((key) => key === oldKey)).toHaveLength(1);
++  });
++
++  describe("when the MembershipManager fails for good", () => {
++    /**
++     * The next restart of the delayed leave event fails in a way that is not
++     * retried: the MembershipManager stops and the session reports its join state
++     * while that is still true (MatrixRTCSession.joinRTCSession), so no leave
++     * is ever reported.
++     */
++    async function failMembership(): Promise<void> {
++      const reported: boolean[] = [];
++      session.on(MatrixRTCSessionEvent.JoinStateChanged, (joined) =>
++        reported.push(joined),
++      );
++      widgetApi.restartScheduledDelayedEvent.mockRejectedValue(
++        new Error("host gone"),
++      );
++      await vi.advanceTimersByTimeAsync(4_000);
++      expect(session.isJoined()).toBe(false);
++      // the dead join was reported as joined, and nothing said it left
++      expect(reported).toEqual([true]);
++    }
++
++    it("sends no copy of the key of the dead join", async () => {
++      await join();
++      await bobJoins();
++      await vi.advanceTimersByTimeAsync(KEY_DELAY_MS);
++      expect(keySends()).toHaveLength(1);
++
++      await failMembership();
++      await vi.advanceTimersByTimeAsync(60_000);
++      expect(keySends()).toHaveLength(1);
++    });
++
++    it("does not send the key of the dead join after Reconnect joined again", async () => {
++      await join();
++      await bobJoins();
++      await vi.advanceTimersByTimeAsync(KEY_DELAY_MS);
++      const [oldKey] = sentKeys();
++      expect(keySends()).toHaveLength(1);
++
++      await failMembership();
++      // Reconnect (CallView) joins again before the copies of the key (5 s and
++      // 15 s after it was sent) are due, the session is joined for them again
++      widgetApi.restartScheduledDelayedEvent.mockResolvedValue(undefined);
++      await join();
++      expect(session.isJoined()).toBe(true);
++      await vi.advanceTimersByTimeAsync(20_000);
++      expect(sentKeys()).toEqual([oldKey]);
++
++      await bobJoins();
++      await vi.advanceTimersByTimeAsync(60_000);
++      const keys = sentKeys();
++      const firstNewKey = keys.findIndex((key) => key !== oldKey);
++      expect(firstNewKey).toBeGreaterThan(-1);
++      expect(keys.lastIndexOf(oldKey)).toBeLessThan(firstNewKey);
++      expect(keys.filter((key) => key === oldKey)).toHaveLength(1);
++    });
 +  });
 +});
 diff --git a/src/room/useLoadGroupCall.test.tsx b/src/room/useLoadGroupCall.test.tsx

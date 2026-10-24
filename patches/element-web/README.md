@@ -2104,13 +2104,16 @@ registry).
      `JoinStateChanged` event; never `client.clientRunning`, which the embedded client leaves
      false). Every join and leave starts a new generation and drops all pending sends, timers and
      episodes of the one before, so nothing of an earlier join runs after a hang up or overwrites
-     the key of an in-page rejoin.
+     the key of an in-page rejoin. A join reported while already joined is a new join too (after a
+     fatal `MembershipManager` error the session reports no leave, and the Reconnect reports a
+     second join), and pending work runs only while the session itself says it is joined.
   3. The same module, `KeyRecoveryWatchdog`: starts on the first decryption error of a remote
      participant. If no new key for that participant arrives within 8 s, `refreshOwnMembership`
      re-sends our own call membership state event with a fresh `created_ts`, which every peer
      treats as a new joiner and answers by sending its key again. At most 2 actions per episode,
-     15 s apart, and 6 per call. A new key is one with a higher index than any installed for that
-     participant. An episode ends on such a key, when the participant leaves or the LiveKit
+     15 s apart, and 6 per call. A new key is one whose (index, key bytes) pair was not installed
+     for that participant before (indexes wrap at 256; only a fingerprint of the bytes is kept, at
+     most 256 pairs per participant). An episode ends on such a key, when the participant leaves or the LiveKit
      connection it was seen on closes, and 60 s after its last action. The refresh runs only while
      the session is joined (checked again right before the event is sent), in a call of at most 8
      members (each refresh makes every peer rotate its key), and when our own membership state
@@ -2120,10 +2123,10 @@ registry).
      `bindKeyRecoverySession` in `room/useLoadGroupCall.ts` (the call's session: join state and
      received keys), and the encryption error, participant-gone and connection-closed events in
      `remoteMembers/Connection.ts`.
-  5. Tests the patch adds or changes: `keyRecovery.test.ts` (67 tests) and `keyRecoveryWiring.test.ts`
-     (6; the real `RoomWidgetClient` with a mocked widget API and the real `MatrixRTCSession`),
+  5. Tests the patch adds or changes: `keyRecovery.test.ts` (81 tests) and `keyRecoveryWiring.test.ts`
+     (8; the real `RoomWidgetClient` with a mocked widget API and the real `MatrixRTCSession`),
      `room/useLoadGroupCall.test.tsx` (2) and added cases in `remoteMembers/Connection.test.ts` and
-     `widget.test.ts`; the five files together are 94 tests, all passing on the patched tree
+     `widget.test.ts`; the five files together are 110 tests, all passing on the patched tree
      (v0.26.1, 12 and 13).
   The patch adds four files with the header "Copyright 2026 Aqua Meet contributors" and
   "SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial".
@@ -2339,7 +2342,8 @@ What the table does not say, and the choices behind it:
   `widgets/element-call/assets/index-*.js`, the same entry chunk as entry 12's marker, because
   `widget.ts` imports the module. **Candidate:** a local `pnpm run build:embedded:production` of
   Element Call v0.26.1 with entries 12 and 13 applied (`git apply`, the order of the `element-call`
-  stage; the reviewed 0190 of 2026-10-24, commit `5ffe31ad7d21`), not the Docker image and not a
+  stage; the reviewed 0190 of 2026-10-24, commit `5ffe31ad7d21`; the final commit `bcdadcda3d7d`
+  changes no log message, the prefix still occurs in the same 11), not the Docker image and not a
   deployed artefact: the marker occurs 11 times in the entry chunk `index-UZyUr06z.js` that its
   `index.html` names (and in the chunk's source map). **Stock:** the `dist/` of
   `@element-hq/element-call-embedded@0.26.0` from `npm pack`: 0 occurrences in all 157 files; 0
