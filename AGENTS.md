@@ -46,7 +46,7 @@ stores; nothing here can patch it.
 | `entrypoints/element_entrypoint.sh` | Element entrypoint: templates `config.json`, favicons, the theme stylesheet link. Bind-mounted by `docker-compose.yml`. |
 | `synapse-modules/` | Our own Synapse module baked into the Synapse image: `inblock_directory` (directory search for service accounts, [docs/directory-search.md](docs/directory-search.md)), its tests in Synapse's own framework (`inblock_directory_tests/`) and `run-tests.sh`. Registered by `apply_directory_search` in the entrypoint. |
 | `config/` | Element config, nginx config and security headers, service-worker boot shim, theme CSS, LiveKit config, brand assets. |
-| `patches/synapse/`, `patches/element-web/`, `patches/element-call/` | Vendored patches and their registries (`README.md` in the first two). The two Element Call patches are built into the Element Web image and registered in `patches/element-web/README.md` (entries 12 and 13). |
+| `patches/synapse/`, `patches/element-web/`, `patches/element-call/` | Vendored patches and their registries (`README.md` in the first two). The two Element Call patches are built into the Element Web image and registered in `patches/element-web/README.md` (entries 13 and 14). |
 | `scripts/` | Registry, hunk and Copy Markdown vector checks and the Element patch unit tests (`element-patch-tests.sh`, run in CI), DID-field guard acceptance test, the secret store mode tests (`synapse-secret-store-accept.sh`, `synapse-secret-store-e2e.sh`, run in CI), localpart-vector check, deployment audits, the storage controller, e2e helpers. |
 | `verify-deployment.sh`, `verify-theme.sh` | Probe of a live deployment's public endpoints, read-only unless `--e2ee` (which signs in and sends a message); static theme check. |
 | `docs/` | Element theme contract, Element source build, the Copy Markdown algorithm and its conformance vectors, audits, drafts filed upstream. |
@@ -134,7 +134,7 @@ change reaches an existing deployment.
   build fails when the tag resolves to a different commit, so a moved upstream tag cannot
   change what we ship. Then run registry rule 4 over every patch, in order. The build
   also fails when the new tag installs another `@element-hq/element-call-embedded` than
-  `ELEMENT_CALL_STOCK_VERSION`: rebase the `element-call` stage (registry rule 4, entries 12 and 13).
+  `ELEMENT_CALL_STOCK_VERSION`: rebase the `element-call` stage (registry rule 4, entries 13 and 14).
 
 ### The DID profile field (`io.inblock.did`)
 

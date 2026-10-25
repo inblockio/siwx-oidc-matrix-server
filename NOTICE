@@ -135,7 +135,7 @@ patches/element-call/0180-bt-audio-output.patch
     src/state/headsetOutput.test.ts) whose headers read "Copyright 2026
     Aqua Meet contributors" and the same SPDX line; they are AGPL-3.0-only
     here as well. The patch file in this repository is the source offer
-    for the modification (patches/element-web/README.md, entry 12).
+    for the modification (patches/element-web/README.md, entry 13).
 
 patches/element-call/0190-media-key-recovery.patch
     Modifies Element Call as well, in the same Element Call build stage and
@@ -151,7 +151,7 @@ patches/element-call/0190-media-key-recovery.patch
     whose headers read "Copyright 2026 Aqua Meet contributors" and the same
     SPDX line; they are AGPL-3.0-only here as well. The patch file in this
     repository is the source offer for the modification
-    (patches/element-web/README.md, entry 13).
+    (patches/element-web/README.md, entry 14).
 
 
 Brand assets

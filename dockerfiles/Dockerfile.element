@@ -2,7 +2,7 @@
 # patches/element-web/ (listed, in apply order, in its README.md), and serves
 # the result with the inblock.io overlay (config, theme, favicons). The Element
 # Call embedded build that Element Web serves is built from source too, from
-# patches/element-call/ (stage `element-call`, registry entries 12 and 13).
+# patches/element-call/ (stage `element-call`, registry entries 13 and 14).
 #
 # Why from source: the prebuilt vectorim/element-web image cannot carry source
 # patches, such as force-first-device-recovery's change to MatrixChat.tsx that
@@ -12,8 +12,8 @@
 # ---------------------------------------------------------------------------
 # element-call: the Element Call embedded build that Element Web serves under
 # widgets/element-call/, built from source at a pinned tag with our two patches
-# (patches/element-call/0180-bt-audio-output.patch, registry entry 12, and
-# patches/element-call/0190-media-key-recovery.patch, registry entry 13, both in
+# (patches/element-call/0180-bt-audio-output.patch, registry entry 13, and
+# patches/element-call/0190-media-key-recovery.patch, registry entry 14, both in
 # patches/element-web/README.md).
 #
 # Why: Element Web v1.12.32 does not build Element Call. apps/web/webpack.config.ts
@@ -21,10 +21,10 @@
 # pinned in apps/web/package.json) into webapp/widgets/element-call/, so a patch
 # to Element Web's source cannot reach it. Patch 0180 keeps calls audible with
 # Bluetooth headsets (a Windows hands-free output rule, an audio-output guard,
-# autoplay-block reporting); entry 12 has the evidence. Patch 0190 makes a call
+# autoplay-block reporting); entry 13 has the evidence. Patch 0190 makes a call
 # recover when a media key is lost (call key to-device sends retried and sent again,
 # a watchdog that re-sends our own membership when a remote stays undecryptable);
-# entry 13 has the evidence. Stage `deps` replaces the installed package's dist/
+# entry 14 has the evidence. Stage `deps` replaces the installed package's dist/
 # with the dist/ built here.
 #
 # What: shallow clone of the pinned tag, the patches applied in order (0180, then
@@ -61,7 +61,7 @@ RUN git clone --depth 1 --branch "${ELEMENT_CALL_TAG}" \
 COPY patches/element-call/0180-bt-audio-output.patch /tmp/ec-bt-audio-output.patch
 RUN git apply --verbose /tmp/ec-bt-audio-output.patch
 
-# Entry 13 is generated on top of entry 12 (the two change no file in common, but its base
+# Entry 14 is generated on top of entry 13 (the two change no file in common, but its base
 # commit is the tree with 0180 applied), so it is applied after it.
 COPY patches/element-call/0190-media-key-recovery.patch /tmp/ec-media-key-recovery.patch
 RUN git apply --verbose /tmp/ec-media-key-recovery.patch
@@ -240,27 +240,28 @@ RUN git apply --verbose /tmp/ew-sw-versions.patch
 COPY patches/element-web/sw-media-401-token-retry.patch /tmp/ew-sw-media-retry.patch
 RUN git apply --verbose /tmp/ew-sw-media-retry.patch
 
-# Entry 14: the IndexedDB connection that utils/StorageAccess.ts caches (the service
-# worker reads the access token through it) is dropped on close and on versionchange,
-# and a transaction on a closing connection reopens it once. Without it a failed
-# connection stays cached for the worker's whole life and every media request goes out
-# without a token (Synapse 404s; seen after the 2026-10-25 prod move). UPSTREAM DEFECT.
-# Touches only apps/web/src/utils/StorageAccess{,.test}.ts, so its position is free.
-# See patches/element-web/README.md, entry 14.
-COPY patches/element-web/sw-idb-reconnect.patch /tmp/ew-sw-idb.patch
-RUN git apply --verbose /tmp/ew-sw-idb.patch
-
 # Entry 11: Copy Markdown (siwx-oidc-matrix-server#24). Adds the right-click
 # "Copy Markdown" entry above Pin and the HTML-to-Markdown converter it calls
-# (utils/eventToMarkdown.ts). Touches en_EN.json, so it is applied last.
+# (utils/eventToMarkdown.ts). Touches en_EN.json, so it is applied after 1-10.
 # Same fail-loudly contract as every patch above.
 COPY patches/element-web/copy-markdown.patch /tmp/ew-copy-markdown.patch
 RUN git apply --verbose /tmp/ew-copy-markdown.patch
 
+# Entry 12: the IndexedDB connection that utils/StorageAccess.ts caches (the service
+# worker reads the access token through it) is dropped on close and on versionchange,
+# and a transaction on a closing connection reopens it once. Without it a failed
+# connection stays cached for the worker's whole life and every media request goes out
+# without a token (Synapse 404s; seen after the 2026-10-25 prod move). UPSTREAM DEFECT.
+# Touches only apps/web/src/utils/StorageAccess{,.test}.ts (no file of 1-11), so it
+# applies after 11 unchanged.
+# See patches/element-web/README.md, entry 12.
+COPY patches/element-web/sw-idb-reconnect.patch /tmp/ew-sw-idb.patch
+RUN git apply --verbose /tmp/ew-sw-idb.patch
+
 # Install exactly what the lockfile pins.
 RUN corepack enable && pnpm install --frozen-lockfile
 
-# Entries 12 and 13: serve our Element Call build, not the npm package's. webpack copies
+# Entries 13 and 14: serve our Element Call build, not the npm package's. webpack copies
 # <installed @element-hq/element-call-embedded>/dist/** into webapp/widgets/element-call/
 # (apps/web/webpack.config.ts), so the installed package's dist/ is replaced by the
 # one the `element-call` stage built. The directory is resolved from apps/web as
@@ -269,7 +270,7 @@ RUN corepack enable && pnpm install --frozen-lockfile
 # hard-links package files from its store, and writing through a hard link would
 # change the store's copy too. Fails the build when the installed package is not the
 # version this replaces (Element Web moved to another Element Call: rebase the
-# `element-call` stage first, entries 12 and 13), or has no dist/.
+# `element-call` stage first, entries 13 and 14), or has no dist/.
 ARG ELEMENT_CALL_STOCK_VERSION=0.26.0
 COPY --from=element-call /src/dist /tmp/element-call-dist
 RUN set -e; \
@@ -277,7 +278,7 @@ RUN set -e; \
     pkgdir="$(dirname "$(realpath "$pkgjson")")"; \
     got="$(node -p "require('$pkgdir/package.json').version")"; \
     if [ "$got" != "${ELEMENT_CALL_STOCK_VERSION}" ]; then \
-      echo "FATAL: Element Web installs @element-hq/element-call-embedded $got, this build replaces ${ELEMENT_CALL_STOCK_VERSION}. Rebase the element-call stage onto the new Element Call release (patches/element-web/README.md, entries 12 and 13)." >&2; \
+      echo "FATAL: Element Web installs @element-hq/element-call-embedded $got, this build replaces ${ELEMENT_CALL_STOCK_VERSION}. Rebase the element-call stage onto the new Element Call release (patches/element-web/README.md, entries 13 and 14)." >&2; \
       exit 1; \
     fi; \
     test -d "$pkgdir/dist"; \
@@ -365,7 +366,7 @@ RUN cp /src/apps/web/config.sample.json /src/apps/web/webapp/config.json
 # deployment. A row's path is relative to the webapp: `bundles/*/<file>` globs the
 # bundle hash, `i18n/<name>.json` resolves through i18n/languages.json to the
 # hashed file name, and `widgets/element-call/assets/index-*.js` globs the hash of
-# the Element Call entry chunk (entries 12 and 13). A row whose file is missing counts as a
+# the Element Call entry chunk (entries 13 and 14). A row whose file is missing counts as a
 # missing marker.
 RUN --mount=type=bind,source=patches/element-web/markers.tsv,target=/tmp/markers.tsv \
     cd /src/apps/web/webapp \
