@@ -48,3 +48,4 @@
 11	i18n/en_EN.json	copy_markdown
 12	widgets/element-call/assets/index-*.js	[aqua-meet audio output]
 13	widgets/element-call/assets/index-*.js	[KeyRecovery]
+14	sw.js	IndexedDB connection lost; reopening

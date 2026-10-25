@@ -226,6 +226,7 @@ re-litigated each time someone audits the registry.
 | 11 | `copy-markdown` | Right-click "Copy Markdown" directly above Pin: copies a text, notice or emote message as clean CommonMark + GFM, converted from `formatted_body` (no HTML emitted), instead of the lossy rendered-text copy or the JSON of View source. | none |
 | 12 | `0180-bt-audio-output` | Patch to the **Element Call** embedded build, not to Element Web (file in `patches/element-call/`, built by the `element-call` stage): calls stay audible with Bluetooth headsets. A Windows hands-free output rule, an audio-output guard that holds LiveKit's remote audio on the chosen output and replays it after device or microphone changes, and autoplay-block reporting. | none |
 | 13 | `0190-media-key-recovery` | Second patch to the **Element Call** embedded build (file in `patches/element-call/`, built by the same `element-call` stage, applied after 12): a call recovers when a media E2EE key is lost. The widget client's call-key to-device sends are retried and sent again, and a watchdog re-sends our own call membership with a fresh `created_ts` when a remote stays undecryptable without a key. | none |
+| 14 | `sw-idb-reconnect` | The IndexedDB connection the service worker reads the access token through is dropped on close and on version change and reopened once on a closing connection, so a failed connection no longer sends every media request without a token for the worker's whole life. | none |
 
 Entry 6 is the only gated one:
 
@@ -246,7 +247,7 @@ recorded by that deployment, not here.
 
 ## Which Dockerfile applies what
 
-**One Dockerfile, all thirteen patches.** `dockerfiles/Dockerfile.element` applies every
+**One Dockerfile, all fourteen patches.** `dockerfiles/Dockerfile.element` applies every
 numbered patch below, in this file's order. **8 depends on 7** and **10 depends on 9**;
 each must stay after the entry it depends on (see their Order notes). **11 is applied
 last of the Element Web patches**: its `en_EN.json` hunk was generated against the tree with
@@ -260,8 +261,9 @@ change no file in common). Until 2026-09-01 a
 separate `dev` branch applied a different subset; that branch was merged into `main` and
 deleted, so there is a single Dockerfile.
 
-A tag bump must try every Element Web patch (1-11) in this file's order, and check entries
-12 and 13 as rule 4 says.
+A tag bump must try every Element Web patch (1-11 and 14) in this file's order, and check entries
+12 and 13 as rule 4 says. **14 is applied after 10 and before 11** and touches only
+`apps/web/src/utils/StorageAccess{,.test}.ts`, so it is independent of the others.
 
 ---
 
@@ -2175,6 +2177,31 @@ registry).
   conveys our modified build of it to every browser that loads it. This repository, with
   `patches/element-call/0190-media-key-recovery.patch` and the pinned tag and commit in
   `dockerfiles/Dockerfile.element`, is the corresponding source of the modification; it is public.
+
+### 14. `sw-idb-reconnect.patch` - UPSTREAM DEFECT (not filed; carry until fixed)
+
+- **What:** `apps/web/src/utils/StorageAccess.ts` caches one IndexedDB connection to `matrix-react-sdk` for the
+  life of its context; the service worker reads the access token through it on every media request. The patch sets
+  `onclose` and `onversionchange` on that connection (the latter closes it, so another context's `deleteDatabase` or
+  upgrade is no longer blocked by the worker) and drops it from the cache; a transaction that throws
+  `InvalidStateError` (a closed or closing connection) closes the old one, opens a new one and retries once. Other
+  errors are not retried. Ships 3 vitest tests in `StorageAccess.test.ts` (another context deletes the database and
+  the next call reopens it; a closing connection is reopened once; a different error is not retried). Marker in the
+  built `/app/sw.js`: `IndexedDB connection lost; reopening` (the warning on the reopen path).
+- **Why (2026-10-25, after the prod Matrix move):** Element Web in Chrome showed every image broken while Element X
+  was fine. Synapse's log: 210 tokenless `/_matrix/media/v3/` requests in 90 minutes, all 404, all from Chrome.
+  The worker's token lookup failed on its cached connection on every request, its rewrite caught the error
+  ("SW: Error in request rewrite.") and fell back to the tokenless URL. The state is sticky: an open tab keeps the
+  worker alive and a normal reload reuses it; only DevTools "Unregister" (a new worker, a new connection) healed it.
+  None of the guards caught it: (A) and (B) do not apply to a controlled page, (E) heals only a worker whose fetch
+  hangs, and the per-build `sw.js` stamp acts only on a deploy. Record: aqua-ops
+  `migrations/hosts/2026-10-25-matrix-to-prod-01-after-action.md`, F6.
+- **Order:** after entry 10, before entry 11; independent of every other patch.
+- **Upstream status:** UPSTREAM DEFECT, not filed. The connection cache in `StorageAccess.ts` has no close or
+  version-change handling at v1.12.32.
+- **Retirement:** upstream handles a closed connection in `StorageAccess.ts` (any form). The patch then fails to
+  apply or becomes redundant: check, and drop it.
+- **Coverage:** the vitest file in the patch, run by the `patch-tests` stage on every pull request.
 
 ## Runtime-stage deltas (not `.patch` files, still upstream deviations)
 

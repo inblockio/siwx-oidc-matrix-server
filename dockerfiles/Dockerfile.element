@@ -240,6 +240,16 @@ RUN git apply --verbose /tmp/ew-sw-versions.patch
 COPY patches/element-web/sw-media-401-token-retry.patch /tmp/ew-sw-media-retry.patch
 RUN git apply --verbose /tmp/ew-sw-media-retry.patch
 
+# Entry 14: the IndexedDB connection that utils/StorageAccess.ts caches (the service
+# worker reads the access token through it) is dropped on close and on versionchange,
+# and a transaction on a closing connection reopens it once. Without it a failed
+# connection stays cached for the worker's whole life and every media request goes out
+# without a token (Synapse 404s; seen after the 2026-10-25 prod move). UPSTREAM DEFECT.
+# Touches only apps/web/src/utils/StorageAccess{,.test}.ts, so its position is free.
+# See patches/element-web/README.md, entry 14.
+COPY patches/element-web/sw-idb-reconnect.patch /tmp/ew-sw-idb.patch
+RUN git apply --verbose /tmp/ew-sw-idb.patch
+
 # Entry 11: Copy Markdown (siwx-oidc-matrix-server#24). Adds the right-click
 # "Copy Markdown" entry above Pin and the HTML-to-Markdown converter it calls
 # (utils/eventToMarkdown.ts). Touches en_EN.json, so it is applied last.

@@ -1,0 +1,109 @@
+diff --git a/apps/web/src/utils/StorageAccess.test.ts b/apps/web/src/utils/StorageAccess.test.ts
+index fd43875..948c57a 100644
+--- a/apps/web/src/utils/StorageAccess.test.ts
++++ b/apps/web/src/utils/StorageAccess.test.ts
+@@ -10,7 +10,7 @@ Please see LICENSE files in the repository root for full details.
+ 
+ import "fake-indexeddb/auto";
+ 
+-import { describe, it, expect } from "vitest";
++import { describe, it, expect, vi } from "vitest";
+ 
+ import { idbDelete, idbLoad, idbSave } from "./StorageAccess";
+ 
+@@ -47,4 +47,43 @@ describe("StorageAccess", () => {
+         await expect(() => idbLoad(NONEXISTENT_TABLE, "whatever")).rejects.toThrow();
+         await expect(() => idbDelete(NONEXISTENT_TABLE, "whatever")).rejects.toThrow();
+     });
++
++    // inblock.io sw-idb-reconnect.patch: a cached connection must not outlive a version change or a close.
++    it("lets another context delete the database and reopens it afterwards", async () => {
++        await idbSave("account", "reconnect", "before");
++        await new Promise<void>((resolve, reject) => {
++            const request = indexedDB.deleteDatabase("matrix-react-sdk");
++            request.onsuccess = (): void => resolve();
++            request.onerror = (): void => reject(request.error);
++            request.onblocked = (): void => reject(new Error("blocked: the cached connection ignored versionchange"));
++        });
++        expect(await idbLoad("account", "reconnect")).toBeUndefined();
++        await idbSave("account", "reconnect", "after");
++        expect(await idbLoad("account", "reconnect")).toEqual("after");
++    });
++
++    it("reopens once when the cached connection is closing", async () => {
++        await idbSave("account", "closing", "value");
++        const transaction = vi.spyOn(IDBDatabase.prototype, "transaction").mockImplementationOnce(() => {
++            throw new DOMException("The database connection is closing.", "InvalidStateError");
++        });
++        try {
++            expect(await idbLoad("account", "closing")).toEqual("value");
++            expect(transaction).toHaveBeenCalledTimes(2);
++        } finally {
++            transaction.mockRestore();
++        }
++    });
++
++    it("does not retry an error that is not about the connection", async () => {
++        const transaction = vi.spyOn(IDBDatabase.prototype, "transaction").mockImplementation(() => {
++            throw new DOMException("No such store.", "NotFoundError");
++        });
++        try {
++            await expect(idbLoad("account", "x")).rejects.toThrow("No such store.");
++            expect(transaction).toHaveBeenCalledTimes(1);
++        } finally {
++            transaction.mockRestore();
++        }
++    });
+ });
+diff --git a/apps/web/src/utils/StorageAccess.ts b/apps/web/src/utils/StorageAccess.ts
+index 5871904..08a16d2 100644
+--- a/apps/web/src/utils/StorageAccess.ts
++++ b/apps/web/src/utils/StorageAccess.ts
+@@ -34,7 +34,19 @@ async function idbInit(): Promise<void> {
+         const request = getIDBFactory()!.open("matrix-react-sdk", 1);
+         request.onerror = reject;
+         request.onsuccess = (): void => {
+-            resolve(request.result);
++            const db = request.result;
++            // The connection is cached for the life of the context, and the service worker lives as long as a tab
++            // keeps it busy. A connection the browser closed, or one another context needs gone (deleteDatabase,
++            // an upgrade), must not stay cached: every later call would fail on it, and the service worker would
++            // then fetch media without a token, which the homeserver refuses.
++            db.onclose = (): void => {
++                if (idb === db) idb = null;
++            };
++            db.onversionchange = (): void => {
++                db.close();
++                if (idb === db) idb = null;
++            };
++            resolve(db);
+         };
+         request.onupgradeneeded = (): void => {
+             const db = request.result;
+@@ -48,12 +60,25 @@ async function idbTransaction(
+     table: string,
+     mode: IDBTransactionMode,
+     fn: (objectStore: IDBObjectStore) => IDBRequest,
++    reopen = true,
+ ): Promise<any> {
+     if (!idb) {
+         await idbInit();
+     }
++    let txn: IDBTransaction;
++    try {
++        txn = idb!.transaction([table], mode);
++    } catch (e) {
++        // A closed or closing connection throws InvalidStateError on every transaction: open a new one, once.
++        if (!reopen || (e as Error | undefined)?.name !== "InvalidStateError") throw e;
++        console.warn("[StorageAccess] IndexedDB connection lost; reopening");
++        try {
++            idb?.close();
++        } catch {}
++        idb = null;
++        return idbTransaction(table, mode, fn, false);
++    }
+     return new Promise((resolve, reject) => {
+-        const txn = idb!.transaction([table], mode);
+         txn.onerror = reject;
+ 
+         const objectStore = txn.objectStore(table);
