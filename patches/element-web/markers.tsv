@@ -15,7 +15,7 @@
 #                                    (i18n/en_EN.json is served as i18n/en_EN.<hash>.json)
 #   widgets/element-call/assets/index-*.js
 #                                    the entry chunk of the Element Call embedded build the
-#                                    image serves (entries 12 and 13); the `*` is the chunk hash, read
+#                                    image serves (entries 13 and 14); the `*` is the chunk hash, read
 #                                    from widgets/element-call/index.html
 #
 # Used by dockerfiles/Dockerfile.element (fails the build when a row is missing from the
@@ -46,5 +46,6 @@
 9	sw.js	retrying without one
 10	sw.js	retrying media request with a refreshed access token
 11	i18n/en_EN.json	copy_markdown
-12	widgets/element-call/assets/index-*.js	[aqua-meet audio output]
-13	widgets/element-call/assets/index-*.js	[KeyRecovery]
+12	sw.js	IndexedDB connection lost; reopening
+13	widgets/element-call/assets/index-*.js	[aqua-meet audio output]
+14	widgets/element-call/assets/index-*.js	[KeyRecovery]

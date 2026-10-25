@@ -282,7 +282,11 @@ load-bearing, and 13 is applied after 12. Registry (all thirteen entries):
     proves it is the source, for any sender (siwx-oidc-matrix-server#24; algorithm and
     conformance vectors in [docs/copy-markdown](docs/copy-markdown/README.md)). FEATURE,
     upstreamable, not filed.
-12. [`0180-bt-audio-output.patch`](patches/element-call/0180-bt-audio-output.patch):
+12. [`sw-idb-reconnect.patch`](patches/element-web/sw-idb-reconnect.patch):
+    the IndexedDB connection the service worker reads the access token through is reopened
+    when it closes or is superseded, instead of failing every media request for the worker's
+    whole life (images broken until the worker is unregistered by hand). UPSTREAM DEFECT, not filed.
+13. [`0180-bt-audio-output.patch`](patches/element-call/0180-bt-audio-output.patch):
     a patch to **Element Call v0.26.1**, not to Element Web. The image builds Element
     Call's embedded widget from source with it (stage `element-call`) and serves that
     build instead of the npm package Element Web installs. Calls stay audible with
@@ -290,9 +294,9 @@ load-bearing, and 13 is applied after 12. Registry (all thirteen entries):
     audio on the chosen output across device and microphone changes, and autoplay-block
     reporting. Element Call is AGPL-3.0-only OR LicenseRef-Element-Commercial; this file
     is the source offer for the modification. UPSTREAM DEFECT, deliberately not filed.
-13. [`0190-media-key-recovery.patch`](patches/element-call/0190-media-key-recovery.patch):
+14. [`0190-media-key-recovery.patch`](patches/element-call/0190-media-key-recovery.patch):
     a second patch to **Element Call v0.26.1**, applied in the same `element-call` stage
-    after 12. A call recovers when a media E2EE key is lost: the widget client's call-key
+    after 13. A call recovers when a media E2EE key is lost: the widget client's call-key
     to-device sends are retried and sent again, and a watchdog re-sends our own call
     membership with a fresh `created_ts` when a remote stays undecryptable without a key.
     Without it a 1:1 call whose key does not get through stays silent until a redial.
