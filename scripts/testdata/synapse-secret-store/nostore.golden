@@ -39,7 +39,6 @@ experimental_features:
   msc4108_enabled: true
   msc4143_enabled: true
   msc3266_enabled: true
-  msc4222_enabled: true
   msc4502_enabled: true
   msc4133_key_denylist:
     - io.inblock.did
@@ -109,7 +108,6 @@ experimental_features:
   msc4108_enabled: true
   msc4143_enabled: true
   msc3266_enabled: true
-  msc4222_enabled: true
   msc4502_enabled: true
   msc4133_key_denylist:
     - io.inblock.did
