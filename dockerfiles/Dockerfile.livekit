@@ -8,10 +8,16 @@
 #
 # Published by the build-and-push matrix of .github/workflows/docker.yml as
 # ghcr.io/inblockio/siwx-oidc-matrix-server/livekit-server.
-FROM docker.io/library/golang:1.27.1-alpine3.24@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS builder
 
-ARG LIVEKIT_TAG=v1.13.10
-ARG LIVEKIT_COMMIT=e5655ac20267fa5005dccaf3f0e3bfc3ea688c07
+# Declared before the first FROM so the runtime stage can stamp the tag as
+# org.opencontainers.image.base.version.
+ARG LIVEKIT_TAG=v1.13.11
+ARG LIVEKIT_COMMIT=385aa40f9292fe1db8caad87301e4b285b7c198a
+
+FROM docker.io/library/golang:1.27.3-alpine3.24@sha256:f2c872bcee949b7be9c490efd02b48a8a2fbf947cdf533f1c58525ec9d8170fd AS builder
+
+ARG LIVEKIT_TAG
+ARG LIVEKIT_COMMIT
 # pion/turn is the embedded TURN server livekit-server builds against; the
 # downlink padding (patches/pion-turn/) lives there, next to the allocation
 # code it changes.
@@ -65,7 +71,10 @@ RUN RELAY_POLICY_VALIDATE_DIR=/relay-policy \
 
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH GO111MODULE=on go build -buildvcs=false -a -o livekit-server ./cmd/server
 
-FROM docker.io/library/alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+FROM docker.io/library/alpine:3.24.3@sha256:c6b073f8e9e58d881f6ffba6ebf3b9ebd60b9e7d6e8337018c0e68bb5c356873
+
+ARG LIVEKIT_TAG
+LABEL org.opencontainers.image.base.version="${LIVEKIT_TAG}"
 
 # Upstream pulls the security patches of the pinned Alpine release; this build
 # starts with a cold layer cache too (no buildx cache in docker.yml).

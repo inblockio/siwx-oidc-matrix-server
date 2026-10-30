@@ -90,7 +90,7 @@ index 35fca79..f1c96ed 100644
 +
 +            await userEvent.click(screen.getByRole("menuitem", { name: "Copy Markdown" }));
 +
-+            expect(copyPlaintext).toHaveBeenCalledWith("**hi** ~~there~~");
++            expect(copyPlainTextToClipboard).toHaveBeenCalledWith("**hi** ~~there~~");
 +        });
 +    });
 +
@@ -104,7 +104,7 @@ index d320782..ee4a8c9 100644
 @@ -56,6 +56,7 @@ import { Action } from "../../../dispatcher/actions";
  import { type RoomPermalinkCreator } from "../../../utils/permalinks/Permalinks";
  import { type ButtonEvent } from "../elements/AccessibleButton";
- import { copyPlaintext, getSelectedText } from "../../../utils/strings";
+ import { getSelectedText } from "../../../utils/strings";
 +import { canCopyMarkdown, eventToMarkdown } from "../../../utils/eventToMarkdown";
  import ContextMenu, { toRightOf, type MenuProps } from "../../structures/ContextMenu";
  import ReactionPicker from "../emojipicker/ReactionPicker";
@@ -114,7 +114,7 @@ index d320782..ee4a8c9 100644
      };
  
 +    private onCopyMarkdownClick = (): void => {
-+        void copyPlaintext(eventToMarkdown(this.props.mxEvent));
++        void copyPlainTextToClipboard(eventToMarkdown(this.props.mxEvent));
 +        this.closeMenu();
 +    };
 +

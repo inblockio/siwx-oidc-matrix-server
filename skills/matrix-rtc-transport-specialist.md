@@ -57,7 +57,7 @@ Synapse    lk-jwt-service   LiveKit SFU
 |---|---|---|
 | MSC4143 | MatrixRTC core: exposes `/rtc/transports` endpoint | `msc4143_enabled: true` |
 | MSC4140 | Delayed events: auto-cleans interrupted calls | via `max_event_delay_duration` |
-| MSC4222 | `state_after` in sync v2: correct room state tracking | `msc4222_enabled: true` |
+| MSC4222 | `state_after` in sync v2: correct room state tracking | none: stable since Synapse 1.164.0 (flag removed) |
 | MSC3266 | Room Summary API: federation knocking | `msc3266_enabled: true` |
 
 ## Services (docker-compose.yml)
@@ -191,7 +191,6 @@ yq -i ".experimental_features.msc4108_enabled = true" /data/homeserver.yaml
 # MatrixRTC: enable experimental features for Element Call
 yq -i ".experimental_features.msc4143_enabled = true" /data/homeserver.yaml
 yq -i ".experimental_features.msc3266_enabled = true" /data/homeserver.yaml
-yq -i ".experimental_features.msc4222_enabled = true" /data/homeserver.yaml
 
 # Delayed events (MSC4140): auto-quit interrupted calls
 yq -i ".max_event_delay_duration = \"24h\"" /data/homeserver.yaml

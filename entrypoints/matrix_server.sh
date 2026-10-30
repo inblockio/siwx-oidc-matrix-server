@@ -822,7 +822,9 @@ apply_matrixrtc_config() {
   # MatrixRTC: enable experimental features for Element Call
   yq -i ".experimental_features.msc4143_enabled = true" /data/homeserver.yaml
   yq -i ".experimental_features.msc3266_enabled = true" /data/homeserver.yaml
-  yq -i ".experimental_features.msc4222_enabled = true" /data/homeserver.yaml
+  # MSC4222 (`state_after` in sync) is stable since Synapse 1.164.0, which removed the
+  # msc4222_enabled flag. Drop the key that earlier boots wrote into existing volumes.
+  yq -i "del(.experimental_features.msc4222_enabled)" /data/homeserver.yaml
 
   # Delayed events (MSC4140): auto-quit interrupted calls
   yq -i ".max_event_delay_duration = \"24h\"" /data/homeserver.yaml

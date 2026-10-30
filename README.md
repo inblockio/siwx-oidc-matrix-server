@@ -40,7 +40,7 @@ The Synapse and Element Web images built here are **not stock**: see
 
 ## What is and is not supported
 
-- **Homeserver: Synapse only.** The bundle runs Synapse `v1.163.0`, patched (see below).
+- **Homeserver: Synapse only.** The bundle runs Synapse `v1.164.1`, patched (see below).
   Other homeservers (Tuwunel, Dendrite, Conduit) are untested and unsupported.
 - **Delegated auth through Synapse's stable `matrix_authentication_service`
   integration.** Synapse's side of it, `/_synapse/mas/*`, is an internal API designed for
@@ -50,7 +50,7 @@ The Synapse and Element Web images built here are **not stock**: see
   its [Matrix integration guide](https://github.com/inblockio/siwx-oidc/blob/main/docs/matrix-integration.md).
 - **Clients must implement the Matrix OAuth 2.0 authentication API.** Clients that only
   know password login cannot sign in.
-- **Element Web is built from source** at `v1.12.32` with 11 vendored patches and a runtime
+- **Element Web is built from source** at `v1.12.33` with 11 vendored patches and a runtime
   overlay (configuration, theme, branding, a service-worker boot shim).
 - **Element X is used unmodified**, as distributed through the app stores. This repository
   does not patch it.
@@ -148,7 +148,7 @@ as real-time media.
 | `siwx-oidc` | `ghcr.io/inblockio/siwx-oidc` | OIDC provider (passkey, wallet and agent-key sign-in); takes the place of MAS as Synapse's auth service |
 | `redis` | `redis:8.10.2` | Session and token store for siwx-oidc |
 | `element-web` | `ghcr.io/inblockio/siwx-oidc-matrix-server/element-web`, built from source by `dockerfiles/Dockerfile.element` (Element Web + 11 patches, and the Element Call embedded build + 2 patches) | Web client |
-| `livekit` | `ghcr.io/inblockio/siwx-oidc-matrix-server/livekit-server`, built from upstream v1.13.10 by `dockerfiles/Dockerfile.livekit` (+ relay-policy patch) | MatrixRTC SFU for Element Call; embedded TURN is off by default |
+| `livekit` | `ghcr.io/inblockio/siwx-oidc-matrix-server/livekit-server`, built from upstream v1.13.11 by `dockerfiles/Dockerfile.livekit` (+ relay-policy patch) | MatrixRTC SFU for Element Call; embedded TURN is off by default |
 | `lk-jwt-service` | `ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service`, built by `dockerfiles/Dockerfile.lk-jwt` (upstream v0.9.0, no patch) | Issues LiveKit access tokens to Matrix users, only to members of the room (MSC4502 check) |
 
 The reverse proxy is not a service in `docker-compose.yml`. The maintainers' deployments
@@ -167,17 +167,17 @@ deployment is known to run a different version.
 
 | Component | Version / pin | Pinned in | Stock / patched / built |
 |---|---|---|---|
-| Synapse | `v1.163.0` (`matrixdotorg/synapse:v1.163.0@sha256:e98ab72138d9…`, index digest) | `dockerfiles/Dockerfile` (`FROM`) | **Patched**: 1 source patch, plus config written by `entrypoints/matrix_server.sh`. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/synapse` |
+| Synapse | `v1.164.1` (`matrixdotorg/synapse:v1.164.1@sha256:fa4aa980f279…`, index digest) | `dockerfiles/Dockerfile` (`FROM`) | **Patched**: 1 source patch, plus config written by `entrypoints/matrix_server.sh`. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/synapse` |
 | Synapse image the stack runs | default `…/synapse:sha-70b897e@sha256:986294c6147b…` (CI build of main at 70b897e, v1.162.0) | `docker-compose.yml` (`SYNAPSE_IMAGE_REF`); `real-stack/Dockerfile.synapse` (`ARG SYNAPSE_IMAGE`, same default, for the local real stack) | Built here |
-| Element Web | `v1.12.32` (git tag of element-hq/element-web; the build fails unless it resolves to commit `ed0a1239e853…`) | `dockerfiles/Dockerfile.element` (`ARG ELEMENT_WEB_TAG`, `ARG ELEMENT_WEB_COMMIT`) | **Built from source and patched**: 11 source patches, plus a runtime overlay |
+| Element Web | `v1.12.33` (git tag of element-hq/element-web; the build fails unless it resolves to commit `45671bc88ffe…`) | `dockerfiles/Dockerfile.element` (`ARG ELEMENT_WEB_TAG`, `ARG ELEMENT_WEB_COMMIT`) | **Built from source and patched**: 11 source patches, plus a runtime overlay |
 | Element Web image the stack runs | default `…/element-web:sha-33a0c95@sha256:1761832069bd…` (CI build of main at 33a0c95) | `docker-compose.yml` (`ELEMENT_IMAGE_REF`) | Built here |
-| Element Call | `v0.26.1` (git tag of element-hq/element-call; the build fails unless it resolves to commit `9f7c35cd8f84…`), built from source for the embedded widget; Element Web `v1.12.32` itself installs `0.26.0` (`@element-hq/element-call-embedded`) | `dockerfiles/Dockerfile.element` (stage `element-call`: `ARG ELEMENT_CALL_TAG`, `ARG ELEMENT_CALL_COMMIT`; `ARG ELEMENT_CALL_STOCK_VERSION` in `deps` is the installed package it replaces) | **Built from source and patched**: 2 source patches (`0180-bt-audio-output`, `0190-media-key-recovery`), whose `dist/` replaces the installed package's in the Element Web bundle (`element_call.use_exclusively` in `config/element-config.json`). The build fails when Element Web's tag installs another Element Call than `ELEMENT_CALL_STOCK_VERSION`, so a bump rebases the stage. Since `v1.12.31` the bundle also carries `@element-hq/element-call-component` (element-call commit `9b3c3569`, pinned by the lockfile) for the labs flag `feature_element_call_react`, which `config/element-config.json` does not set |
-| matrix-js-sdk | `44.0.0` | Not pinned here: same, via the Element Web tag | Stock, bundled |
-| Element Web build toolchain | `node:24.20.0-bullseye@sha256:25f3016fcdae…`; pnpm `11.23.0` (upstream `devEngines`, via corepack); `pnpm install --frozen-lockfile` | `dockerfiles/Dockerfile.element` (builder `FROM`, `corepack enable` step) | Stock |
+| Element Call | `v0.26.1` (git tag of element-hq/element-call; the build fails unless it resolves to commit `9f7c35cd8f84…`), built from source for the embedded widget; Element Web `v1.12.33` itself installs `0.26.1` (`@element-hq/element-call-embedded`), the same release | `dockerfiles/Dockerfile.element` (stage `element-call`: `ARG ELEMENT_CALL_TAG`, `ARG ELEMENT_CALL_COMMIT`; `ARG ELEMENT_CALL_STOCK_VERSION` in `deps` is the installed package it replaces) | **Built from source and patched**: 2 source patches (`0180-bt-audio-output`, `0190-media-key-recovery`), whose `dist/` replaces the installed package's in the Element Web bundle (`element_call.use_exclusively` in `config/element-config.json`). The build fails when Element Web's tag installs another Element Call than `ELEMENT_CALL_STOCK_VERSION`, so a bump rebases the stage. Since `v1.12.31` the bundle also carries `@element-hq/element-call-component` (element-call commit `9b3c3569`, pinned by the lockfile) for the labs flag `feature_element_call_react`, which `config/element-config.json` does not set |
+| matrix-js-sdk | `45.0.0` | Not pinned here: same, via the Element Web tag | Stock, bundled |
+| Element Web build toolchain | `node:24.20.0-bullseye@sha256:25f3016fcdae…`; pnpm `12.11.2` (upstream `devEngines`, via corepack); `pnpm install --frozen-lockfile` | `dockerfiles/Dockerfile.element` (builder `FROM`, `corepack enable` step) | Stock |
 | Element Web serving base | `nginxinc/nginx-unprivileged:1.31.6-alpine-slim@sha256:c81a27f28bc2…` | `dockerfiles/Dockerfile.element` (runtime `FROM`) | Stock, with our `config/element-nginx.conf` and security headers |
 | siwx-oidc | default `ghcr.io/inblockio/siwx-oidc:sha-40efae9@sha256:54739f4813bf…` (CI build of siwx-oidc main at 40efae9) | `docker-compose.yml` (`SIWX_OIDC_IMAGE_REF`) | First-party, built in [inblockio/siwx-oidc](https://github.com/inblockio/siwx-oidc) |
 | Redis | `8.10.2` (`redis:8.10.2@sha256:d5ac52db24d4…`) | `docker-compose.yml` (`REDIS_IMAGE_REF`) | Stock, run with `--appendonly yes` and a password ([docs/redis-password.md](docs/redis-password.md)) |
-| LiveKit server | `v1.13.10` (`livekit/livekit-server:v1.13.10@sha256:89ca9ce0791e…`) | `docker-compose.yml` (`LIVEKIT_IMAGE_REF`) | **Own patched build** (`dockerfiles/Dockerfile.livekit`, `ARG LIVEKIT_TAG`/`LIVEKIT_COMMIT`, same tag; the [relay policy, downlink padding and local delivery](patches/livekit/README.md)), published by CI as `…/livekit-server` and the compose default. A deployment that pins `LIVEKIT_IMAGE_REF` to the stock image runs that instead (those behaviors are then silently absent) |
+| LiveKit server | `v1.13.11` (our build of tag `v1.13.11`, commit `385aa40f9292…`; the e2e stack still runs stock `livekit/livekit-server:v1.13.10@sha256:89ca9ce0791e…`) | `docker-compose.yml` (`LIVEKIT_IMAGE_REF`) | **Own patched build** (`dockerfiles/Dockerfile.livekit`, `ARG LIVEKIT_TAG`/`LIVEKIT_COMMIT`, same tag; the [relay policy, downlink padding and local delivery](patches/livekit/README.md)), published by CI as `…/livekit-server` and the compose default. A deployment that pins `LIVEKIT_IMAGE_REF` to the stock image runs that instead (those behaviors are then silently absent) |
 | pion/turn | `v5.0.13` (commit `6ab77aaaf620…`) | `dockerfiles/Dockerfile.livekit` (`ARG PION_TURN_TAG`/`PION_TURN_COMMIT`) | **Patched copy** ([downlink padding](patches/pion-turn/README.md)); the module replaces the requirement for that build only. Upstream unmodified |
 | lk-jwt-service | upstream `v0.9.0` (commit `0e176b1eca44…`), unmodified; default image `…/lk-jwt-service:sha-5190a44@sha256:c4f9d1ebde0e…` (CI build of main at 5190a44, the first build without the retired `restrict-screen-share.patch`) | `dockerfiles/Dockerfile.lk-jwt` (`ARG LK_JWT_TAG`, `ARG LK_JWT_COMMIT`); `docker-compose.yml` (`LK_JWT_IMAGE_REF`) | **Own build, no patch.** Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/lk-jwt-service`, non-root (65532). A deployment that pins `LK_JWT_IMAGE_REF` to an upstream image runs that instead |
 | Caddy | `v2.11.7` (`caddy:2.11.7-builder@sha256:d842facfd63b…`, `caddy:2.11.7@sha256:685ae3d7c34d…`) | `dockerfiles/Dockerfile.caddy-l4` (builder and final `FROM`) | **Custom build** with xcaddy and the two modules below. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/caddy-l4` |

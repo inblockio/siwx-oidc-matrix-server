@@ -1518,6 +1518,10 @@ only `apps/web/src/utils/StorageAccess{,.test}.ts`, no file of 1-11.
   `jest.requireActual` / `mocked` / `jest.advanceTimersByTime` -> `vi.mock` /
   `vi.importActual` / `vi.mocked` / `vi.advanceTimersByTime`. Every other added/removed line
   is identical.
+- **Ported to v1.12.33 (2026-10-30).** Context only, no behaviour change: upstream replaced
+  `import * as Email from "../../../email"` in `InviteDialog.tsx` with `emailLooksValid` from
+  `@element-hq/element-web-shared-utils`, so the import hunk's last context line and its
+  position (line 17 -> 18) changed. Every added/removed line is identical.
 - **Retirement:** the `io.inblock.did` contract is retired. (The previous retirement
   condition, "siwx-oidc grows `/resolve`", is met, and the answer was to put the resolver
   in front, not to delete the formula: deleting it would drop DID search on federated
@@ -1935,6 +1939,12 @@ only `apps/web/src/utils/StorageAccess{,.test}.ts`, no file of 1-11.
   in #27, which also decides whether the 2026-09-01 filing policy above (today it gates
   entries 2, 3 and 4 on #34718) extends to this entry. Rule 3 applies in the meantime: this is an interim carrier, and it becomes UPSTREAM-TRACKED, with
   the vendored patch kept identical to the PR diff, the day it is filed.
+- **Ported to v1.12.33 (2026-10-30).** Upstream removed `copyPlaintext` from `utils/strings`
+  in favour of `copyPlainTextToClipboard` from `@element-hq/element-web-shared-utils`, which
+  `MessageContextMenu.tsx` already imports there. The menu hunk now calls
+  `copyPlainTextToClipboard`, the import context line reads `import { getSelectedText }`, and
+  the test asserts on `copyPlainTextToClipboard` (the stock test file already mocks that
+  package). Same behaviour: both write the plain string to the clipboard.
 - **Retirement:** upstream ships a copy-as-Markdown (or equivalent) message action. The patch
   then fails to apply on the `MessageContextMenu.tsx` hunks or becomes redundant: check, and
   drop it, together with `utils/eventToMarkdown.ts` and the `action.copy_markdown` string.
@@ -2014,9 +2024,9 @@ from the Element Call patch registry of the aqua-meet repository, where it is ro
      `ECConnectionFactory.test.ts`.
   The patch adds three files with the header "Copyright 2026 Aqua Meet contributors" and
   "SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial".
-- **How it reaches the image:** Element Web v1.12.32 does not build Element Call.
+- **How it reaches the image:** Element Web v1.12.33 does not build Element Call.
   `apps/web/webpack.config.ts` (line 719) copies `dist/**` of the installed npm package
-  `@element-hq/element-call-embedded` (0.26.0, `apps/web/package.json` line 127) into
+  `@element-hq/element-call-embedded` (0.26.1 since v1.12.33, `apps/web/package.json` line 126) into
   `apps/web/webapp/widgets/element-call/`, so a patch to Element Web's source cannot reach
   it. `dockerfiles/Dockerfile.element` therefore has a stage `element-call` (on the base image
   of `deps`, by digest) that shallow-clones Element Call at `ELEMENT_CALL_TAG`
@@ -2030,10 +2040,10 @@ from the Element Call patch registry of the aqua-meet repository, where it is ro
   hard-coded); the directory is removed and recreated, never
   overwritten in place, because pnpm hard-links package files from its store. The webpack
   step is not edited: it copies what it finds, as before. The replacement fails the build
-  when the installed package's version is not `ELEMENT_CALL_STOCK_VERSION` (0.26.0).
-  **We serve v0.26.1 plus the patch where Element Web ships 0.26.0**: the patch is generated
-  against the v0.26.1 tag, and the embedded package Element Web installs is an earlier
-  Element Call release.
+  when the installed package's version is not `ELEMENT_CALL_STOCK_VERSION` (0.26.1).
+  **We serve v0.26.1 plus the patches where Element Web ships stock 0.26.1** (since v1.12.33;
+  up to v1.12.32 it shipped 0.26.0, an earlier Element Call release): the patches are
+  generated against the v0.26.1 tag.
 - **Base delta (v0.26.0 to v0.26.1, upstream's own changes, not ours):** `git diff v0.26.0
   v0.26.1` in element-hq/element-call is six files. `src/state/MediaDevices.ts` puts the
   virtual default output first (element-call#4244, which the patch's Firefox case builds on),
@@ -2265,6 +2275,23 @@ to a pinned bookworm base because Playwright 1.63 refuses Debian 11. `tsc --noEm
 `apps/web` 0 errors and `oxlint` clean on every file the patches touch. A local test build
 of the whole image (`podman build`, not a deployed artefact) passes the builder's version
 stamp and marker loop.
+
+**v1.12.32 -> v1.12.33 bump (2026-10-30), per-patch outcome** (rule 4 against a pristine
+`v1.12.33`, `45671bc88f`, in Dockerfile order; no retirement condition is met, none of the
+patched behaviours is in the 1.12.33 release notes). Element Web 1.12.33 installs
+`@element-hq/element-call-embedded` 0.26.1, the release the `element-call` stage already
+builds, so `ELEMENT_CALL_STOCK_VERSION` moves to 0.26.1 and entries 13 and 14 are unchanged.
+
+| # | Patch | Outcome at v1.12.33 |
+|---|---|---|
+| 1 to 7 | | apply unchanged |
+| 8 | `resolve-did-search` | **ported**, `InviteDialog.tsx` import context (see entry 8) |
+| 9, 10 | | apply unchanged |
+| 11 | `copy-markdown` | **ported**, `copyPlaintext` -> `copyPlainTextToClipboard` in the menu and its test (see entry 11) |
+| 12 | `sw-idb-reconnect` | applies unchanged |
+
+Gate on the patched v1.12.33 tree: the `Element patch unit tests` job (`patch-tests` stage)
+of the bump pull request.
 
 ## Marker discrimination record
 

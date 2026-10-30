@@ -42,13 +42,26 @@
 # (destination_rooms_sticky_events_backlog, delta 94/11) and queues no
 # background update. See patches/synapse/README.md "Rollback".
 #
+# Bumped to v1.164.1 (2026-10-30; v1.164.0 released 2026-10-27, v1.164.1 on
+# 2026-10-28 adds the msgpack fix GHSA-j586-36cw-2gc2). 1.164.0 stabilised
+# MSC4222 and removed experimental_features.msc4222_enabled, so the entrypoint
+# now deletes that key instead of setting it. 1.164 requires an access token for
+# the MSC4140 delayed-event cancel/restart/send endpoints; lk-jwt-service sends
+# its application-service token there from v0.8.0 (this bundle builds v0.9.0).
+# The MSC4133 patch applies unchanged (offsets only: +3 lines in
+# config/experimental.py, +27 in handlers/profile.py). Rollback to v1.163.x is
+# schema-compatible: SCHEMA_VERSION 94 -> 95, SCHEMA_COMPAT_VERSION stays 84. See
+# patches/synapse/README.md "Rollback".
+#
 # Pinned by tag AND by the multi-arch index digest: the tag says which release,
 # the digest fixes the bytes (a re-pushed tag cannot change what we build on),
 # and it also fixes the Debian release the apt step below resolves against. A
 # bump changes both; resolve the digest with
 #   skopeo inspect --raw docker://docker.io/matrixdotorg/synapse:vX.Y.Z | sha256sum
 # and run the bump procedure in patches/synapse/README.md first.
-FROM matrixdotorg/synapse:v1.163.0@sha256:e98ab72138d90fa8b8876c6421fe78a9fdb181c0d7cc690ad740e5173e0c65e6
+FROM matrixdotorg/synapse:v1.164.1@sha256:fa4aa980f279bcf26d4e7ecc2a2c9a701c73f2ebe8841da9bdcf3b2fdf693d75
+# The release of the FROM line above; change both together.
+LABEL org.opencontainers.image.base.version="v1.164.1"
 # yq, pinned by version and SHA-256 (was `.../releases/latest/download/...`,
 # which re-resolved to whatever was newest on every rebuild). Bump deliberately:
 # the version, the binary's checksum and the LICENSE's (below) change together.
