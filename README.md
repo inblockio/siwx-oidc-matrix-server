@@ -40,7 +40,7 @@ The Synapse and Element Web images built here are **not stock**: see
 
 ## What is and is not supported
 
-- **Homeserver: Synapse only.** The bundle runs Synapse `v1.163.0`, patched (see below).
+- **Homeserver: Synapse only.** The bundle runs Synapse `v1.164.1`, patched (see below).
   Other homeservers (Tuwunel, Dendrite, Conduit) are untested and unsupported.
 - **Delegated auth through Synapse's stable `matrix_authentication_service`
   integration.** Synapse's side of it, `/_synapse/mas/*`, is an internal API designed for
@@ -167,7 +167,7 @@ deployment is known to run a different version.
 
 | Component | Version / pin | Pinned in | Stock / patched / built |
 |---|---|---|---|
-| Synapse | `v1.163.0` (`matrixdotorg/synapse:v1.163.0@sha256:e98ab72138d9…`, index digest) | `dockerfiles/Dockerfile` (`FROM`) | **Patched**: 1 source patch, plus config written by `entrypoints/matrix_server.sh`. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/synapse` |
+| Synapse | `v1.164.1` (`matrixdotorg/synapse:v1.164.1@sha256:fa4aa980f279…`, index digest) | `dockerfiles/Dockerfile` (`FROM`) | **Patched**: 1 source patch, plus config written by `entrypoints/matrix_server.sh`. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/synapse` |
 | Synapse image the stack runs | default `…/synapse:sha-70b897e@sha256:986294c6147b…` (CI build of main at 70b897e, v1.162.0) | `docker-compose.yml` (`SYNAPSE_IMAGE_REF`); `real-stack/Dockerfile.synapse` (`ARG SYNAPSE_IMAGE`, same default, for the local real stack) | Built here |
 | Element Web | `v1.12.33` (git tag of element-hq/element-web; the build fails unless it resolves to commit `45671bc88ffe…`) | `dockerfiles/Dockerfile.element` (`ARG ELEMENT_WEB_TAG`, `ARG ELEMENT_WEB_COMMIT`) | **Built from source and patched**: 11 source patches, plus a runtime overlay |
 | Element Web image the stack runs | default `…/element-web:sha-33a0c95@sha256:1761832069bd…` (CI build of main at 33a0c95) | `docker-compose.yml` (`ELEMENT_IMAGE_REF`) | Built here |

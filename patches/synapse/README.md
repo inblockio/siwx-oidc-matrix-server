@@ -27,7 +27,7 @@ The rules are the same as `patches/element-web/README.md`, and for the same reas
 
    ```bash
    # Fetch the two files at the new tag and dry-run every patch against them.
-   TAG=v1.163.0
+   TAG=v1.164.1
    d=$(mktemp -d); mkdir -p "$d/synapse/config" "$d/synapse/handlers"
    for f in config/experimental handlers/profile; do
      curl -sSf "https://raw.githubusercontent.com/element-hq/synapse/$TAG/synapse/$f.py" \
@@ -313,6 +313,22 @@ for an unknown user answers 403). Nothing in this repository creates users that 
 admin routes it uses are existing-user and media routes, and siwx-oidc provisions
 through `/_synapse/mas/provision_user`.
 
+**Bump to v1.164.1 (2026-10-30).** Reason: routine upstream bump; v1.164.1 is 1.164.0 plus the
+msgpack fix GHSA-j586-36cw-2gc2 (memory exhaustion through the public room list) and a profile
+`null` fix. The patch applies unchanged with `--fuzz=0`, offsets only (`config/experimental.py`
+hunk 2 by +3 lines, the three `handlers/profile.py` hunks by +27). On an upstream v1.164.1
+checkout carrying the patch, this entry's seven tests and upstream's profile suites
+(`tests.rest.client.test_profile`, `tests.handlers.test_profile`, `tests.storage.test_profile`,
+`tests.config.test_experimental`, `tests.rest.synapse.mas`) pass: 212 tests, 0 failures. The
+`inblock_directory` tests (`synapse-modules/run-tests.sh`) pass at v1.164.1: 41 tests. What
+1.164 changes for this bundle: `experimental_features.msc4222_enabled` is gone (MSC4222 is
+stable), so the entrypoint deletes the key instead of setting it; the MSC4140 delayed-event
+`cancel`/`restart`/`send` endpoints require an access token and answer 404 for another user's
+`delay_id`, which lk-jwt-service meets from v0.8.0 with its application-service tokens (this
+bundle builds v0.9.0 and requires them); profile fields reject `null` values (#20153); the
+unstable MSC2965 auth metadata endpoint and well-known key are removed (the stable
+`/_matrix/client/v1/auth_metadata` stays).
+
 **Rollback (1.161.0 to 1.159.0).** Schema-compatible: `SCHEMA_VERSION` 94 and
 `SCHEMA_COMPAT_VERSION` 84 at both tags. But 1.161 queues three background updates
 that 1.159 has no handler for (`device_lists_changes_in_room_unconverted_idx`,
@@ -330,6 +346,15 @@ must not list any of the three.
 unsent MSC4354 sticky events, with a foreign key to `rooms` that cascades on delete), and queues
 no background update. 1.162 ignores the extra table. Sticky events are experimental
 (`msc4354_enabled`, off by default and not set here), so the table stays empty on this bundle.
+
+**Rollback (1.164.1 to 1.163.x).** Schema-compatible: `SCHEMA_VERSION` 94 -> 95 and
+`SCHEMA_COMPAT_VERSION` stays 84. Delta `95/01_foreground_event_edges_state_cleanup.py`
+(Postgres only) forces the old background update `event_edges_drop_invalid_rows` (schema 71)
+in the foreground at startup when it is still pending, which can lengthen the first start;
+otherwise it is a no-op. Check before the bump with
+`SELECT update_name FROM background_updates WHERE update_name='event_edges_drop_invalid_rows';`.
+1.164 stops using `delayed_events_stream_pos`, so after a rollback 1.163 resumes delayed-event
+handling from a stale position (low impact). 1.164 queues no background update 1.163 lacks.
 
 **Retirement condition.** #19980 (or a successor implementing issue #18525) merges
 and ships in a Synapse release we have adopted, with the guard still exempting
