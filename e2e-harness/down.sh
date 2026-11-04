@@ -24,7 +24,7 @@ echo "[down] removing siwx-e2eh-* containers ..."
 # Remove the fed-proxy FIRST: it shares siwx-e2eh-lk-jwt's network namespace
 # (--network container:siwx-e2eh-lk-jwt), so it must go before the container that
 # owns that namespace — otherwise it is orphaned and `podman ps -a` still lists it.
-for c in siwx-e2eh-fed-proxy siwx-e2eh-caddy siwx-e2eh-lk-jwt siwx-e2eh-livekit siwx-e2eh-synapse siwx-e2eh-oidc siwx-e2eh-redis; do
+for c in siwx-e2eh-fed-proxy siwx-e2eh-caddy siwx-e2eh-element-call siwx-e2eh-lk-jwt siwx-e2eh-livekit siwx-e2eh-synapse siwx-e2eh-oidc siwx-e2eh-redis; do
   podman rm -f "$c" >/dev/null 2>&1 || true
 done
 

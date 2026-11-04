@@ -79,7 +79,7 @@ export E2E_EXPECT_SHA="${E2E_EXPECT_SHA:-}"
 export E2E_EXPECT_REF="${E2E_EXPECT_REF:-}"
 export E2E_ALLOW_DIRTY="${E2E_ALLOW_DIRTY:-0}"
 
-E2EH_CONTAINERS=(siwx-e2eh-redis siwx-e2eh-oidc siwx-e2eh-synapse siwx-e2eh-livekit siwx-e2eh-lk-jwt siwx-e2eh-caddy)
+E2EH_CONTAINERS=(siwx-e2eh-redis siwx-e2eh-oidc siwx-e2eh-synapse siwx-e2eh-livekit siwx-e2eh-lk-jwt siwx-e2eh-element-call siwx-e2eh-caddy)
 
 log() { printf '%s\n' "$*" >&2; }
 

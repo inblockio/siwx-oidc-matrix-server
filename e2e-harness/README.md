@@ -18,7 +18,7 @@ This harness tests the working tree. To rehearse an upgrade from the images a de
 use the qualification lab instead (`docker-compose.local.yml` plus `docker-compose.qualify.yml`,
 every image by digest; see the root README, "Qualification lab").
 
-Host ports: edge `18080`, siwx-oidc `18081`, Synapse `18448`, LiveKit
+Host ports: edge `18080`, siwx-oidc `18081`, Element Call `18082`, Synapse `18448`, LiveKit
 `7880`, `7881/tcp`, `20100-20200/udp`. Artifacts and `summary.json` land in
 `e2e-harness/artifacts/<run-id>/`.
 
@@ -81,3 +81,23 @@ Nothing in the repo could rebuild them, so ordinary image cleanups
 its defaults. The Synapse tag was also misleading: at the end it pointed at a
 build of `dockerfiles/Dockerfile`, not `real-stack/Dockerfile.synapse` as its
 name suggests.
+
+## Element Call (H14, 2026-10-08)
+
+`siwx-e2eh-element-call` serves the standalone Element Call SPA at the version production embeds
+(v0.24.0, revision `6f7dac31`) on `http://localhost:18082`, for browser tests that need a real
+Element Call publisher (aqua-agents, `docs/handover/2026-10-08-scribe-harness-h14-element-call-design.md`).
+
+| Piece | Where |
+|---|---|
+| Image, pinned by digest (`ELEMENT_CALL_IMAGE_REF` overrides) | `up.sh` |
+| Config, read-only bind mount to `/app/config.json` | `config/element-call.e2e.json` (production's widget config plus `default_server_config` and `livekit.livekit_service_url`) |
+| Served-build check, run by `up.sh` right after the start; a failure removes the container and stops the bring-up | `element-call-check.sh <container>`: entry chunk `assets/index-Hj2GaSQY.js` sha256 (plain and `.gz`), `index.html` loads it, config is read-only and byte-equal to the repo file |
+| Edge site `:18082` (an origin root: the SPA uses absolute `/assets` paths) | `Caddyfile.e2e` |
+
+Synapse advertises its LiveKit focus through MSC4143 `rtc/transports`, and Element Call 0.24.0
+reads only that (and `config.json`), not `.well-known`. The entrypoint's default,
+`https://${MATRIX_HOST}/livekit/jwt`, is `https://localhost/livekit/jwt` here, where nothing
+listens, so `up.sh` sets `MATRIX_RTC_LIVEKIT_SERVICE_URL=${MATRIX_BASE_URL}/livekit/jwt`.
+Deployments leave it unset and keep the default byte for byte. The entrypoint applies it on
+every boot, so an existing data volume picks it up on the next `up.sh`.
