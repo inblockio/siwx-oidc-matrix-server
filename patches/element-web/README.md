@@ -61,9 +61,8 @@ Rules of this registry:
      allowed when it is (a) recorded in the entry, (b) pinned to a named provenance
      commit on a branch of our fork, and (c) carries a stated condition for closing
      the gap. Unrecorded drift is still forbidden — that is the whole point of the
-     rule. A second, test-only exception is approved for entry 9 (a maintainer
-     decision, 2026-10-05). It takes effect only when #35242 picks up #34955; see that
-     entry.
+     rule. A second, test-only exception for entry 9 (a maintainer decision,
+     2026-10-05) closed on 2026-11-04 without ever taking effect; see that entry.
    - **POLICY** — deployment policy that is not upstreamable. The only permanent
      residents.
    Today exactly one entry is UPSTREAM-TRACKED: #6 `browser-eventindex`
@@ -120,9 +119,8 @@ Rules of this registry:
        gh api "repos/$r/issues/$n" --jq "\"$r#$n \(.state) merged=\(.pull_request.merged_at) last=\(.updated_at[0:10])\""; done
    ```
    Second, compare every entry under the no-drift discipline (rule 3) against its PR's
-   current diff. The added/removed lines must be identical (the `index` lines may
-   differ, and once in effect entry 9's approved test-only deviation is the expected
-   output; see entry 9); no output before the echo means no drift:
+   current diff. The added/removed lines must be identical (the `index` lines and hunk
+   offsets may differ); no output before the echo means no drift:
    ```bash
    pm() { grep -E '^[+-]' | grep -vE '^(\+\+\+|---) '; }
    diff <(gh api repos/element-hq/element-web/pulls/35242 -H 'Accept: application/vnd.github.diff' | pm) \
@@ -1597,14 +1595,24 @@ only `apps/web/src/utils/StorageAccess{,.test}.ts`, no file of 1-11.
   `serverSupport.test.ts` (7 tests). Markers in the built `/app/sw.js`: `not caching
   server support`, `retrying without one` (rows of `markers.tsv`, which the Dockerfile
   checks and fails the build on if either is missing).
-- **Byte-for-byte the upstream PR diff.** The patch is `git diff upstream/develop` of
-  branch `fix/sw-versions-not-cached-on-error` on inblockio/element-web (four commits:
-  (b), (a), (c), then a SonarCloud follow-up; PR head `246724f407`), byte-identical apart
-  from the `index` line of `index.ts`, which carries the v1.12.29 blob ids so that entry
-  10's `index` line chains from it. Applied to v1.12.29, the only difference between
-  the two trees in this file is the unrelated `ACCESS_TOKEN_IV` -> `ACCESS_TOKEN_NAME`
-  rename (#35077), which no hunk touches. Keep them identical: a change here is a change to the PR, and the
-  reverse.
+- **Byte-for-byte the upstream PR diff.** The patch is `git diff $(git merge-base HEAD
+  upstream/develop) HEAD` of branch `fix/sw-versions-not-cached-on-error` on
+  inblockio/element-web (PR head `49d24851ac`), byte-identical apart from the `index` line
+  of `index.ts`, which carries the v1.12.33 blob ids (`1fc47aa1af..a4853758ba`) so that
+  entry 10's `index` line chains from it. Its hunk headers carry `develop`'s line numbers;
+  `git apply` places them at v1.12.33 with offsets only (no fuzz). It now also carries
+  upstream's `index.test.ts` (one mock line, see below). Keep them identical: a change
+  here is a change to the PR, and the reverse.
+- **Re-vendored 2026-11-04 from PR head `49d24851ac`** (was `246724f407`). Since then the
+  PR got a merge of `develop` by the reviewer (`c6b4a00af6`, 2026-11-02), then two commits
+  answering the review: `9fc67a917c` makes the `/versions` mock in upstream's
+  `index.test.ts` return a real `Response` (the old mock had no `ok`, so the two token
+  tests failed in the PR's CI, as predicted below), and `49d24851ac` moves the inline
+  comments of the check into TSDoc on `checkServerSupport`, `tryUpdateServerSupportMap`,
+  `serverSupportChecks` and `discardBody` (comments only, no code change). Rule 4b: 0
+  differing added/removed lines. At v1.12.33 with all twelve Element patches applied,
+  `scripts/element-patch-tests.sh` passes 17/17 files (1918 tests), including
+  `index.test.ts` 4/4, `serverSupport.test.ts` 7/7 and `mediaTokenRetry.test.ts` 6/6.
 - **Re-vendored 2026-09-29 from PR head `246724f407`** (was `4ea5f83813`). The SonarCloud
   follow-up throws a `TypeError` for an `ok` response without a `versions` list (a
   non-`ok` response keeps its own `Error`, both messages end `not caching server
@@ -1658,10 +1666,11 @@ only `apps/web/src/utils/StorageAccess{,.test}.ts`, no file of 1-11.
   2026-09-28). PR:
   [element-web#35242](https://github.com/element-hq/element-web/pull/35242) (opened
   2026-09-28, head inblockio/element-web `fix/sw-versions-not-cached-on-error` at
-  `246724f407` since 2026-09-29, was `4ea5f83813`; no force-push from here on). Checked
-  2026-10-05: #35241 and #35242 both open, not merged. #35242's only review requested
-  changes to the description (addressed 2026-09-29, re-review pending), and its build
-  and test workflows still wait for a maintainer's first-time-contributor approval.
+  `49d24851ac` since 2026-11-04, earlier `246724f407` and `4ea5f83813`; no force-push).
+  Checked 2026-11-04: #35241 and #35242 both open, not merged. The second review
+  (florianduros, 2026-11-02) found the change sane and requested two things: the failing
+  tests (the `index.test.ts` mock) and TSDoc explaining the check's paths; both answered
+  by the 2026-11-04 push, re-review pending.
   Drafts as filed in `docs/upstream/2026-09-28-element-sw-versions/`. Our tests live in
   `serverSupport.test.ts` so that they do not conflict with the maintainer PR #34955
   (hughns), which adds `serviceworker/index.test.ts`.
@@ -1677,8 +1686,11 @@ only `apps/web/src/utils/StorageAccess{,.test}.ts`, no file of 1-11.
   Element's `tests.yml` runs on the PR merged with `develop` and in the merge queue, so
   #35242 needs that change as soon as its CI runs. Bringing it in takes a merge of
   `develop` into the PR branch (a rebase would be a force-push).
-- **Approved deviation (test-only, a maintainer decision 2026-10-05; NOT in effect
-  yet).** It takes effect when #35242 picks up #34955 together with the mock change
+- **Approved deviation (test-only, a maintainer decision 2026-10-05; CLOSED 2026-11-04
+  without taking effect).** Our tag reached v1.12.31+ (which contains #34955 and
+  `index.test.ts`) before the PR picked up #34955, so condition (c) was met first and the
+  re-vendor from `49d24851ac` carries the full PR diff, `index.test.ts` hunk included.
+  The original terms, for the record: it was to take effect when #35242 picks up #34955 together with the mock change
   above. From then on the PR diff also changes `apps/web/src/serviceworker/index.test.ts`,
   which does not exist at v1.12.29 or v1.12.30, so the vendored entry 9 cannot carry that
   hunk and leaves it out. Every other added/removed line stays identical to the PR, and
@@ -1760,6 +1772,10 @@ only `apps/web/src/utils/StorageAccess{,.test}.ts`, no file of 1-11.
   `246724f407`. It still applied (hunks 4 and 5 at offset -4), but its `index` line and
   those two hunk headers were refreshed so the chain from entry 9 holds. Added/removed
   lines unchanged (0 differences), no behaviour change.
+- **Header refresh (2026-11-04):** regenerated at v1.12.33 on top of entry 9 re-vendored
+  from `49d24851ac`, whose TSDoc moves hunks 4 and 5 by 26 and 46 lines. Only the `index`
+  line (`a4853758ba..73ca654e18`) and the five hunk headers changed; added/removed lines
+  unchanged (0 differences), no behaviour change.
 - **Why:** with entry 9 alone, the media request issued inside the stale-token window
   (between access-token expiry and the app's 401-triggered refresh) still goes to the
   authenticated endpoint with the expired token and gets a 401; the image stays blank
