@@ -262,8 +262,8 @@ load-bearing, and 13 is applied after 12. Registry (all thirteen entries):
    the MSC4108 QR check code approves once both digits are typed. UX POLICY.
 6. [`browser-eventindex.patch`](patches/element-web/browser-eventindex.patch):
    encrypted-room search in the browser, behind the labs flag
-   `feature_web_event_index`. Tracks element-hq/element-web#34718 and deliberately
-   leads it. UPSTREAM-TRACKED.
+   `feature_web_event_index`. element-hq/element-web#34718 was declined and closed on
+   2026-11-05; the module-API route is parked. FEATURE, UPSTREAM DECLINED.
 7. [`show-attested-did.patch`](patches/element-web/show-attested-did.patch): shows
    the provider-attested DID (`io.inblock.did`) in the member panel and in All
    settings → Account. POLICY.

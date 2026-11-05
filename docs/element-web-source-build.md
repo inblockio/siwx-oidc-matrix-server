@@ -19,7 +19,7 @@ Two examples of why:
 
 - `force-first-device-recovery.patch` (POLICY) makes a recoverable identity (4S)
   mandatory on first login (`MatrixChat.tsx`).
-- `browser-eventindex.patch` (UPSTREAM-TRACKED, element-hq/element-web#34718) gives
+- `browser-eventindex.patch` (FEATURE, UPSTREAM DECLINED: element-hq/element-web#34718 closed 2026-11-05) gives
   hosted Element Web encrypted-room search through Element's EventIndex hook, behind
   the labs flag `features.feature_web_event_index` (off unless set). It retires when
   the upstream PR merges.
