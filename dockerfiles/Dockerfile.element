@@ -126,7 +126,7 @@ RUN git clone --depth 1 --branch "${ELEMENT_WEB_TAG}" \
 #  - offer-verify-current-session: UPSTREAM dead end. An unverified session was
 #    shown a card that offered no action and no reason, leaving the DESTRUCTIVE
 #    identity reset as the only visible exit.
-#  - browser-eventindex:           UPSTREAM-TRACKED (element-web PR #34718).
+#  - browser-eventindex:           FEATURE, UPSTREAM DECLINED (element-web PR #34718 closed 2026-11-05).
 #    Implements the stock EventIndex hook so E2EE search works in hosted
 #    Element Web, behind the labs flag feature_web_event_index (default OFF).
 #

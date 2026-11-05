@@ -55,7 +55,7 @@ Rules of this registry:
    - **UPSTREAM-TRACKED** — a feature we are actively trying to get merged upstream.
      Also an interim carrier. The vendored patch and the upstream PR must be kept in
      sync; drifting them splits our deployment from what reviewers are reading.
-     **One sanctioned exception exists today** (a maintainer decision, 2026-09-13): entry 6's vendored
+     **One sanctioned exception existed** (a maintainer decision, 2026-09-13; it ended on 2026-11-05 when #34718 was closed, leaving no PR to keep in sync): entry 6's vendored
      patch deliberately LEADS PR #34718 by the non-blocking-load work, because prod
      needed that before upstream was ready to receive it. A deliberate lead is only
      allowed when it is (a) recorded in the entry, (b) pinned to a named provenance
@@ -65,8 +65,9 @@ Rules of this registry:
      2026-10-05) closed on 2026-11-04 without ever taking effect; see that entry.
    - **POLICY** — deployment policy that is not upstreamable. The only permanent
      residents.
-   Today exactly one entry is UPSTREAM-TRACKED: #6 `browser-eventindex`
-   ([element-web#34718](https://github.com/element-hq/element-web/pull/34718)).
+   Today no entry is UPSTREAM-TRACKED. Entry 6 (`browser-eventindex`) was, until
+   [element-web#34718](https://github.com/element-hq/element-web/pull/34718) was declined and
+   closed on 2026-11-05; it is now a FEATURE with a parked upstream route (see the entry).
    Entry 9 stays an UPSTREAM DEFECT, but its fix is filed as
    [element-web#35242](https://github.com/element-hq/element-web/pull/35242) (see the
    policy exception below) and its vendored patch is byte-for-byte the prepared PR diff,
@@ -126,10 +127,9 @@ Rules of this registry:
    diff <(gh api repos/element-hq/element-web/pulls/35242 -H 'Accept: application/vnd.github.diff' | pm) \
         <(pm < patches/element-web/sw-versions-no-cache-on-error.patch) && echo "entry 9: no drift"
    ```
-   Entry 6 is expected to differ from #34718 by its recorded lead only; check the
-   difference against its named provenance commit instead. Third, evaluate the
-   #34718 gate of the upstream filing policy below (SUCCESS / FAILURE / AMBIGUOUS) and
-   record the outcome and date there, as that policy requires.
+   Entry 6 has no PR to compare against since #34718 was closed (2026-11-05); compare it
+   against its named provenance commit only. The #34718 gate of the upstream filing
+   policy below is resolved (FAILURE, 2026-11-05) and is not evaluated again.
 5. **Non-`.patch` deltas count too.** The runtime stage of Dockerfile.element also
    modifies the served app; those deltas are listed at the bottom of this file.
 6. **The repo README mirrors this list.** Its "Upstream deviations (patches)" section
@@ -183,6 +183,24 @@ reports `mergeable_state: dirty` (it conflicts with `develop`, which now carries
 tokenizer-mode change to `initEventIndex`, #33048). 18 conversation comments, 5 review
 comments, labels unchanged. Entries 2, 3 and 4 stay unfiled; re-evaluate on
 2026-12-01 or at the next tag bump, whichever comes first.
+
+**Evaluated 2026-11-05, on the event rather than the date: FAILURE. Entries 2, 3 and 4
+are not filed.** Both FAILURE clauses hold. Explicitly rejected: after a team discussion
+the assigned crypto reviewer, uhoreg, wrote that Element is "not willing to merge this at
+this time", because it lacks the capacity to support it and message search on Element Web
+is a lower priority
+([comment](https://github.com/element-hq/element-web/pull/34718#issuecomment-6669961896)).
+Closed unmerged: the author thanked both maintainers and closed it on 2026-11-05
+([comment](https://github.com/element-hq/element-web/pull/34718#issuecomment-6671159155)).
+Not AMBIGUOUS: the route Element offered (move message search, Seshat included, into the
+module API) is not a different implementation of this feature for core but a separate,
+generic change after which the feature lives outside Element; it is parked (entry 6).
+As this policy says: carry 2, 3 and 4 as vendored patches and stop treating "not yet
+filed" as a TODO. Entry 9's filing (#35242) is an exception outside this gate and is
+unaffected. Repo issue #27 decides whether the gate extends to entry 11; this outcome is
+an input to that decision, not the decision. The pilot measured a feature PR, while 2, 3
+and 4 are defect fixes, so revisiting them is a maintainer decision this outcome does not
+make.
 
 **Baseline as of 2026-09-01** (so drift is measurable, not remembered):
 
@@ -479,7 +497,7 @@ only `apps/web/src/utils/StorageAccess{,.test}.ts`, no file of 1-11.
   entry 4's note records. The marker (`open_approval_page` in the served English strings)
   proves only that the patch's string hunk reached the build.
 
-### 6. `browser-eventindex.patch` — UPSTREAM-TRACKED (PR #34718 open; carry until merged)
+### 6. `browser-eventindex.patch` — FEATURE, UPSTREAM DECLINED (PR #34718 closed 2026-11-05; carry; module-API route parked)
 
 - **Applied by:** `dockerfiles/Dockerfile.element` (the only one), SIXTH.
 - **What:** a `BrowserEventIndexManager` implementing Element's
@@ -1184,7 +1202,52 @@ only `apps/web/src/utils/StorageAccess{,.test}.ts`, no file of 1-11.
       the `patch-tests` result is under the v1.12.32 bump record below.
     - **Not run here:** the in-patch Playwright spec (upstream's harness needs a Synapse
       container) and the siwx-oidc UX1-UX8 leg, which run against a built image.
-- **Upstream status: FILED AND ACTIVELY TRACKED — we are trying to get this
+- **Upstream status: DECLINED AND CLOSED on 2026-11-05; the module-API route is PARKED.**
+  After a team discussion, uhoreg (Element crypto team, the assigned reviewer) declined to
+  merge #34718: Element lacks the capacity to support it, and message search on Element Web
+  is a lower priority
+  ([comment](https://github.com/element-hq/element-web/pull/34718#issuecomment-6669961896)).
+  He offered another route if the Web App team agrees: a PR that moves message searching
+  into the module API, including switching the existing Seshat-based search over, so a
+  custom build can add this feature. t3chguy (Web App team) replied "I imagine it'd be
+  reasonable". The author thanked both, parked that route and closed #34718 unmerged
+  ([comment](https://github.com/element-hq/element-web/pull/34718#issuecomment-6671159155)),
+  promising an issue first and a link back if it is picked up. The branch
+  `inblockio:feat/web-event-index` stays on the fork, and
+  [element-meta#3294](https://github.com/element-hq/element-meta/issues/3294) stays open.
+  The keep-in-sync rule in the history below no longer applies: there is no PR to mirror.
+
+  **The parked route, as evaluated on 2026-11-05 (nothing built):**
+  - One upstream PR, interface only: expose the existing `BaseEventIndexManager` contract
+    (18 methods) through the module API as a provider registration, on the pattern of
+    `UrlPreviewApi.registerPreviewHandler`. Seshat's IPC manager becomes the built-in
+    provider; Element keeps the crawler (`EventIndex.ts`) and the search UI. No behaviour
+    change, and none of this patch's engine. Closest precedent: element-web#35440 (the
+    document viewer exposed through the module API, +750/-167).
+  - This patch's engine then ships as an out-of-tree module. Element Web loads modules at
+    runtime from the `modules` list in `config.json` (`loadModules` in
+    `apps/web/src/vector/init.tsx`), so the deployment becomes a stock image plus one
+    config line, and this entry retires.
+  - Key material: a module cannot reach the session pickle key this patch derives its DEK
+    from. Candidate: a module-owned non-extractable `CryptoKey` in IndexedDB, deleted in
+    `deleteEventIndex` (which `Lifecycle.clearStorage()` calls on logout). Check it against
+    I1–I8 ("session-bound key") before choosing it; if they require derivation from the
+    session, the interface has to hand the provider a derived per-provider secret instead.
+  - The crawl and stats hooks (`shouldCrawl`; loading and coverage-date fields for
+    `SearchWarning`) follow as separate, small, optional additions.
+  - The same interface later takes matrix-sdk-search compiled to WASM as a module swap.
+  - Order if resumed: an element-web issue first (CONTRIBUTING requires a linked issue for
+    all but trivial PRs, and the closing comment promised one), then the PR. A human opens
+    and writes both (Element policy since 2026-10-02). Address the shape question to
+    `@t3chguy`, not `@t3guy`, which is a different, real account.
+
+  **Re-entry triggers:** re-vendoring this patch at an Element tag bump becomes costly or
+  conflicts; Element adds a search or event-index surface to the module API on its own
+  (read `packages/module-api/element-web-module-api.api.md` at each bump);
+  element-meta#3252 (Element X search) gains Web subtasks; a maintainer decides to retire
+  this patch. Do not restart the route without a maintainer decision.
+
+  **History, superseded on 2026-11-05. Was: FILED AND ACTIVELY TRACKED, trying to get this
   merged.** [element-hq/element-web#34718](https://github.com/element-hq/element-web/pull/34718)
   "Add a browser EventIndex so encrypted-room search works on the web"
   (`inblockio:feat/web-event-index` → `element-hq:develop`, author
@@ -1233,11 +1296,11 @@ only `apps/web/src/utils/StorageAccess{,.test}.ts`, no file of 1-11.
   lines this one now adds in the `labs` section (it lands at offset +1,
   cleanly). Verified 2026-09-12 by applying all eight in Dockerfile order to
   a pristine v1.12.26 tree.
-- **Retirement:** when #34718 (or an upstream equivalent) merges and ships in a
-  tag we deploy, PROVIDED it still meets I1–I8 (ciphertext at rest,
-  session-bound key, logout wipe) — verify those against the merged form, since
-  review may change the store. Also retires if product stops requiring
-  hosted-Web search.
+- **Retirement (rewritten 2026-11-05, #34718 closed):** when this engine runs as a module
+  on a stock Element Web tag we deploy (the parked route under Upstream status), or when
+  upstream ships its own browser search in such a tag, PROVIDED the replacement still
+  meets I1–I8 (ciphertext at rest, session-bound key, logout wipe); verify those against
+  what actually ships. Also retires if product stops requiring hosted-Web search.
 - **Coverage:** the patch now carries its own Playwright leg,
   `apps/web/playwright/e2e/crypto/web-event-index.spec.ts` (3 tests under
   `labsFlags: ["feature_web_event_index"]`, driving the **real** room-info
@@ -1952,8 +2015,8 @@ only `apps/web/src/utils/StorageAccess{,.test}.ts`, no file of 1-11.
     link labels, code spans and alt text.
 - **Upstream status:** **not filed.** No element-hq issue or PR for a copy-as-Markdown action
   exists (searched 2026-10-02). Filing is on hold by maintainer decision (2026-10-03), tracked
-  in #27, which also decides whether the 2026-09-01 filing policy above (today it gates
-  entries 2, 3 and 4 on #34718) extends to this entry. Rule 3 applies in the meantime: this is an interim carrier, and it becomes UPSTREAM-TRACKED, with
+  in #27, which also decides whether the 2026-09-01 filing policy above (it gated entries 2, 3 and 4 on #34718, resolved FAILURE on
+  2026-11-05) extends to this entry. Rule 3 applies in the meantime: this is an interim carrier, and it becomes UPSTREAM-TRACKED, with
   the vendored patch kept identical to the PR diff, the day it is filed.
 - **Ported to v1.12.33 (2026-10-30).** Upstream removed `copyPlaintext` from `utils/strings`
   in favour of `copyPlainTextToClipboard` from `@element-hq/element-web-shared-utils`, which
