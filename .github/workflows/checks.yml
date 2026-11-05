@@ -11,6 +11,10 @@
 #
 # Deliberately NO `paths-ignore: ['**.md']`: the patch registries are markdown,
 # and a registry-only edit is exactly what check-patch-registry.sh must see.
+# A change of documentation only skips it (aqua-ops RULE-OPS-002, 2026-11-06)
+# through a `paths` allow-list that keeps those in: patches/** (the registries),
+# the root README.md (check-patch-registry.sh reads it) and docs/copy-markdown/**
+# (the vectors check-copy-markdown-vectors.py compares).
 #
 # `lk-jwt-membership-accept` needs network for one thing only: it downloads the
 # pinned mikefarah yq (the entrypoint's own yq), verified by SHA-256, the same
@@ -23,8 +27,22 @@ name: Checks
 
 on:
   pull_request:
+    paths:
+      - '**'
+      - '!docs/**'
+      - '!**/*.md'
+      - 'README.md'
+      - 'patches/**'
+      - 'docs/copy-markdown/**'
   push:
     branches: [main]
+    paths:
+      - '**'
+      - '!docs/**'
+      - '!**/*.md'
+      - 'README.md'
+      - 'patches/**'
+      - 'docs/copy-markdown/**'
 
 permissions:
   contents: read
