@@ -162,3 +162,44 @@ index 1671f79..4d6221b 100644
          "forgot_recovery_key": "Forgot recovery key?",
          "identity_needs_reset_description": "You have to reset your digital identity in order to ensure access to your chat history",
          "import_invalid_keyfile": "Not a valid %(brand)s keyfile",
+diff --git a/apps/web/src/components/structures/MatrixChat.test.tsx b/apps/web/src/components/structures/MatrixChat.test.tsx
+index 8dac065..4beabbf 100644
+--- a/apps/web/src/components/structures/MatrixChat.test.tsx
++++ b/apps/web/src/components/structures/MatrixChat.test.tsx
+@@ -122,6 +122,8 @@ function createMockCrypto(): CryptoApi {
+         isDehydrationSupported: vi.fn().mockReturnValue(false),
+         getDeviceVerificationStatus: vi.fn().mockResolvedValue({ signedByOwner: true } as DeviceVerificationStatus),
+         isCrossSigningReady: vi.fn().mockReturnValue(false),
++        // Read by force-first-device-recovery.patch; true leaves the stock gate (cross-signing alone).
++        isSecretStorageReady: vi.fn().mockResolvedValue(true),
+         requestOwnUserVerification: vi.fn().mockResolvedValue({ cancel: vi.fn(), on: vi.fn() }),
+     } as any;
+ }
+@@ -190,6 +192,9 @@ describe("<MatrixChat />", () => {
+         setGuest: vi.fn(),
+         setNotifTimelineSet: vi.fn(),
+         getAccountData: vi.fn(),
++        // Read by force-first-device-recovery.patch: with force_verification on, its gate probes the server for
++        // 4S via client.http before deciding, also for a client with no crypto (the result is the same as stock).
++        http: { authedRequest: vi.fn().mockResolvedValue(null) },
+         doesServerSupportUnstableFeature: vi.fn().mockResolvedValue(false),
+         getDevices: vi.fn().mockResolvedValue({ devices: [] }),
+         getProfileInfo: vi.fn().mockResolvedValue({
+@@ -200,6 +205,8 @@ describe("<MatrixChat />", () => {
+         getCrypto: vi.fn().mockReturnValue({
+             getVerificationRequestsToDeviceInProgress: vi.fn().mockReturnValue([]),
+             isCrossSigningReady: vi.fn().mockReturnValue(false),
++            // Read by force-first-device-recovery.patch; true leaves the stock gate (cross-signing alone).
++            isSecretStorageReady: vi.fn().mockResolvedValue(true),
+             isDehydrationSupported: vi.fn().mockReturnValue(false),
+             getUserDeviceInfo: vi.fn().mockReturnValue(new Map()),
+             getUserVerificationStatus: vi.fn().mockResolvedValue(new UserVerificationStatus(false, false, false)),
+@@ -1572,6 +1579,8 @@ describe("<MatrixChat />", () => {
+                     resetKeyBackup: vi.fn(),
+                     isEncryptionEnabledInRoom: vi.fn().mockResolvedValue(false),
+                     checkKeyBackupAndEnable: vi.fn().mockResolvedValue(null),
++                    // Read by force-first-device-recovery.patch; true leaves the stock gate (cross-signing alone).
++                    isSecretStorageReady: vi.fn().mockResolvedValue(true),
+                     isDehydrationSupported: vi.fn().mockReturnValue(false),
+                 };
+                 loginClient.getCrypto.mockReturnValue(mockCrypto as any);

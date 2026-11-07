@@ -328,7 +328,11 @@ only `apps/web/src/utils/StorageAccess{,.test}.ts`, no file of 1-11.
   inconclusive: the spec's header quotes the old probe (`.then(() => true)`), and the patch
   now reads the body and requires `!!r?.key`, so the leg has to be brought up to date before
   it counts. Until then both carry no `@ew-p1` tag, so the promotion selection does not run
-  them, and the branch is a registered gap. No unit test ships with the patch.
+  them, and the branch is a registered gap. The patch carries a test-only section for
+  `MatrixChat.test.tsx` (the mocks the new gate reads: `isSecretStorageReady` on the three
+  crypto mocks, `http.authedRequest` on the shared client mock; no assertion added) so the
+  stock suite stays green with the patch applied (90/90 on v1.12.33); no new test covers
+  the recovery loop itself.
 
 ### 2. `setup-encryption-busy-wedge.patch` — UPSTREAM DEFECT (carry until fixed)
 
@@ -448,9 +452,11 @@ only `apps/web/src/utils/StorageAccess{,.test}.ts`, no file of 1-11.
   patches applied (before: 2 failed in each file). Found by the `patch-tests` CI job, the
   first time the tests this patch carries ran anywhere. Patches 1 and 5 carry red tests
   of a different kind, in files no patch carries (so `patch-tests` does not run them):
-  `MatrixChat.test.tsx`
-  "unskippable verification" x2 (forced 4S recovery replaces the Complete Security screen)
-  and `LoginWithQR.test.tsx` "reciprocate" x2 (check-code auto-approve changes the props).
+  `MatrixChat.test.tsx` "unskippable verification" x2 (forced 4S recovery replaces the
+  Complete Security screen) and `LoginWithQR.test.tsx` "reciprocate" x2 (check-code
+  auto-approve changes the props). Patch 1's `MatrixChat.test.tsx` reds are fixed (2026-11-08):
+  the patch now carries that file's mock additions (entry 1), so `patch-tests` runs it and
+  it is 90/90 on v1.12.33; the `LoginWithQR.test.tsx` pair (patch 5) is still red and unrun.
 - **Ported to v1.12.32 (2026-10-18).** `DeviceVerificationStatusCard.tsx` is byte-identical
   at v1.12.29 and v1.12.32, so the component hunk applies unchanged and the
   `isVerified === null` branch is still upstream's (retirement not met). Two context ports:
@@ -1591,6 +1597,12 @@ only `apps/web/src/utils/StorageAccess{,.test}.ts`, no file of 1-11.
 - **Order:** applied AFTER entry 7 and depends on it. It moves `DID_PROFILE_FIELD` out of
   `useAttestedDid.ts` into `utils/didLocalpart.ts` and rewrites that line into a
   re-export, so dropping 7 or swapping the two fails the build.
+- **Load-order hazard (found 2026-11-08, Element-views K2 host tests):** `utils/didSearchMember.ts` runs
+  `class DidSearchMember extends DirectoryMember` at module load, and `utils/direct-messages` reaches it through
+  `createRoom` -> `RoomInvite` -> `InviteDialog`, so any module that enters `direct-messages` before `InviteDialog`
+  fails with "Class extends value undefined". The served bundle's entry order is safe (the markers boot green); a
+  new import order, or a test that mocks or imports `direct-messages` first, is not (import `InviteDialog` first).
+  A lazy base class would remove it.
 - **Coverage:** `didLocalpart.test.ts` ships inside the patch (60 vitest cases): the
   pinned vectors plus the 6 embedded golden vectors, the pkh/key case rules, shape,
   no-DID-leak, the legacy shape, the `looksLikeDid` boundary, `parseDidQuery`, the
