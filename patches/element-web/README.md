@@ -1591,6 +1591,12 @@ only `apps/web/src/utils/StorageAccess{,.test}.ts`, no file of 1-11.
 - **Order:** applied AFTER entry 7 and depends on it. It moves `DID_PROFILE_FIELD` out of
   `useAttestedDid.ts` into `utils/didLocalpart.ts` and rewrites that line into a
   re-export, so dropping 7 or swapping the two fails the build.
+- **Load-order hazard (found 2026-11-08, Element-views K2 host tests):** `utils/didSearchMember.ts` runs
+  `class DidSearchMember extends DirectoryMember` at module load, and `utils/direct-messages` reaches it through
+  `createRoom` -> `RoomInvite` -> `InviteDialog`, so any module that enters `direct-messages` before `InviteDialog`
+  fails with "Class extends value undefined". The served bundle's entry order is safe (the markers boot green); a
+  new import order, or a test that mocks or imports `direct-messages` first, is not (import `InviteDialog` first).
+  A lazy base class would remove it.
 - **Coverage:** `didLocalpart.test.ts` ships inside the patch (60 vitest cases): the
   pinned vectors plus the 6 embedded golden vectors, the pkh/key case rules, shape,
   no-DID-leak, the legacy shape, the `looksLikeDid` boundary, `parseDidQuery`, the
