@@ -741,6 +741,37 @@ run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec" "SYNAPSE_MAS_SECRET_
 refuses "F4 a link in a read-only directory to a file in a writable one is refused (the resolved directory is judged)" "sits in the directory $D/rw"
 check "F4 the refusals say what to do (read-only mount, no write permission for the container user)" grep -q 'read-only' "$LOG"
 
+# =====================================================================================
+echo "== retention file: /data/conf.d/retention.yaml is passed to Synapse only when it exists"
+# Absent file: the command lines are the ones asserted above (mode off: no argument; store
+# mode: run --no-secrets-in-config). Present, readable regular file: both paths are named,
+# because /start.py adds homeserver.yaml only when no --config-path is given.
+RET_NEW() { # RET_NEW D : a readable retention.yaml in D/conf.d
+  mkdir -p "$1/conf.d"; printf 'retention:\n  enabled: true\n' > "$1/conf.d/retention.yaml"
+}
+D="$WORK/render"; rm -rf "$D/conf.d"
+run_entry "$ENTRYPOINT" "$D" "${NOSTORE_ENV[@]}"
+check "retention, mode off, no file: still no argument" test "$(cat "$D/.start-args")" = "ARGS:"
+RET_NEW "$D"
+run_entry "$ENTRYPOINT" "$D" "${NOSTORE_ENV[@]}"
+check "retention, mode off, file present: run with both --config-path, homeserver.yaml first" \
+  test "$(cat "$D/.start-args")" = "ARGS:run --config-path $D/homeserver.yaml --config-path $D/conf.d/retention.yaml"
+chmod 000 "$D/conf.d/retention.yaml"
+run_entry "$ENTRYPOINT" "$D" "${NOSTORE_ENV[@]}"
+check "retention, mode off, file unreadable: treated as absent (no argument)" test "$(cat "$D/.start-args")" = "ARGS:"
+chmod 600 "$D/conf.d/retention.yaml"; rm -f "$D/conf.d/retention.yaml"; mkdir "$D/conf.d/retention.yaml"
+run_entry "$ENTRYPOINT" "$D" "${NOSTORE_ENV[@]}"
+check "retention, mode off, a directory of that name: treated as absent (no argument)" test "$(cat "$D/.start-args")" = "ARGS:"
+
+D="$S1"; rm -rf "$D/conf.d"
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec"
+check "retention, store mode, no file: still run --no-secrets-in-config" test "$(cat "$D/.start-args")" = "ARGS:run --no-secrets-in-config"
+RET_NEW "$D"
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec"
+check "retention, store mode, file present: run --no-secrets-in-config with both --config-path" \
+  test "$(cat "$D/.start-args")" = "ARGS:run --no-secrets-in-config --config-path $D/homeserver.yaml --config-path $D/conf.d/retention.yaml"
+check "retention, store mode: the file is not touched by the entrypoint" test "$(cat "$D/conf.d/retention.yaml")" = "$(printf 'retention:\n  enabled: true')"
+
 echo "== no value anywhere"
 LEAKS=0
 for l in "$RUNDIR"/out.*.log "$WORK"/new/*.log "$WORK"/old/*.log; do

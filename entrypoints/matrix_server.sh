@@ -1408,7 +1408,19 @@ fi
 # `run` is /start.py's default mode, spelled out so that the flag can follow it:
 # /start.py hands everything after `run` to `python -m synapse.app.homeserver`
 # (docker/start.py of v1.163.0, main(): args = args[2:]).
-if [ "$SECRET_STORE" = 1 ]; then
+# Retention lives in its own non-secret file, /data/conf.d/retention.yaml, so it can be
+# mirrored in aqua-ops (homeserver.yaml cannot: it holds secrets). Synapse reads several
+# --config-path files and the later file's top-level keys win. /start.py adds
+# /data/homeserver.yaml only when NO --config-path is given (docker/start.py, run mode), so
+# when the file exists both paths are named here. INERT where the file is absent: the
+# two command lines after the `elif` are exactly what this script has always run.
+if [ -f /data/conf.d/retention.yaml ] && [ -r /data/conf.d/retention.yaml ]; then
+  if [ "$SECRET_STORE" = 1 ]; then
+    /start.py run --no-secrets-in-config --config-path /data/homeserver.yaml --config-path /data/conf.d/retention.yaml
+  else
+    /start.py run --config-path /data/homeserver.yaml --config-path /data/conf.d/retention.yaml
+  fi
+elif [ "$SECRET_STORE" = 1 ]; then
   /start.py run --no-secrets-in-config
 else
   /start.py
