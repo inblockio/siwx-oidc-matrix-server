@@ -1407,7 +1407,8 @@ fi
 
 # `run` is /start.py's default mode, spelled out so that the flag can follow it:
 # /start.py hands everything after `run` to `python -m synapse.app.homeserver`
-# (docker/start.py of v1.163.0, main(): args = args[2:]).
+# (docker/start.py as shipped in the Synapse 1.164.1 image, main(): args = args[2:]; the
+# no-config-path default and the SYNAPSE_CONFIG_* variables below read from the same file).
 # Retention lives in its own non-secret file, /data/conf.d/retention.yaml, so it can be
 # mirrored in aqua-ops (homeserver.yaml cannot: it holds secrets). Synapse reads several
 # --config-path files and merges them SHALLOWLY: each top-level key of the later file replaces
@@ -1440,6 +1441,9 @@ retention_file_unusable() {
   [ "$(yq 'tag' "$f" 2>/dev/null)" = '!!map' ] || { echo "empty, or not a YAML mapping"; return 0; }
   keys=$(yq 'keys | join(",")' "$f" 2>/dev/null) || keys="?"
   [ "$keys" = retention ] || { echo "its top-level keys are '${keys}'; only 'retention' is allowed (any other key would replace that whole section of ${cfg})"; return 0; }
+  # `retention:` must itself be a mapping (or null: retention off): `true`, "yes" or a list make
+  # Synapse die with AttributeError in a restart loop (reproduced on 1.164.1).
+  case "$(yq '.retention | tag' "$f" 2>/dev/null)" in '!!map'|'!!null') ;; *) echo "the retention section is not a mapping"; return 0 ;; esac
   # Without the main config, start.py's own "Config file ... does not exist" error must still fire.
   [ -f "$cfg" ] || { echo "the main config ${cfg} does not exist"; return 0; }
   return 1

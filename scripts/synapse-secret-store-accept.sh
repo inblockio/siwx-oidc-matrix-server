@@ -802,6 +802,15 @@ RET_IGNORED "retention, mode off, empty file" "empty, or not a YAML mapping"
 printf '# only a comment\n' > "$D/conf.d/retention.yaml"
 run_entry "$ENTRYPOINT" "$D" "${NOSTORE_ENV[@]}"
 RET_IGNORED "retention, mode off, comment-only file" "empty, or not a YAML mapping"
+for v in 'true' '[1]' '"yes"'; do
+  printf 'retention: %s\n' "$v" > "$D/conf.d/retention.yaml"
+  run_entry "$ENTRYPOINT" "$D" "${NOSTORE_ENV[@]}"
+  RET_IGNORED "retention, mode off, 'retention: $v'" "the retention section is not a mapping"
+done
+printf 'retention: null\n' > "$D/conf.d/retention.yaml"
+run_entry "$ENTRYPOINT" "$D" "${NOSTORE_ENV[@]}"
+check "retention, mode off, 'retention: null' (retention off): used" \
+  RET_ARGS_IS "run --config-path $D/homeserver.yaml --config-path $D/conf.d/retention.yaml"
 rm -rf "$D/conf.d/retention.yaml"; mkdir "$D/conf.d/retention.yaml"
 run_entry "$ENTRYPOINT" "$D" "${NOSTORE_ENV[@]}"
 RET_IGNORED "retention, mode off, a directory of that name" "not a regular file"
