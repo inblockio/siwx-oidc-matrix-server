@@ -1197,10 +1197,12 @@ export class BridgeSource {
 				for (const name of newOwnReactionNames(seen, m)) this.reactionListeners.forEach((cb) => cb(name));
 			}
 			this.lastViews.set(m.id, m);
-			if (m.redacted || (m.encryption && !encryptionLine(m.encryption))) {
+			if (m.redacted || m.expired || (m.encryption && !encryptionLine(m.encryption))) {
 				// A deleted message leaves the view as it does in Rocket.Chat (its delete notification); Element's redacted body
 				// stays out. Once gone it is not shown again by a later read. An encryption entry with no Rocket.Chat line
 				// (changed, disable_attempt, unsupported) is kept out the same way, also when it was an `enabled` line before.
+				// An `expired` stub (the host's mark for a message whose lifetime ran out, M4) is the same: a known message is
+				// removed, an id never known (after a reload) shows nothing. The stub is needed because absence removes nothing.
 				const gone = known.get(m.id);
 				if (gone) {
 					known.delete(m.id);

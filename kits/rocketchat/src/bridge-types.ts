@@ -181,6 +181,20 @@ export interface ViewMessage {
      * follows. M12 Z4, additive: a host without the field never sets it.
      */
     encryption?: ViewEncryption;
+    /**
+     * Set on the stub of a message whose lifetime ran out (disappearing messages; `body` is "", `kind` is "other",
+     * `senderName` is ""). A kit removes the message with that id as it removes a redacted one, and shows nothing for an id
+     * it never knew. The host sends the stub because a message missing from a snapshot has only left the window.
+     * Room retention M4 (D15), additive: a host without the field never sets it.
+     */
+    expired?: true;
+    /**
+     * Set on the entry of an `m.room.retention` state event (`kind` is "other", `body` is empty): the system line for a
+     * change of the room's disappearing-messages setting. `text` is preformatted and translated by the host and does not
+     * contain the sender's name (the kit's system line prints it); a kit shows it as plain text. Room retention M4
+     * (D15), additive: a host without the field never sets it.
+     */
+    retention?: { text: string };
 }
 
 /** The state of an encryption event line (see `ViewMessage.encryption`). */
