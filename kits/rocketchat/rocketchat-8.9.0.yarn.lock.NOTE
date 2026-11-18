@@ -1,0 +1,7 @@
+rocketchat-8.9.0.yarn.lock: resolved yarn.lock for Rocket.Chat 8.9.0 (commit 057a927d903c83b5d61cf236d650c4500ebb4b66).
+No header inside the lockfile on purpose: yarn --immutable compares the file byte for byte and a comment would fail it.
+Source: yarn.lock of that commit (sha256 51dbb27e354a6eb0939b8c968011a7e9aa4af042ef3e510761f3ef8f56b1a3b7) fails `yarn install --immutable` with YN0028 (8 dependency lines still point at -rc.0 versions).
+Produced: node:22.23.0-bookworm, `node .yarn/releases/yarn-4.18.0.cjs install --mode=update-lockfile` at that commit (2026-11-18); sha256 09e07591b9b51173969ab12a67fbb7cf35252fdbfdb0caf2d9c9075a59c418f4.
+Diff vs original: 8 lines changed (css-in-js 0.33.2-rc.0 -> 0.33.2, ui-client/ui-contexts 35.0.0-rc.0 -> 35.0.0, one "npm:^0.33.2-rc.0" range).
+Proof: clean container, fresh checkout of the commit + this file, `yarn install --immutable` exit 0 (2m23s).
+The Dockerfile stage copies it over yarn.lock before the immutable install. Refresh: docs/element-web-source-build.md.

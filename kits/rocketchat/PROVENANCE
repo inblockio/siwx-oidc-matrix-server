@@ -1,0 +1,9 @@
+Rocket.Chat view kit (client view "rocketchat") vendored source.
+repo:    inblockio/element-views-track (private), path kits/rocketchat
+commit:  8b1463e025dce6509c9440a5c4e6cad2ec16406f (main, 2026-11-08T06:59:45+01:00, "M14 close Trace");
+         last commit touching the path: a38bd7dcb2954de9406ee08db1b30200c074ecfd (2026-11-08T03:08:07+01:00)
+vendored: 2026-11-18, by `git archive <commit> kits/rocketchat`, every tracked file, unmodified (125 files, 832743 bytes)
+manifest: MANIFEST.sha256 (sha256 of each file, LC_ALL=C sorted path order); sha256 of MANIFEST.sha256 = ae1c7c3f548543a0a5a9b5e5abe345410dd7998158d1fa75225a5919611c9864
+not vendored: the test kit kits/fixture-list (never part of the image)
+Why vendored: the source repo is private, a GitHub Actions build of this repo has no credentials for it.
+Refresh: see docs/element-web-source-build.md, section "Rocket.Chat kit stage".
