@@ -53,6 +53,7 @@ matrix_rtc:
   transports:
     - type: livekit
       livekit_service_url: https://example.org/livekit/jwt
+user_ips_max_age: 7d
 app_service_config_files:
   - /data/lk-jwt-as.yaml
 ### lk-jwt-as.yaml (first boot)
@@ -122,5 +123,6 @@ matrix_rtc:
   transports:
     - type: livekit
       livekit_service_url: https://example.org/livekit/jwt
+user_ips_max_age: 7d
 app_service_config_files:
   - /data/lk-jwt-as.yaml

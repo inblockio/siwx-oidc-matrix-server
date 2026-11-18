@@ -859,6 +859,30 @@ apply_matrixrtc_config() {
 }
 
 # ---------------------------------------------------------------------------
+# IP records: how long Synapse keeps the IP address and user agent it stores
+# per device (table user_ips).
+#
+# Unset, Synapse keeps them 28 days. The guest portal guide asks for at most
+# 7 days (siwx-oidc docs/guest-portal.md). Before this function the key was
+# set nowhere, so a deployment ran on the 28-day default.
+#
+# It runs on every boot, not in the first-boot block, so it reaches volumes
+# that already exist. MATRIX_USER_IPS_MAX_AGE overrides the 7 days, but only
+# within 1d to 28d: this knob may shorten the upstream default, never widen it.
+# ---------------------------------------------------------------------------
+apply_user_ips_retention() {
+  local max_age="${MATRIX_USER_IPS_MAX_AGE:-7d}"
+  case "$max_age" in
+    [1-9]d|1[0-9]d|2[0-8]d) ;;
+    *)
+      echo "WARNING: MATRIX_USER_IPS_MAX_AGE='${max_age}' is not 1d to 28d; using 7d." >&2
+      max_age="7d"
+      ;;
+  esac
+  yq -i ".user_ips_max_age = \"${max_age}\"" /data/homeserver.yaml
+}
+
+# ---------------------------------------------------------------------------
 # lk-jwt-service membership look-up (MSC4502) and its application-service
 # registration. Always-run, like the other apply_* functions, so a deployment
 # whose /data/homeserver.yaml predates this block converges on its next boot.
@@ -1242,6 +1266,7 @@ apply_directory_search() {
 if [ -f /data/homeserver.yaml ]; then
   apply_mas_config
   apply_matrixrtc_config
+  apply_user_ips_retention
   apply_lk_jwt_membership
   apply_guest_policy
   apply_directory_search
