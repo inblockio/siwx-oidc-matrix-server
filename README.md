@@ -242,9 +242,9 @@ that refuses to run without the patch, MatrixRTC experimental features (MSC4108,
 MSC4143, MSC3266, MSC4222), delayed-event and message rate limits, retention off by
 default, server notices, and `serve_server_wellknown: false`.
 
-**Element Web: 13 patches, and 2 for the Element Call build it serves**, applied in this
+**Element Web: 14 patches, and 2 for the Element Call build it serves**, applied in this
 order by `dockerfiles/Dockerfile.element` with `git apply`; the order of 1-11 is
-load-bearing, and 13 is applied after 12. Registry (all fifteen entries):
+load-bearing, and 13 and 14 are applied after 12. Registry (all sixteen entries):
 [`patches/element-web/README.md`](patches/element-web/README.md).
 
 1. [`force-first-device-recovery.patch`](patches/element-web/force-first-device-recovery.patch):
@@ -293,7 +293,15 @@ load-bearing, and 13 is applied after 12. Registry (all fifteen entries):
     search, pins, reply quotes), also while the room is open. All of it sits behind the one
     `config.json` key `io.inblock.room_retention`; with the key absent Element is stock.
     FEATURE, local, no upstream PR opened by us.
-14. [`0180-bt-audio-output.patch`](patches/element-call/0180-bt-audio-output.patch):
+14. [`client-views-host.patch`](patches/element-web/client-views-host.patch):
+    the host layer for alternate user interfaces ("kits", first: Rocket.Chat, built separately):
+    a switch in the user menu mounts a kit from `/kits/<id>/` in a same-origin iframe fed by
+    Element's own view models. Carried from our fork branch `element-views/m1-host` (commit
+    `b06070189b`). It needs two `config.json` gates, `client_views` and
+    `features.feature_client_views: true`; with both absent Element is stock, except for five small
+    named hunks (pin, room list, call notifications, settings rollback, picture-in-picture).
+    FEATURE, local, not proposed upstream.
+15. [`0180-bt-audio-output.patch`](patches/element-call/0180-bt-audio-output.patch):
     a patch to **Element Call v0.26.1**, not to Element Web. The image builds Element
     Call's embedded widget from source with it (stage `element-call`) and serves that
     build instead of the npm package Element Web installs. Calls stay audible with
@@ -301,9 +309,9 @@ load-bearing, and 13 is applied after 12. Registry (all fifteen entries):
     audio on the chosen output across device and microphone changes, and autoplay-block
     reporting. Element Call is AGPL-3.0-only OR LicenseRef-Element-Commercial; this file
     is the source offer for the modification. UPSTREAM DEFECT, deliberately not filed.
-15. [`0190-media-key-recovery.patch`](patches/element-call/0190-media-key-recovery.patch):
+16. [`0190-media-key-recovery.patch`](patches/element-call/0190-media-key-recovery.patch):
     a second patch to **Element Call v0.26.1**, applied in the same `element-call` stage
-    after 14. A call recovers when a media E2EE key is lost: the widget client's call-key
+    after 15. A call recovers when a media E2EE key is lost: the widget client's call-key
     to-device sends are retried and sent again, and a watchdog re-sends our own call
     membership with a fresh `created_ts` when a remote stays undecryptable without a key.
     Without it a 1:1 call whose key does not get through stays silent until a redial.

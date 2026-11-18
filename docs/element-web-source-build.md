@@ -7,8 +7,8 @@ runs `entrypoints/element_entrypoint.sh`.
 
 ## Why from source
 
-We carry thirteen vendored patches that cannot ship on the prebuilt
-`vectorim/element-web` image, and a fourteenth and a fifteenth that patch Element Call, whose
+We carry fourteen vendored patches that cannot ship on the prebuilt
+`vectorim/element-web` image, and a fifteenth and a sixteenth that patch Element Call, whose
 embedded widget the image builds from source (stage `element-call`) because Element Web only copies
 a prebuilt npm package. The **canonical list** — what, why, upstream status,
 retirement condition, and the order they are applied in — is
@@ -115,3 +115,40 @@ When moving to a newer Element Web tag:
    (see [CONTRIBUTING.md](../CONTRIBUTING.md)).
 5. Rebuild locally to confirm every patch applies and the bundle is complete, then
    let CI build the image that is deployed.
+
+## Rocket.Chat kit stage
+
+The image also serves the Rocket.Chat view kit at `/kits/rocketchat/` (files in `/app/kits/rocketchat/`, entry
+`index.html`). Stage `rc-kit` of `dockerfiles/Dockerfile.element` builds it; the final stage copies only its output
+(`COPY --from=rc-kit /out/rocketchat /app/kits/rocketchat`). Nothing of the Rocket.Chat tree (4 GB) is in the image.
+
+Pins, all in this repository:
+
+| Pin | Where | Value |
+|---|---|---|
+| Rocket.Chat source | `ARG RC_COMMIT` in the stage | `057a927d903c83b5d61cf236d650c4500ebb4b66` (peeled commit of tag 8.9.0); fetched shallow by that sha, the stage fails if the fetched sha differs |
+| Lockfile | `kits/rocketchat/rocketchat-8.9.0.yarn.lock` (+ `.NOTE`) | Rocket.Chat's own `yarn.lock` fails `yarn install --immutable` (YN0028, 8 lines still name `-rc.0` versions); ours is the same file re-resolved, copied over it before an `--immutable` install |
+| Kit source | `kits/rocketchat/` (+ `PROVENANCE`, `MANIFEST.sha256`) | vendored from the private repo `inblockio/element-views-track`, commit `8b1463e025dce6509c9440a5c4e6cad2ec16406f`; a GitHub Actions build has no credentials for that repo |
+| Node base | `FROM node:22.23.0-bookworm@sha256:...` | the multi-arch index digest; Rocket.Chat 8.9.0 needs `>=22.22.3 <23 \|\| >=24.15.0 <25` |
+
+The checkout paths (`/work/rocket.chat`, `/work/kit`) are fixed: module ids in the output embed them. Two clean builds of
+the stage give byte-identical files (verified: two `--no-cache` builds, 442 files, identical sha256 of every file); the stage has no network input except the pinned
+git commit and the lockfile's registry tarballs (integrity-checked by yarn). The test kit `fixture-list` is not
+vendored, and the final stage fails the build if a file named `fixture-list*` or `fixture-kit*` exists under `/app`, if
+`/app/kits/rocketchat/index.html` or `kit.main.js` is missing, or if any file under `/app/kits` contains `fixture-list`.
+`/kits/` is served with `Cache-Control: no-cache, must-revalidate` (`kit.main.js` is not content-hashed).
+
+Refreshing (a new Rocket.Chat release or a new kit state):
+
+1. Rocket.Chat: set `RC_COMMIT` to the peeled commit of the new tag. Check its `engines.node` against the node base.
+2. Lockfile: in a clean container of the node base, fetch that commit and run
+   `node .yarn/releases/yarn-<ver>.cjs install --mode=update-lockfile`; save `yarn.lock` as
+   `kits/rocketchat/rocketchat-<version>.yarn.lock` (rename the file in the stage and in `.NOTE`), and prove it with a second
+   clean checkout + `yarn install --immutable` (exit 0). A lockfile that already passes `--immutable` needs no re-resolution.
+   Do not add a comment header: yarn compares the file byte for byte.
+3. Kit source: `git archive <commit> kits/rocketchat` from the element-views repo into `kits/rocketchat/` (keep the lockfile
+   and `.NOTE`), regenerate `MANIFEST.sha256` (`find . -type f ! -name PROVENANCE ! -name MANIFEST.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum`),
+   update `PROVENANCE`. The workspace package list in the stage (the `turbo --filter` loop) follows the kit's imports; a webpack
+   "module not found" in `@rocket.chat/*` means a package is missing from it.
+4. Node base: `curl -sI` the manifest of the tag on the registry for `docker-content-digest` (the index digest), put it behind the tag.
+5. Build the stage twice with `--no-cache` and compare the output (`sha256sum` of every file); then the full image.

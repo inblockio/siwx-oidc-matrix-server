@@ -1,0 +1,94 @@
+// M12 X4, patch reason class "D41 hide": Element's connection bar has no retry action (host
+// `viewmodels/room/RoomStatusBar.ts:130-146`). The client reconnects itself, so this copy of
+// Rocket.Chat's ConnectionStatusBar keeps the warning, the status text and the countdown, and
+// drops the Connect control. No CSS hides it. Guarded by test/x4-hidden.test.ts.
+import { css } from '@rocket.chat/css-in-js';
+import { Box, Icon, Palette } from '@rocket.chat/fuselage';
+import { useConnectionStatus } from '@rocket.chat/ui-contexts';
+import { useTranslation } from 'react-i18next';
+
+import { useReconnectCountdown } from 'rc/client/components/connectionStatus/useReconnectCountdown';
+
+const connectionStatusBarStyle = css`
+	color: ${Palette.statusColor['status-font-on-warning']};
+	background-color: ${Palette.surface['surface-tint']};
+	border-color: ${Palette.statusColor['status-font-on-warning']};
+
+	position: fixed;
+	z-index: 1000000;
+
+	display: flex;
+	column-gap: 8px;
+	justify-content: space-between;
+	align-items: center;
+
+	.rcx-connection-status-bar--wrapper {
+		display: flex;
+		flex: 1 1 auto;
+		align-items: center;
+		min-width: 0;
+		column-gap: 8px;
+	}
+	.rcx-connection-status-bar--content {
+		display: flex;
+		align-items: center;
+		min-width: 0;
+		column-gap: 8px;
+	}
+	.rcx-connection-status-bar--info {
+		color: ${Palette.text['font-default']};
+	}
+
+	@media (max-width: 767px) {
+		align-items: flex-start;
+
+		.rcx-connection-status-bar--wrapper {
+			align-items: flex-start;
+		}
+
+		.rcx-connection-status-bar--content {
+			flex-direction: column;
+			align-items: flex-start;
+			row-gap: 2px;
+			column-gap: 0;
+		}
+	}
+`;
+
+function ConnectionStatusBar() {
+	const { connected, retryTime, status } = useConnectionStatus();
+	const reconnectCountdown = useReconnectCountdown(retryTime, status);
+	const { t } = useTranslation();
+
+	if (connected) {
+		return null;
+	}
+
+	return (
+		<Box
+			className={connectionStatusBarStyle}
+			rcx-connection-status-bar
+			insetBlockStart={0}
+			paddingBlock={4}
+			paddingInline={12}
+			width='100%'
+			borderBlockEndWidth='medium'
+			role='alert'
+			fontScale='p2'
+		>
+			<span className='rcx-connection-status-bar--wrapper'>
+				<Icon name='warning' />
+				<span className='rcx-connection-status-bar--content'>
+					<strong>{t('meteor_status', { context: status })}</strong>
+					{['waiting', 'failed', 'offline'].includes(status) && (
+						<span className='rcx-connection-status-bar--info'>
+							{status === 'waiting' ? t('meteor_status_reconnect_in', { count: reconnectCountdown }) : t('meteor_status_try_again_later')}
+						</span>
+					)}
+				</span>
+			</span>
+		</Box>
+	);
+}
+
+export default ConnectionStatusBar;

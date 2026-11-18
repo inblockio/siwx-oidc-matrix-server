@@ -1,0 +1,35 @@
+Rocket.Chat view for Element Web (element-views kit "rocketchat")
+===================================================================
+
+This kit is shipped together with Element Web and runs inside it as a client view. It consists of:
+
+1. Rocket.Chat client code, upstream tag 8.9.0, plus the patch queue in the element-views track repository
+   (kits/rocketchat). Only the parts of Rocket.Chat outside the "ee/" and "apps/meteor/ee/" directories are used;
+   those parts are under the MIT (Expat) licence:
+
+       Copyright (c) 2015-2022 Rocket.Chat Technologies Corp.
+
+   The full text of Rocket.Chat's licence file, including the MIT permission notice, is reproduced unchanged in
+   LICENSE.rocketchat.txt next to this file. No Rocket.Chat Enterprise ("ee/") module is part of this build
+   (checked on the webpack module graph by tools/licence-check.mjs). Rocket.Chat's logo and name marks are replaced;
+   "Rocket.Chat" is a trademark of Rocket.Chat Technologies Corp. and is used here only to name where the code
+   comes from.
+
+2. The kit's own adapter code (kits/rocketchat/src):
+
+       Copyright 2026 inblock.io (copyright holder and licence to be confirmed by the owner)
+
+   proposed licence: AGPL-3.0-only OR GPL-3.0-only, as the track's Element-side files. Files in src/ that replace a
+   Rocket.Chat file (each says so in its first comment) are derived from MIT code and keep its notice above.
+
+3. Element Web, which hosts this kit:
+
+       Copyright (c) 2014-2017 OpenMarket Ltd
+       Copyright (c) 2017 Vector Creations Ltd
+       Copyright (c) 2017-2025 New Vector Ltd
+       Copyright 2025-2026 Element Creations Ltd.
+
+   licensed AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial (see the LICENSE files of Element Web).
+
+The combined work, Element Web with this kit, is distributed under the GNU Affero General Public License v3.0
+(AGPL-3.0-only). Third-party npm packages bundled into the kit remain under their own licences.
