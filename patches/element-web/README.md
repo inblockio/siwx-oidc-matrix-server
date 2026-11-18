@@ -2296,7 +2296,7 @@ It is gated by `io.inblock.room_retention` and by the two gates of entry 14.
      stays hidden under the face, as in entry 14 (`RoomSummaryCardView.tsx`, `RoomSummaryCardViewModel.ts`).
   2. **Expired messages.** `ViewModelBridge.timeline()` hands the kit an `expired` stub for a message past the room's `max_lifetime`
      (the kit never drops a message that is merely absent), also for a message handed over earlier that Element's view model has
-     already dropped. ONE timer in the bridge, computed with entry 13's `nextExpiryDelay`, is re-armed on timeline changes and on
+     already dropped. ONE timer in the bridge, computed with entry 13's `nextExpiryDelay` over the window's events and the messages already handed to the kit (so a message that left the window before it expired still gets its stub), is re-armed on timeline changes and on
      `m.room.retention` state events and cleared on dispose. An expired parent is no longer quoted in a reply (`ViewModelBridge.ts`,
      `types.ts`).
   3. **Notice line.** An `m.room.retention` state event becomes a `retention` line whenever entry 13's `textForEvent` has a notice for
@@ -2333,7 +2333,7 @@ It is gated by `io.inblock.room_retention` and by the two gates of entry 14.
 - **Known limits:** the kit keeps a message it removed out of view until a reload, even if the room's lifetime is raised again later.
   The id map of handed-over messages is not pruned during a session.
 - **Coverage:** vitest, run by the `patch-tests` stage on every pull request (the file list comes from the patch's `+++ b/` paths):
-  the new `ViewModelBridge.roomRetention.test.ts` (13 tests) and added cases in `RoomSummaryCardView.test.tsx` (3) and
+  the new `ViewModelBridge.roomRetention.test.ts` (14 tests) and added cases in `RoomSummaryCardView.test.tsx` (3) and
   `RoomSummaryCardViewModel.test.ts` (1). The kit tests, `kits/rocketchat/test/adapter.test.ts` and
   `test/retention-type.test.ts`, are run by no CI job; run them by hand with `node --test kits/rocketchat/test/*.test.ts`.
   **Coverage (rule 2):** no Playwright leg for this entry; a browser leg belongs to the dev deploy of the face (track room_retention).

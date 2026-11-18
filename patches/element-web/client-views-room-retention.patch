@@ -1,9 +1,9 @@
 diff --git a/apps/web/src/client-views/ViewModelBridge.roomRetention.test.ts b/apps/web/src/client-views/ViewModelBridge.roomRetention.test.ts
 new file mode 100644
-index 0000000..bbc3747
+index 0000000..bdb5728
 --- /dev/null
 +++ b/apps/web/src/client-views/ViewModelBridge.roomRetention.test.ts
-@@ -0,0 +1,852 @@
+@@ -0,0 +1,870 @@
 +/*
 + * Copyright 2026 inblock.io
 + *
@@ -755,6 +755,24 @@ index 0000000..bbc3747
 +            expect(vi.getTimerCount()).toBe(0); // nothing left to expire
 +        });
 +
++        it("a message handed to the kit that left the window before it expired still gets its timer and its stub (review F1)", () => {
++            retentionOn();
++            h.timeline.snapshot = { items: itemsOf(msg("$held", DAY - MIN, "!a")), atLiveEnd: true };
++            expect(bridge.timeline("!a")[0]).not.toHaveProperty("expired"); // handed to the kit, not expired
++            // the view-model jumps to the live end: its window no longer holds $held, nothing else expires
++            h.timeline.snapshot = { items: itemsOf(msg("$new", 1_000, "!a")), atLiveEnd: true };
++            h.timeline.set({}); // a timeline change arms the timer
++            emitted.length = 0;
++            expect(vi.getTimerCount()).toBe(1);
++            vi.advanceTimersByTime(MIN + 249);
++            expect(emitted).toEqual([]);
++            vi.advanceTimersByTime(1);
++            expect(emitted).toEqual([{ kind: "timeline", roomId: "!a" }]);
++            const out = bridge.timeline("!a");
++            expect(out.find((m) => m.id === "$held")).toMatchObject({ expired: true, body: "" });
++            expect(out.find((m) => m.id === "$new")).not.toHaveProperty("expired");
++        });
++
 +        it("dispose clears the timer", () => {
 +            retentionOn();
 +            h.timeline.snapshot = { items: itemsOf(msg("$a", 10_000)), atLiveEnd: true };
@@ -857,7 +875,7 @@ index 0000000..bbc3747
 +    });
 +});
 diff --git a/apps/web/src/client-views/ViewModelBridge.ts b/apps/web/src/client-views/ViewModelBridge.ts
-index 0ba5cc3..8e8122d 100644
+index 0ba5cc3..60c7813 100644
 --- a/apps/web/src/client-views/ViewModelBridge.ts
 +++ b/apps/web/src/client-views/ViewModelBridge.ts
 @@ -87,6 +87,16 @@ import { UserMenuViewModel } from "../viewmodels/menus/UserMenuViewModel";
@@ -906,7 +924,7 @@ index 0ba5cc3..8e8122d 100644
          // A local chat room changes state (creating, created, error) through client room events.
          const onLocalRoom = (room: Room): void => {
              if (this.localChats.has(room.roomId)) this.syncRooms();
-@@ -1358,6 +1376,54 @@ export class ViewModelBridge implements ClientViewBridge {
+@@ -1358,6 +1376,63 @@ export class ViewModelBridge implements ClientViewBridge {
          this.disposers.push(() => this.client.off(RoomStateEvent.Members, onPowerApplied));
      }
  
@@ -939,8 +957,17 @@ index 0ba5cc3..8e8122d 100644
 +            const room = this.client.getRoom(roomId);
 +            if (!room) continue;
 +            const events: MatrixEvent[] = [];
++            const inWindow = new Set<string>();
 +            for (const item of vm.getSnapshot().items)
-+                if (item.kind === "event") events.push(item.event as MatrixEvent);
++                if (item.kind === "event") {
++                    events.push(item.event as MatrixEvent);
++                    const id = (item.event as MatrixEvent).getId();
++                    if (id) inWindow.add(id);
++                }
++            // The kit keeps a message until it gets a stub, also one that left the window before it expired.
++            this.handedOver.get(roomId)?.forEach((event, id) => {
++                if (!inWindow.has(id)) events.push(event);
++            });
 +            const delay = nextExpiryDelay(events, room, now);
 +            if (delay === null) continue;
 +            this.retentionDue.set(roomId, now + delay);
@@ -961,7 +988,7 @@ index 0ba5cc3..8e8122d 100644
      /** useIsEncrypted re-reads the flag on every m.room.encryption state event. */
      private watchEncryption(): void {
          const onState = (ev: MatrixEvent): void => {
-@@ -1566,6 +1632,7 @@ export class ViewModelBridge implements ClientViewBridge {
+@@ -1566,6 +1641,7 @@ export class ViewModelBridge implements ClientViewBridge {
                      opened = true;
                      if (!s.atLiveEnd) vm.onJumpToLive(() => {});
                  }
@@ -969,7 +996,7 @@ index 0ba5cc3..8e8122d 100644
                  this.emit({ kind: "timeline", roomId });
              }),
          );
-@@ -1675,12 +1742,15 @@ export class ViewModelBridge implements ClientViewBridge {
+@@ -1675,12 +1751,15 @@ export class ViewModelBridge implements ClientViewBridge {
          const seenCalls = new Set<string>();
          // Encryption events of this window, same rule as the calls.
          const seenEncryption = new Set<string>();
@@ -985,7 +1012,7 @@ index 0ba5cc3..8e8122d 100644
              if ((eventItem.event as MatrixEvent).getType() === EventType.RTCNotification) {
                  seenCalls.add(id);
                  const call = this.callMessage(eventItem.event as MatrixEvent, roomId);
-@@ -1696,6 +1766,12 @@ export class ViewModelBridge implements ClientViewBridge {
+@@ -1696,6 +1775,12 @@ export class ViewModelBridge implements ClientViewBridge {
                  }
                  continue;
              }
@@ -998,7 +1025,7 @@ index 0ba5cc3..8e8122d 100644
              const row = this.row(eventItem, roomId);
              const tile = row.tile.getSnapshot().snapshot;
              // An event still waiting for its key keeps the SDK type m.room.encrypted (a failed one is m.room.message).
-@@ -1706,6 +1782,11 @@ export class ViewModelBridge implements ClientViewBridge {
+@@ -1706,6 +1791,11 @@ export class ViewModelBridge implements ClientViewBridge {
              // response (real event id, status SENT) and the remote echo kept it for good and hid the own message forever.
              // The event's status is read live.
              if (!isMessage || (eventItem.event as MatrixEvent).status != null) continue;
@@ -1010,7 +1037,7 @@ index 0ba5cc3..8e8122d 100644
              const senderAvatarUrl = tile.sender.senderId
                  ? this.senderAvatarUrl(roomId, tile.sender.senderId)
                  : undefined;
-@@ -1732,11 +1813,21 @@ export class ViewModelBridge implements ClientViewBridge {
+@@ -1732,11 +1822,21 @@ export class ViewModelBridge implements ClientViewBridge {
                      permalink: this.permalinkOf(roomId, id),
                  },
              );
@@ -1032,7 +1059,7 @@ index 0ba5cc3..8e8122d 100644
          this.pruneCallCards(roomId, seenCalls);
          this.pruneEncryptionCards(roomId, seenEncryption);
          return messages.sort((a, b) => a.ts - b.ts);
-@@ -1776,6 +1867,49 @@ export class ViewModelBridge implements ClientViewBridge {
+@@ -1776,6 +1876,49 @@ export class ViewModelBridge implements ClientViewBridge {
          }
      }
  
@@ -1082,7 +1109,7 @@ index 0ba5cc3..8e8122d 100644
      /**
       * The entry of a room's `m.room.encryption` state event: `kind` "other", no body, and `encryption` from Element's
       * `EncryptionEventViewModel` (cached per event id; its async refresh of the state fires a `timeline` event).
-@@ -2958,6 +3092,10 @@ export class ViewModelBridge implements ClientViewBridge {
+@@ -2958,6 +3101,10 @@ export class ViewModelBridge implements ClientViewBridge {
  
      public dispose(): void {
          this.disposed = true;
