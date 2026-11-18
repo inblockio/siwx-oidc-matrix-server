@@ -96,6 +96,16 @@ if [ -n "\${FAKE_ID_UID:-}" ] && [ "\${1:-}" = "-u" ]; then echo "\$FAKE_ID_UID"
 exec "$REAL_ID" "\$@"
 FAKE
 chmod +x "$FAKEBIN/id"
+# gosu: records its arguments; FAKE_GOSU_DENY=1 makes it fail, as `gosu 991:991 test -r FILE` does for a
+# file only root can read. This script cannot switch users, so the retention cases only test the
+# entrypoint's wiring (ids passed, answer honoured); the real switch is proved on the real image.
+cat > "$FAKEBIN/gosu" <<'FAKE'
+#!/bin/sh
+echo "GOSU:$*" >> "${ACCEPT_DATA}/.gosu-args"
+[ "${FAKE_GOSU_DENY:-}" != 1 ] || exit 1
+shift; exec "$@"
+FAKE
+chmod +x "$FAKEBIN/gosu"
 REAL_UID="$("$REAL_ID" -u)"; FAKE_UID=$((REAL_UID + 1))
 
 # A Synapse that carries the MSC4133 write-ACL patch, as far as the entrypoint's own
@@ -742,35 +752,99 @@ refuses "F4 a link in a read-only directory to a file in a writable one is refus
 check "F4 the refusals say what to do (read-only mount, no write permission for the container user)" grep -q 'read-only' "$LOG"
 
 # =====================================================================================
-echo "== retention file: /data/conf.d/retention.yaml is passed to Synapse only when it exists"
+echo "== retention file: /data/conf.d/retention.yaml is passed to Synapse only when it is valid"
 # Absent file: the command lines are the ones asserted above (mode off: no argument; store
-# mode: run --no-secrets-in-config). Present, readable regular file: both paths are named,
-# because /start.py adds homeserver.yaml only when no --config-path is given.
-RET_NEW() { # RET_NEW D : a readable retention.yaml in D/conf.d
-  mkdir -p "$1/conf.d"; printf 'retention:\n  enabled: true\n' > "$1/conf.d/retention.yaml"
+# mode: run --no-secrets-in-config), and nothing is logged. Present AND valid (readable as the
+# runtime user, parses, `retention` the only top-level key, main config exists): both paths are
+# named, because /start.py adds the main config only when no --config-path is given. Otherwise the
+# file is ignored with a WARNING and main's command line runs.
+RET_NEW() { # RET_NEW D : a valid retention.yaml in D/conf.d
+  mkdir -p "$1/conf.d"; rm -rf "$1/conf.d/retention.yaml"; chmod u+rwx "$1/conf.d"
+  printf 'retention:\n  enabled: true\n' > "$1/conf.d/retention.yaml"
 }
-D="$WORK/render"; rm -rf "$D/conf.d"
+RET_ARGS_IS() { test "$(cat "$D/.start-args")" = "ARGS:$1"; }
+RET_IGNORED() { # RET_IGNORED NAME REASON : main's command line ($ARGS_MAIN), one WARNING naming the reason
+  check "$1: command line is main's" test "$(cat "$D/.start-args")" = "ARGS:$ARGS_MAIN"
+  check "$1: WARNING ... IGNORED: $2" grep -q "^WARNING: retention: $D/conf.d/retention.yaml IGNORED: .*$2" "$LOG"
+}
+D="$WORK/render"; rm -rf "$D/conf.d"; ARGS_MAIN=""
 run_entry "$ENTRYPOINT" "$D" "${NOSTORE_ENV[@]}"
-check "retention, mode off, no file: still no argument" test "$(cat "$D/.start-args")" = "ARGS:"
+check "retention, mode off, no file: still no argument" RET_ARGS_IS ""
+check "retention, mode off, no file: nothing logged about it" test "$(grep -ci retention "$LOG")" = 0
+cp "$LOG" "$RUNDIR/absent-nostore.log"
 RET_NEW "$D"
 run_entry "$ENTRYPOINT" "$D" "${NOSTORE_ENV[@]}"
 check "retention, mode off, file present: run with both --config-path, homeserver.yaml first" \
-  test "$(cat "$D/.start-args")" = "ARGS:run --config-path $D/homeserver.yaml --config-path $D/conf.d/retention.yaml"
+  RET_ARGS_IS "run --config-path $D/homeserver.yaml --config-path $D/conf.d/retention.yaml"
+check "retention, mode off, file used: the 'using' line is logged" \
+  grep -qx "Retention: using $D/conf.d/retention.yaml; its retention section replaces the whole retention section of $D/homeserver.yaml." "$LOG"
 chmod 000 "$D/conf.d/retention.yaml"
 run_entry "$ENTRYPOINT" "$D" "${NOSTORE_ENV[@]}"
-check "retention, mode off, file unreadable: treated as absent (no argument)" test "$(cat "$D/.start-args")" = "ARGS:"
-chmod 600 "$D/conf.d/retention.yaml"; rm -f "$D/conf.d/retention.yaml"; mkdir "$D/conf.d/retention.yaml"
+RET_IGNORED "retention, mode off, file unreadable (non-root entrypoint)" "not readable by uid"
+RET_NEW "$D"; : > "$D/.gosu-args"
+run_entry "$ENTRYPOINT" "$D" "${NOSTORE_ENV[@]}" FAKE_ID_ROOT=1
+check "retention, mode off, entrypoint is root: readability is asked through gosu 991:991" grep -qx "GOSU:991:991 test -r $D/conf.d/retention.yaml" "$D/.gosu-args"
+check "retention, mode off, entrypoint is root, readable as 991: file used" \
+  RET_ARGS_IS "run --config-path $D/homeserver.yaml --config-path $D/conf.d/retention.yaml"
+run_entry "$ENTRYPOINT" "$D" "${NOSTORE_ENV[@]}" FAKE_ID_ROOT=1 FAKE_GOSU_DENY=1
+RET_IGNORED "retention, mode off, entrypoint is root, file not readable by the runtime uid (stub gosu)" "not readable by uid:gid 991:991"
+run_entry "$ENTRYPOINT" "$D" "${NOSTORE_ENV[@]}" FAKE_ID_ROOT=1 FAKE_GOSU_DENY=1 UID=4242 GID=4243
+check "retention, entrypoint is root, UID/GID set: gosu gets those ids" grep -qx "GOSU:4242:4243 test -r $D/conf.d/retention.yaml" "$D/.gosu-args"
+RET_NEW "$D"; printf 'retention:\n  enabled: true\nexperimental_features:\n  msc3266_enabled: true\n' > "$D/conf.d/retention.yaml"
 run_entry "$ENTRYPOINT" "$D" "${NOSTORE_ENV[@]}"
-check "retention, mode off, a directory of that name: treated as absent (no argument)" test "$(cat "$D/.start-args")" = "ARGS:"
+RET_IGNORED "retention, mode off, extra top-level key" "top-level keys are 'retention,experimental_features'"
+printf 'retention:\n  enabled: [true\n' > "$D/conf.d/retention.yaml"
+run_entry "$ENTRYPOINT" "$D" "${NOSTORE_ENV[@]}"
+RET_IGNORED "retention, mode off, malformed YAML" "not valid YAML"
+: > "$D/conf.d/retention.yaml"
+run_entry "$ENTRYPOINT" "$D" "${NOSTORE_ENV[@]}"
+RET_IGNORED "retention, mode off, empty file" "empty, or not a YAML mapping"
+printf '# only a comment\n' > "$D/conf.d/retention.yaml"
+run_entry "$ENTRYPOINT" "$D" "${NOSTORE_ENV[@]}"
+RET_IGNORED "retention, mode off, comment-only file" "empty, or not a YAML mapping"
+rm -rf "$D/conf.d/retention.yaml"; mkdir "$D/conf.d/retention.yaml"
+run_entry "$ENTRYPOINT" "$D" "${NOSTORE_ENV[@]}"
+RET_IGNORED "retention, mode off, a directory of that name" "not a regular file"
+rm -rf "$D/conf.d/retention.yaml"; printf 'retention:\n  enabled: true\n' > "$D/real.yaml"; ln -s "$D/real.yaml" "$D/conf.d/retention.yaml"
+run_entry "$ENTRYPOINT" "$D" "${NOSTORE_ENV[@]}"
+check "retention, mode off, a symlink to a readable regular file: used" \
+  RET_ARGS_IS "run --config-path $D/homeserver.yaml --config-path $D/conf.d/retention.yaml"
+rm -f "$D/conf.d/retention.yaml"; ln -s "$D/nowhere.yaml" "$D/conf.d/retention.yaml"
+run_entry "$ENTRYPOINT" "$D" "${NOSTORE_ENV[@]}"
+RET_IGNORED "retention, mode off, a dangling symlink" "not a regular file"
+# A missing /data/homeserver.yaml cannot be staged here (the entrypoint generates it on a first boot);
+# the missing-main-config case is the SYNAPSE_CONFIG_PATH one below.
+RET_NEW "$D"
+cp "$D/homeserver.yaml" "$D/alt-hs.yaml"
+run_entry "$ENTRYPOINT" "$D" "${NOSTORE_ENV[@]}" "SYNAPSE_CONFIG_PATH=$D/alt-hs.yaml"
+check "retention, mode off, SYNAPSE_CONFIG_PATH set: that path is named as the main config" \
+  RET_ARGS_IS "run --config-path $D/alt-hs.yaml --config-path $D/conf.d/retention.yaml"
+run_entry "$ENTRYPOINT" "$D" "${NOSTORE_ENV[@]}" "SYNAPSE_CONFIG_PATH=$D/missing-hs.yaml"
+RET_IGNORED "retention, mode off, SYNAPSE_CONFIG_PATH names a missing file" "the main config $D/missing-hs.yaml does not exist"
+mkdir -p "$D/cfgdir"; cp "$D/homeserver.yaml" "$D/cfgdir/homeserver.yaml"
+run_entry "$ENTRYPOINT" "$D" "${NOSTORE_ENV[@]}" "SYNAPSE_CONFIG_DIR=$D/cfgdir"
+check "retention, mode off, SYNAPSE_CONFIG_DIR set: <dir>/homeserver.yaml is named" \
+  RET_ARGS_IS "run --config-path $D/cfgdir/homeserver.yaml --config-path $D/conf.d/retention.yaml"
+rm -rf "$D/conf.d" "$D/cfgdir"
+run_entry "$ENTRYPOINT" "$D" "${NOSTORE_ENV[@]}" "SYNAPSE_CONFIG_PATH=$D/alt-hs.yaml"
+check "retention, mode off, no file, SYNAPSE_CONFIG_PATH set: still no argument" RET_ARGS_IS ""
 
-D="$S1"; rm -rf "$D/conf.d"
+D="$S1"; rm -rf "$D/conf.d"; ARGS_MAIN="run --no-secrets-in-config"
 run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec"
-check "retention, store mode, no file: still run --no-secrets-in-config" test "$(cat "$D/.start-args")" = "ARGS:run --no-secrets-in-config"
+check "retention, store mode, no file: still run --no-secrets-in-config" RET_ARGS_IS "run --no-secrets-in-config"
+check "retention, store mode, no file: nothing logged about it" test "$(grep -ci retention "$LOG")" = 0
 RET_NEW "$D"
 run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec"
 check "retention, store mode, file present: run --no-secrets-in-config with both --config-path" \
-  test "$(cat "$D/.start-args")" = "ARGS:run --no-secrets-in-config --config-path $D/homeserver.yaml --config-path $D/conf.d/retention.yaml"
+  RET_ARGS_IS "run --no-secrets-in-config --config-path $D/homeserver.yaml --config-path $D/conf.d/retention.yaml"
 check "retention, store mode: the file is not touched by the entrypoint" test "$(cat "$D/conf.d/retention.yaml")" = "$(printf 'retention:\n  enabled: true')"
+printf 'retention:\n  enabled: true\nserver_name: x\n' > "$D/conf.d/retention.yaml"
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec"
+RET_IGNORED "retention, store mode, extra top-level key" "top-level keys are 'retention,server_name'"
+rm -rf "$D/conf.d/retention.yaml"; mkdir "$D/conf.d/retention.yaml"
+run_entry "$ENTRYPOINT" "$D" "SYNAPSE_SECRETS_DIR=${D}/sec"
+RET_IGNORED "retention, store mode, a directory of that name" "not a regular file"
+rm -rf "$D/conf.d"
 
 echo "== no value anywhere"
 LEAKS=0

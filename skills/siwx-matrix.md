@@ -81,7 +81,7 @@ start-matrix.sh
 
 ## Critical design facts
 
-- **First boot vs every boot**: `homeserver.yaml` is generated once; the first-boot keys (server name, listener, retention, server notices) change only by editing the file inside the `matrix_data` volume. Delegated auth, MatrixRTC and the DID-field denylist are rewritten on every boot. AGENTS.md has the full table.
+- **First boot vs every boot**: `homeserver.yaml` is generated once; the first-boot keys (server name, listener, retention, server notices) change only by editing the file inside the `matrix_data` volume. Delegated auth, MatrixRTC and the DID-field denylist are rewritten on every boot. AGENTS.md has the full table. Retention can also be set in the optional `/data/conf.d/retention.yaml` (only key `retention`; it replaces homeserver.yaml's whole `retention` section, so it must carry every retention key wanted; loaded only when valid, see the log line).
 - **Env prefix**: the stack uses siwx-oidc's legacy `SIWEOIDC_` prefix; siwx-oidc still reads it and prefers `SIWXOIDC_` when both are set.
 - **Signing key lifecycle**: P-256 PEM generated once by start-matrix.sh, stored in .env. Access and refresh tokens are opaque Redis entries, so a new key signs no one out; it breaks verification of ID tokens signed with the old key and of every published `io.inblock.did` proof, until each user's next sign-in, unless the old public key is listed in `SIWXOIDC_RETIRED_SIGNING_KEYS_PEM`.
 - **Shared secret**: `MAS_SHARED_SECRET` must match between Synapse config and siwx-oidc config. Mismatch causes 401 on every introspection call, breaking all auth.

@@ -1410,15 +1410,60 @@ fi
 # (docker/start.py of v1.163.0, main(): args = args[2:]).
 # Retention lives in its own non-secret file, /data/conf.d/retention.yaml, so it can be
 # mirrored in aqua-ops (homeserver.yaml cannot: it holds secrets). Synapse reads several
-# --config-path files and the later file's top-level keys win. /start.py adds
-# /data/homeserver.yaml only when NO --config-path is given (docker/start.py, run mode), so
-# when the file exists both paths are named here. INERT where the file is absent: the
-# two command lines after the `elif` are exactly what this script has always run.
-if [ -f /data/conf.d/retention.yaml ] && [ -r /data/conf.d/retention.yaml ]; then
-  if [ "$SECRET_STORE" = 1 ]; then
-    /start.py run --no-secrets-in-config --config-path /data/homeserver.yaml --config-path /data/conf.d/retention.yaml
+# --config-path files and merges them SHALLOWLY: each top-level key of the later file replaces
+# that whole section of the earlier one (no deep merge). /start.py adds the main config only
+# when NO --config-path is given (docker/start.py, run mode), so when the file is used both
+# paths are named here, the main config first.
+#
+# The file is used only if retention_file_unusable finds nothing wrong; any problem ignores
+# it, logs why, and launches main's unchanged command line (a bad file must not stop a server
+# that would start without it). With the file ABSENT nothing runs, nothing is logged, and the
+# command lines after the final `elif` are exactly what this script has always run.
+# NOT checked: whether the VALUES are sound (a bad duration, an unknown purge_jobs key). Synapse
+# validates them and stops with a ConfigError; no validator is built here.
+#
+# retention_file_unusable FILE MAINCFG : prints the reason and returns 0 when FILE must be
+# ignored; prints nothing and returns 1 when it can be used.
+retention_file_unusable() {
+  local f="$1" cfg="$2" ids keys
+  [ -f "$f" ] || { echo "not a regular file (a directory, a dangling link or another file type)"; return 0; }
+  # Readable as the user /start.py will run Synapse as, not as this script's user: a root-owned
+  # 0600 file passes `test -r` as root, then Synapse (gosu 991) dies with PermissionError.
+  ids=$(synapse_runtime_ids)
+  if [ -n "$ids" ] && [ "$(id -u)" = 0 ]; then
+    gosu "$ids" test -r "$f" 2>/dev/null || { echo "not readable by uid:gid ${ids}, the user Synapse runs as"; return 0; }
   else
-    /start.py run --config-path /data/homeserver.yaml --config-path /data/conf.d/retention.yaml
+    [ -r "$f" ] || { echo "not readable by uid $(id -u)"; return 0; }
+  fi
+  yq '.' "$f" >/dev/null 2>&1 || { echo "not valid YAML"; return 0; }
+  # An empty file or one holding only comments parses, but is no mapping: ignored.
+  [ "$(yq 'tag' "$f" 2>/dev/null)" = '!!map' ] || { echo "empty, or not a YAML mapping"; return 0; }
+  keys=$(yq 'keys | join(",")' "$f" 2>/dev/null) || keys="?"
+  [ "$keys" = retention ] || { echo "its top-level keys are '${keys}'; only 'retention' is allowed (any other key would replace that whole section of ${cfg})"; return 0; }
+  # Without the main config, start.py's own "Config file ... does not exist" error must still fire.
+  [ -f "$cfg" ] || { echo "the main config ${cfg} does not exist"; return 0; }
+  return 1
+}
+
+RET_FILE=/data/conf.d/retention.yaml
+# The main config path as /start.py computes it (run mode): SYNAPSE_CONFIG_PATH, else
+# SYNAPSE_CONFIG_DIR (default /data) + /homeserver.yaml. `-` not `:-`: Python's environ.get
+# keeps a variable that is set but empty. Store mode refuses any other value than /data.
+RET_CFG="${SYNAPSE_CONFIG_PATH-${SYNAPSE_CONFIG_DIR-/data}/homeserver.yaml}"
+RET_ARGS=()
+if [ -e "$RET_FILE" ] || [ -L "$RET_FILE" ]; then
+  if RET_WHY=$(retention_file_unusable "$RET_FILE" "$RET_CFG"); then
+    echo "WARNING: retention: ${RET_FILE} IGNORED: ${RET_WHY}. Starting with the retention section of ${RET_CFG} only." >&2
+  else
+    echo "Retention: using ${RET_FILE}; its retention section replaces the whole retention section of ${RET_CFG}."
+    RET_ARGS=(--config-path "$RET_CFG" --config-path "$RET_FILE")
+  fi
+fi
+if [ "${#RET_ARGS[@]}" -gt 0 ]; then
+  if [ "$SECRET_STORE" = 1 ]; then
+    /start.py run --no-secrets-in-config "${RET_ARGS[@]}"
+  else
+    /start.py run "${RET_ARGS[@]}"
   fi
 elif [ "$SECRET_STORE" = 1 ]; then
   /start.py run --no-secrets-in-config

@@ -80,7 +80,7 @@ change reaches an existing deployment.
 
 | Part | Settings | How a change reaches an existing deployment |
 |---|---|---|
-| First boot only (`/data/homeserver.yaml` absent) | `/start.py generate`, `server_name`, `public_baseurl`, the listener, `serve_server_wellknown: false`, retention, server notices | Edit `/data/homeserver.yaml` in the `matrix_data` volume, then restart |
+| First boot only (`/data/homeserver.yaml` absent) | `/start.py generate`, `server_name`, `public_baseurl`, the listener, `serve_server_wellknown: false`, retention, server notices | Edit `/data/homeserver.yaml` in the `matrix_data` volume, then restart. Retention can also come from the optional `/data/conf.d/retention.yaml` (only key `retention`, replaces the whole `retention` section of homeserver.yaml, loaded only when valid, see the `Retention:` / `IGNORED` log line) |
 | Every boot | `apply_mas_config` (delegated auth, and the migration off `experimental_features.msc3861`), `apply_matrixrtc_config` (MSC4108/4143/3266/4222, delayed events, `rc_*` limits, `matrix_rtc` transport), `apply_directory_search` (registers or removes the `inblock_directory` module from `DIRECTORY_ADMITTED_SERVICES`), in secret store mode `secret_store_preflight` (before anything is written) and `apply_secret_store_config`, `apply_did_field_protection`, admin promotion, the final on-disk denylist check | Change the entrypoint and rebuild the image; a restart re-applies it |
 
 - **`apply_mas_config` refuses to write empty values.** With `SIWEOIDC_BASE_URL` (or
