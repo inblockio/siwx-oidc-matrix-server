@@ -1,0 +1,2 @@
+# Paths in the Rocket.Chat workspace that differ from the tag for install reasons only (not source). path  reason
+yarn.lock   # yarn install resolves the workspace's -rc.0 versions to the released ones (8 lines); no source change
