@@ -2,7 +2,7 @@
 
 This directory is the **complete, canonical list of every modification we apply to
 upstream Element Web source** before building, and to the Element Call embedded build
-that the image serves (entries 15 and 16, whose patch files live in
+that the image serves (entries 16 and 17, whose patch files live in
 [`patches/element-call/`](../element-call/)). `dockerfiles/Dockerfile.element` is the
 single build source for the element-web image that CI publishes from `main`, and it
 applies exactly the patches listed here, each with `git apply --verbose` so **a patch
@@ -12,7 +12,7 @@ that stops applying fails the image build loudly** — never silently at runtime
 repository. Each change is licensed like the Element Web file it changes, which for the
 code the image ships means AGPL-3.0-only OR GPL-3.0-only. A docs file, an Apache-2.0 test
 and two tests that adapt an AGPL-only harness differ; [`NOTICE`](../../NOTICE) lists them.
-Entries 15 and 16 change Element Call, which is AGPL-3.0-only OR LicenseRef-Element-Commercial,
+Entries 16 and 17 change Element Call, which is AGPL-3.0-only OR LicenseRef-Element-Commercial,
 so those changes are AGPL-3.0-only (NOTICE).
 
 Rules of this registry:
@@ -100,7 +100,7 @@ Rules of this registry:
    this file): the Dockerfile fails the build on a row that no longer holds, and a row that
    stock now also carries (upstream shipped the string) no longer discriminates.
 
-   **Entries 15 and 16 are not in that loop**: they patch Element Call, not Element Web, and
+   **Entries 16 and 17 are not in that loop**: they patch Element Call, not Element Web, and
    their patch files are in `patches/element-call/`. At every bump read the version of
    `@element-hq/element-call-embedded` in the new tag's `apps/web/package.json`. The build
    fails when it differs from `ARG ELEMENT_CALL_STOCK_VERSION` in `deps`, so a bump cannot
@@ -108,8 +108,8 @@ Rules of this registry:
    rebase the `element-call` stage: new `ELEMENT_CALL_TAG` and `ELEMENT_CALL_COMMIT`
    together (`git ls-remote https://github.com/element-hq/element-call 'refs/tags/<tag>^{}'`),
    try both patches, 15 and then 16, against a fresh clone of that tag (`git apply --check`
-   after applying 16), and read the retirement conditions of entries 15 and 16 before
-   forward-porting either (15 names the upstream issue to check first).
+   after applying 17), and read the retirement conditions of entries 16 and 17 before
+   forward-porting either (16 names the upstream issue to check first).
 
    **4b. Upstream refresh (every tag bump, from the repo root).** First, refresh the
    upstream status of every upstream link in both registries and update each entry's
@@ -243,8 +243,9 @@ re-litigated each time someone audits the registry.
 | 12 | `sw-idb-reconnect` | The IndexedDB connection the service worker reads the access token through is dropped on close and on version change and reopened once on a closing connection, so a failed connection no longer sends every media request without a token for the worker's whole life. | none |
 | 13 | `room-retention` | Disappearing messages. A picker in Room Settings -> Security & Privacy writes `m.room.retention`, a timeline notice says who changed it, and events older than the room's `max_lifetime` are hidden in the client, also while the room is open. | config key `io.inblock.room_retention` |
 | 14 | `client-views-host` | Host layer for alternate user interfaces ("kits", first: Rocket.Chat): a switch in the user menu mounts a kit from `/kits/<id>/` in a same-origin iframe fed by Element's own view models. Five small hunks (pin, room list, call notifications, settings rollback, picture-in-picture) also change stock behaviour. | config key `client_views` AND `features.feature_client_views: true` |
-| 15 | `0180-bt-audio-output` | Patch to the **Element Call** embedded build, not to Element Web (file in `patches/element-call/`, built by the `element-call` stage): calls stay audible with Bluetooth headsets. A Windows hands-free output rule, an audio-output guard that holds LiveKit's remote audio on the chosen output and replays it after device or microphone changes, and autoplay-block reporting. | none |
-| 16 | `0190-media-key-recovery` | Second patch to the **Element Call** embedded build (file in `patches/element-call/`, built by the same `element-call` stage, applied after 15): a call recovers when a media E2EE key is lost. The widget client's call-key to-device sends are retried and sent again, and a watchdog re-sends our own call membership with a fresh `created_ts` when a remote stays undecryptable without a key. | none |
+| 15 | `client-views-room-retention` | Disappearing messages in the Rocket.Chat face, on top of 13 and 14: a "Disappearing messages" entry in the Room Information card (opens Room Settings on Security & Privacy), an `expired` stub and one timer in the bridge for a message past the room's lifetime, and a notice line for a change of the lifetime. Forks three files of 14. | config key `io.inblock.room_retention` AND the two gates of entry 14 |
+| 16 | `0180-bt-audio-output` | Patch to the **Element Call** embedded build, not to Element Web (file in `patches/element-call/`, built by the `element-call` stage): calls stay audible with Bluetooth headsets. A Windows hands-free output rule, an audio-output guard that holds LiveKit's remote audio on the chosen output and replays it after device or microphone changes, and autoplay-block reporting. | none |
+| 17 | `0190-media-key-recovery` | Second patch to the **Element Call** embedded build (file in `patches/element-call/`, built by the same `element-call` stage, applied after 16): a call recovers when a media E2EE key is lost. The widget client's call-key to-device sends are retried and sent again, and a watchdog re-sends our own call membership with a fresh `created_ts` when a remote stays undecryptable without a key. | none |
 
 Entry 6 is gated by a labs flag:
 
@@ -265,6 +266,9 @@ Entry 14 is gated twice: the `config.json` key `client_views` (a list of kits) a
 Element (proved by `ClientViews.stockParity.test.tsx`), with the five ride-along exceptions named in entry 14. Neither
 key is in `config/element-config.json`.
 
+Entry 15 acts only inside the face: it needs the two gates of entry 14 and the `config.json` key `io.inblock.room_retention` of entry 13.
+With that key absent no timer, stub or notice line exists and the Room Information card is as in entry 14.
+
 Entry 13 is gated by the `config.json` key `io.inblock.room_retention` (an object with the picker's
 choices): key absent, null or not an object means stock Element, and tests prove it. `config/element-config.json`
 in this repository does not carry the key; a deployment's own config does (set through aqua-ops).
@@ -274,22 +278,22 @@ recorded by that deployment, not here.
 
 ## Which Dockerfile applies what
 
-**One Dockerfile, all sixteen patches.** `dockerfiles/Dockerfile.element` applies every
+**One Dockerfile, all seventeen patches.** `dockerfiles/Dockerfile.element` applies every
 numbered patch below, in this file's order. **8 depends on 7** and **10 depends on 9**;
 each must stay after the entry it depends on (see their Order notes). **11 is applied
 after 1-10**: its `en_EN.json` hunk was generated against the tree with
-1-10 applied. **15 patches Element Call, not Element Web**: it is applied in its own build
+1-10 applied. **16 patches Element Call, not Element Web**: it is applied in its own build
 stage `element-call`, which precedes `deps`, to a clone of Element Call, and stage `deps`
 then replaces the `dist/` of the installed `@element-hq/element-call-embedded` package with
 that stage's build, right after `pnpm install`. It touches no Element Web file, so it is
-independent of 1-14 and of their order. **16 patches Element Call too**: it is applied in the
-same stage right after 15, because it is generated on top of the tree with 15 applied (the two
+independent of 1-15 and of their order. **17 patches Element Call too**: it is applied in the
+same stage right after 16, because it is generated on top of the tree with 16 applied (the two
 change no file in common). Until 2026-09-01 a
 separate `dev` branch applied a different subset; that branch was merged into `main` and
 deleted, so there is a single Dockerfile.
 
-A tag bump must try every Element Web patch (1-14) in this file's order, and check entries
-15 and 16 as rule 4 says. **12 is applied after 11**; it touches
+A tag bump must try every Element Web patch (1-15) in this file's order, and check entries
+16 and 17 as rule 4 says. **12 is applied after 11**; it touches
 only `apps/web/src/utils/StorageAccess{,.test}.ts`, no file of 1-11. **13 is applied after 12**,
 last of the Element Web patches; of the stock files it changes only `en_EN.json` is also changed
 by an earlier entry (1, 3-8, 11), in a different place (its hunk is generated on the tree with 1-12
@@ -300,6 +304,9 @@ needs only a context port. Entry 13 is gated by the `config.json` key `io.inbloc
 (`MatrixChat.tsx`, `MatrixChat.test.tsx`, `en_EN.json`, `settings/Settings.tsx`), in different places, and
 changes `packages/shared-components` (`UserMenu.tsx` and its `en_EN.json`), so the `patch-tests` stage rebuilds that
 package's `dist/` after the patches. Entry 14 is gated by `client_views` and `features.feature_client_views`.
+**15 is applied after 14**, last of the Element Web patches: it changes four files that entry 14 added or changed
+(`ViewModelBridge.ts`, `types.ts`, `RoomSummaryCardView.tsx`, `RoomSummaryCardViewModel.ts`, plus their tests) and `en_EN.json`.
+It is gated by `io.inblock.room_retention` and by the two gates of entry 14.
 
 ---
 
@@ -2255,7 +2262,7 @@ package's `dist/` after the patches. Entry 14 is gated by `client_views` and `fe
 - **Not in this entry:** the kit itself. It is built in the image's `rc-kit` stage and copied to `/app/kits/rocketchat/`, in a
   separate change; the shipped `config.json` writes exactly one descriptor (rocketchat). This entry is inert until a deployment's
   config sets both gates.
-- **Order:** after entry 13, last of the Element Web patches. Proved 2026-11-18 (re-proved on the rebuilt entry 13 of PR 92, development head 7eaa916, branch `rret/face-carry-2` cut from entry 13's head 8d6a10d): entries 1-14 apply in the Dockerfile's order with
+- **Order:** after entry 13 (entry 15 follows it). Proved 2026-11-18 (re-proved on the rebuilt entry 13 of PR 92, development head 7eaa916, branch `rret/face-carry-2` cut from entry 13's head 8d6a10d): entries 1-14 apply in the Dockerfile's order with
   `git apply --verbose` (no `--3way`) on a fresh export of `v1.12.33`, and the resulting tree hash equals the development branch's
   (`1ff2d0aa93207d99d4d92b59d9b5511739eaadd1`). The face and entries 1-13 share 4 files (`MatrixChat.tsx`, `MatrixChat.test.tsx`,
   `apps/web/src/i18n/strings/en_EN.json`, `settings/Settings.tsx`), merged by hunk separation; the reverse order (face first)
@@ -2279,7 +2286,59 @@ package's `dist/` after the patches. Entry 14 is gated by `client_views` and `fe
   (the one carried upstream-side is the fixture-kit spec, left out); a browser leg that switches to the kit lands with the dev deploy
   (track room_retention). Until then no browser has seen the face in this image.
 
-### 15. `0180-bt-audio-output.patch` - UPSTREAM DEFECT, our own fix (deliberately not filed; carry until upstream fixes it)
+### 15. `client-views-room-retention.patch` - FEATURE, local (our own feature, not an upstream defect; carry until upstream ships an equivalent)
+
+- **What:** disappearing messages in the Rocket.Chat face (track room_retention, milestone M4, decisions D14 and D15). It depends on
+  entry 13 (`room-retention.patch`: the `io.inblock.room_retention` key, `nextExpiryDelay`, `textForEvent`) and on entry 14
+  (`client-views-host.patch`: the host layer and the bridge). Under the face it does three things; 8 files, all under `apps/web/src`:
+  1. **Room Information card.** The card gains ONE entry, "Disappearing messages", only with the host panel AND the config key
+     `io.inblock.room_retention` set. It opens Element's Room Settings on Security & Privacy for that room. The stock Settings entry
+     stays hidden under the face, as in entry 14 (`RoomSummaryCardView.tsx`, `RoomSummaryCardViewModel.ts`).
+  2. **Expired messages.** `ViewModelBridge.timeline()` hands the kit an `expired` stub for a message past the room's `max_lifetime`
+     (the kit never drops a message that is merely absent), also for a message handed over earlier that Element's view model has
+     already dropped. ONE timer in the bridge, computed with entry 13's `nextExpiryDelay`, is re-armed on timeline changes and on
+     `m.room.retention` state events and cleared on dispose. An expired parent is no longer quoted in a reply (`ViewModelBridge.ts`,
+     `types.ts`).
+  3. **Notice line.** An `m.room.retention` state event becomes a `retention` line whenever entry 13's `textForEvent` has a notice for
+     it. Two new strings, `room_retention|face_notice_set` and `face_notice_off`, carry no sender name, because Rocket.Chat's system
+     line prints the name itself (`en_EN.json`).
+- **Gating:** with `io.inblock.room_retention` absent no timer is created, no stub and no line is produced, and the card is as in
+  entry 14. Without the face gates of entry 14 (`client_views`, `features.feature_client_views`) none of this code runs.
+- **Cost of a host bump:** the patch forks three files of entry 14 from the pinned host commit `b06070189b` (`ViewModelBridge.ts`,
+  `types.ts`, `RoomSummaryCardView.tsx`) and also changes `RoomSummaryCardViewModel.ts`. A bump of the host branch that touches
+  them needs this patch rebased onto the new host diff (it is the exact `git diff` of branch `rret/face-carry-2` to
+  `rret/face-retention` of the Element development tree, `rret/face-carry-2` being the tag plus entries 1-14).
+- **The kit half (D14: each changed kit file is listed here).** The kit is built in the image's `rc-kit` stage from `kits/rocketchat/`;
+  on top of the provenance commit these files changed (section "Changes on top of the provenance commit (room_retention M4, decision
+  D14)" of `kits/rocketchat/PROVENANCE`): `src/bridge-types.ts` (the optional `expired` and `retention` fields of `ViewMessage`),
+  `src/adapter/map.ts` (`retentionLine`, the type in `NO_MESSAGE_EVENT_TYPES`, no Report for it), `src/adapter/source.ts` (a message
+  with `expired` is removed like a redacted one; a stub for an unknown id is skipped), `src/adapter/fixture-bridge.ts` (test helpers),
+  `src/entry.ts` (registers the retention system-message type), new `src/retention-type.ts` (the system-message type
+  `room_retention_changed`), `test/capabilities.test.ts`, `test/adapter.test.ts`, new `test/retention-type.test.ts`,
+  `CAPABILITIES.md`, `PROVENANCE` and `MANIFEST.sha256`.
+- **Why (2026-11-18):** entry 13 acts on Element's own views and entry 14 hands the kit Element's view models through the bridge, so
+  the face needs its own entry point to the setting, its own expiry (the kit never drops a message that is merely absent) and its own
+  notice line; neither entry alone reaches them.
+- **Marker:** the i18n key `face_notice_set` in the built `i18n/en_EN.json` (a row of `markers.tsv`). It is unique to this patch: no
+  other entry adds that key, and entry 13's notice text ("set messages in this room to disappear after %(duration)s.") is why the
+  text is not used. **Stock and entries 1-14:** 0 occurrences of `face_notice` in `rret/face-carry-2` (`git grep`); **candidate:** the
+  key and its use in `ViewModelBridge.ts` appear only after this patch. Unproven on a built webapp until the Dockerfile's marker loop
+  runs in CI.
+- **Order:** after entry 14, last of the Element Web patches. Proved 2026-11-18: `git apply --check --verbose` and `git apply` on the
+  tree `rret/face-carry-2` (v1.12.33 plus entries 1-14, development head 7eaa916) succeed, and the resulting `apps/web` equals the
+  development branch `rret/face-retention` (head 83f555c). Of its 8 files it shares only `en_EN.json` with entries 1-14 (in a different place); the other source files are entry 14's.
+- **Upstream status:** FEATURE, local. Not proposed upstream; it extends our own face (entry 14) and has no upstream counterpart.
+- **Retirement:** the deployment drops the Rocket.Chat face (entry 14) or the disappearing-messages feature (entry 13). Remove the
+  patch, its `COPY` and `git apply` lines, the `markers.tsv` row and this entry; the kit files above revert with the kit change.
+- **Known limits:** the kit keeps a message it removed out of view until a reload, even if the room's lifetime is raised again later.
+  The id map of handed-over messages is not pruned during a session.
+- **Coverage:** vitest, run by the `patch-tests` stage on every pull request (the file list comes from the patch's `+++ b/` paths):
+  the new `ViewModelBridge.roomRetention.test.ts` (13 tests) and added cases in `RoomSummaryCardView.test.tsx` (3) and
+  `RoomSummaryCardViewModel.test.ts` (1). The kit tests, `kits/rocketchat/test/adapter.test.ts` and
+  `test/retention-type.test.ts`, are run by no CI job; run them by hand with `node --test kits/rocketchat/test/*.test.ts`.
+  **Coverage (rule 2):** no Playwright leg for this entry; a browser leg belongs to the dev deploy of the face (track room_retention).
+
+### 16. `0180-bt-audio-output.patch` - UPSTREAM DEFECT, our own fix (deliberately not filed; carry until upstream fixes it)
 
 This is the only entry that is not a patch to Element Web: the file is
 [`patches/element-call/0180-bt-audio-output.patch`](../element-call/0180-bt-audio-output.patch)
@@ -2383,10 +2442,10 @@ from the Element Call patch registry of the aqua-meet repository, where it is ro
   obsolete. Check both at every `ELEMENT_WEB_TAG` bump (rule 4): if the new tag installs an
   Element Call newer than v0.26.1, the build fails until the stage is rebased, and the rebase
   is the moment to test whether the patch still applies and is still needed. When the
-  patch is dropped and entry 16 is gone too, delete the `element-call` stage, the `deps`
+  patch is dropped and entry 17 is gone too, delete the `element-call` stage, the `deps`
   replacement, `patches/element-call/`, the rows of `markers.tsv`, the grammar line for
   `widgets/element-call/assets/index-*.js` in the two marker scripts, and the entries'
-  README and NOTICE lines, and let Element Web's own `dist/` through again. While entry 16
+  README and NOTICE lines, and let Element Web's own `dist/` through again. While entry 17
   stays, only this patch's `COPY` and `git apply` lines, its file, its marker row and its
   README and NOTICE lines go.
 - **Coverage (rule 2):** none in this repository's CI beyond the marker, and plainly so. The
@@ -2406,12 +2465,12 @@ from the Element Call patch registry of the aqua-meet repository, where it is ro
   `dockerfiles/Dockerfile.element`, is the corresponding source of the modification; it is
   public.
 
-### 16. `0190-media-key-recovery.patch` - UPSTREAM DEFECT (element-hq/element-call#4127 open; fix upstream, carry until it ships)
+### 17. `0190-media-key-recovery.patch` - UPSTREAM DEFECT (element-hq/element-call#4127 open; fix upstream, carry until it ships)
 
 The second entry that is not a patch to Element Web: the file is
 [`patches/element-call/0190-media-key-recovery.patch`](../element-call/0190-media-key-recovery.patch)
 (a `git format-patch` of one commit) and it applies to **Element Call v0.26.1**
-(`9f7c35cd8f84b12f9395e6aac56fd396a3921482`) **with entry 15 applied first**: it is generated on
+(`9f7c35cd8f84b12f9395e6aac56fd396a3921482`) **with entry 16 applied first**: it is generated on
 top of the tree that 0180 produces. It changes no file that 0180 changes. The same file is carried
 by the Element Call build of the aqua-meet repository (row `0190` of its Element Call patch
 registry).
@@ -2453,10 +2512,10 @@ registry).
      (8; the real `RoomWidgetClient` with a mocked widget API and the real `MatrixRTCSession`),
      `room/useLoadGroupCall.test.tsx` (2) and added cases in `remoteMembers/Connection.test.ts` and
      `widget.test.ts`; the five files together are 110 tests, all passing on the patched tree
-     (v0.26.1, 15 and 16).
+     (v0.26.1, 16 and 17).
   The patch adds four files with the header "Copyright 2026 Aqua Meet contributors" and
   "SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial".
-- **How it reaches the image:** exactly like entry 15 (read "How it reaches the image" there). The
+- **How it reaches the image:** exactly like entry 16 (read "How it reaches the image" there). The
   `element-call` stage copies the patch and applies it with `git apply --verbose` right after 0180,
   with no `--3way`, so a patch that stops applying fails the image build; `VITE_APP_VERSION` names
   both patches (`embedded-v0.26.1-aqua.0180.0190`); stage `deps` replaces the installed package's
@@ -2486,11 +2545,11 @@ registry).
   (`ELEMENT_CALL_TAG`) and in the one Meet pins. Check at every `ELEMENT_WEB_TAG` bump (rule 4)
   and whenever #4127 closes. When dropping: delete the patch file, its `COPY` and `git apply`
   lines in the `element-call` stage, the row of `markers.tsv`, and this entry's README and NOTICE
-  lines; keep the stage while entry 15 is carried (entry 15 says what goes when both are gone).
+  lines; keep the stage while entry 16 is carried (entry 16 says what goes when both are gone).
 - **Coverage (rule 2):** none in this repository's CI beyond the marker, and plainly so, as for
-  entry 15. The tests belong to the patched Element Call tree, and the `Element patch unit tests`
+  entry 16. The tests belong to the patched Element Call tree, and the `Element patch unit tests`
   job runs Element Web's tree; they run in the aqua-meet repository against this same patch file
-  and were run for this entry on the tree of v0.26.1 with 15 and 16 applied. There is no leg in
+  and were run for this entry on the tree of v0.26.1 with 16 and 17 applied. There is no leg in
   the siwx-oidc Element suite (`e2e/element/`): the failure needs a lost to-device message, which
   the suite does not produce. What this repository proves is that the patch applied and its code
   reached the served bundle: the build fails on a missing marker (`[KeyRecovery]`, the log prefix of
@@ -2569,7 +2628,7 @@ stamp and marker loop.
 `v1.12.33`, `45671bc88f`, in Dockerfile order; no retirement condition is met, none of the
 patched behaviours is in the 1.12.33 release notes). Element Web 1.12.33 installs
 `@element-hq/element-call-embedded` 0.26.1, the release the `element-call` stage already
-builds, so `ELEMENT_CALL_STOCK_VERSION` moves to 0.26.1 and entries 15 and 16 (13 and 14 on that date) are unchanged.
+builds, so `ELEMENT_CALL_STOCK_VERSION` moves to 0.26.1 and entries 16 and 17 (13 and 14 on that date) are unchanged.
 
 | # | Patch | Outcome at v1.12.33 |
 |---|---|---|
@@ -2586,7 +2645,7 @@ of the bump pull request.
 
 Numbers in this record are those of their date: until 2026-10-25 the Element Call
 patches were entries 12 and 13; from 2026-10-25 until 2026-11-18 they were 13 and 14 (entry 12 is
-`sw-idb-reconnect`); from then until the face host layer was added (2026-11-18, entry 14 `client-views-host`) they were 14 and 15; since then they are 15 and 16, entry 13 is `room-retention` and entry 14 is `client-views-host`.
+`sw-idb-reconnect`); from then until the face host layer was added (2026-11-18, entry 14 `client-views-host`) they were 14 and 15; until the face retention layer was added (2026-11-18, entry 15 `client-views-room-retention`) they were 15 and 16; since then they are 16 and 17, entry 13 is `room-retention`, entry 14 is `client-views-host` and entry 15 is `client-views-room-retention`.
 
 "Applies clean" proves a patch can be applied; it does not prove that its code reached the
 served app. [`markers.tsv`](markers.tsv) lists, per entry, the fixed strings that do (rule 2).
@@ -2717,6 +2776,12 @@ What the table does not say, and the choices behind it:
   built `i18n/en_EN.<hash>.json` carries the first string (same kind of row as entries 1, 7, 11, 13), and which chunk holds the
   other two (`init.js` and `element-web-app.js` by analogy with entries 6 and 7; a build that puts them elsewhere fails the row,
   and the row moves, not the entry).
+- **Entry 15 (2026-11-18), nothing built, candidate side pending.** One row, `face_notice_set` in `i18n/en_EN.json`, the key of the
+  face's "set" notice (`room_retention|face_notice_set`). The text of that string is not usable, because entry 13's `notice_set` has
+  the same words after `%(senderName)s `. **Stock:** 0 occurrences of `face_notice` in `rret/face-carry-2` (v1.12.33 plus entries
+  1-14, `git grep`). **Candidate:** the patch adds the key (and `face_notice_off`) to `en_EN.json` and uses it in `ViewModelBridge.ts`.
+  **Unproven until the Dockerfile's marker loop runs in CI:** that the built `i18n/en_EN.<hash>.json` carries the key (it does for
+  entry 11's `copy_markdown`, which is also a key, and for entry 14's `labs|client_views_description` text).
 - **To re-prove after a tag bump or a new entry:** extract `/app` of the new build and of the stock
   image for the new tag, serve each from a loopback static server, and run
   `scripts/element-patch-markers.sh --absent <every entry> http://127.0.0.1:<port>` against stock

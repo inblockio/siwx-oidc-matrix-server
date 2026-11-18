@@ -1,0 +1,1301 @@
+diff --git a/apps/web/src/client-views/ViewModelBridge.roomRetention.test.ts b/apps/web/src/client-views/ViewModelBridge.roomRetention.test.ts
+new file mode 100644
+index 0000000..bbc3747
+--- /dev/null
++++ b/apps/web/src/client-views/ViewModelBridge.roomRetention.test.ts
+@@ -0,0 +1,852 @@
++/*
++ * Copyright 2026 inblock.io
++ *
++ * SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++ * Please see LICENSE files in the repository root for full details.
++ */
++
++// @vitest-environment happy-dom
++
++import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from "vitest";
++import { EventEmitter } from "events";
++import { RoomStateEvent, type MatrixClient } from "matrix-js-sdk/src/matrix";
++
++import { ViewModelBridge } from "./ViewModelBridge";
++import { _t } from "../languageHandler";
++import SdkConfig from "../SdkConfig";
++import { MatrixClientPeg } from "../MatrixClientPeg";
++import { ROOM_RETENTION_CONFIG_KEY } from "../utils/RoomRetention";
++
++/*
++ * The bridge only wires view-models together; the view-models themselves are replaced by small fakes here so the
++ * test pins what the bridge reads from each snapshot and which shipped action it calls.
++ */
++const h = vi.hoisted(() => {
++    class FakeVm<S> {
++        public listeners = new Set<() => void>();
++        public constructor(public snapshot: S) {}
++        public getSnapshot = (): S => this.snapshot;
++        public subscribe = (cb: () => void): (() => void) => {
++            this.listeners.add(cb);
++            return () => this.listeners.delete(cb);
++        };
++        public set(s: Partial<S>): void {
++            this.snapshot = { ...this.snapshot, ...s };
++            this.listeners.forEach((cb) => cb());
++        }
++        public dispose = vi.fn();
++    }
++    const member = { userId: "@bob:example.org", roomId: "!a" };
++    const timelineSet = {
++        relations: { getChildEventsForEvent: vi.fn((..._args: unknown[]): unknown => undefined) },
++        getTimelineForEvent: vi.fn((_id: string): unknown => null),
++    };
++    const room = {
++        roomId: "!a",
++        getMember: () => member,
++        getJoinedMembers: vi.fn((): Array<{ userId: string }> => []),
++        findEventById: vi.fn((_id: string): unknown => undefined),
++        findThreadForEvent: () => null,
++        getUnfilteredTimelineSet: () => timelineSet,
++        getMyMembership: () => "join",
++        maySendMessage: vi.fn((): boolean => true),
++        loadMembersIfNeeded: vi.fn(async (): Promise<boolean> => true),
++        currentState: {
++            maySendEvent: vi.fn((_type: string, _user: string): boolean => true),
++            getStateEvents: vi.fn((..._args: unknown[]): unknown => undefined),
++            on: vi.fn(),
++            removeListener: vi.fn(),
++        },
++        on: vi.fn(),
++        off: vi.fn(),
++    };
++    const item = new FakeVm({
++        id: "!a",
++        name: "General",
++        isDm: false,
++        room,
++        notification: { hasUnreadCount: true, count: 2, isMention: false },
++    });
++    const timeline = Object.assign(new FakeVm({ items: [] as unknown[], atLiveEnd: false }), {
++        start: vi.fn(),
++        onMarkAllAsRead: vi.fn(),
++        onJumpToLive: vi.fn(),
++        onStartReached: vi.fn(),
++        onAnchorReached: vi.fn(),
++        loading: false,
++        timelineWindow: {
++            getEvents: vi.fn((): unknown[] => []),
++            canPaginate: vi.fn((_direction: string) => true),
++            paginate: vi.fn(async (..._args: unknown[]) => true),
++        },
++    });
++    const statusBar = new FakeVm<{ state: string | null }>({ state: null });
++    const avatar = new FakeVm<{ url?: string }>({ url: "http://avatar/bob" });
++    const padlocks: Array<InstanceType<typeof FakeVm<{ kind: string }>> & { start: () => void; setProps: () => void }> =
++        [];
++    const bodies: Array<{ setEventContent: ReturnType<typeof vi.fn> }> = [];
++    const replies: Array<{ props: unknown; dispose: ReturnType<typeof vi.fn> }> = [];
++    const getEventTimeline = vi.fn(async (..._args: unknown[]) => undefined);
++    const reactionButtons: Array<{
++        props: { content: string; disabled?: boolean };
++        getSnapshot: () => { isDisabled: boolean };
++        dispose: ReturnType<typeof vi.fn>;
++        onClick: ReturnType<typeof vi.fn>;
++    }> = [];
++    /** What a press on a reaction button does in the fake (the real one sends or redacts). */
++    const buttonClick = { run: (_content: string): void => {} };
++    const threadSummaries: Array<FakeVm<{ isVisible: boolean; previewVm: FakeVm<object> }> & Record<string, unknown>> =
++        [];
++    const releaseThreadSummary = vi.fn();
++    const mediaVms: Array<
++        InstanceType<typeof FakeVm<Record<string, unknown>>> & {
++            kind: string;
++            props: Record<string, unknown>;
++            loadInitialMediaIfVisible: ReturnType<typeof vi.fn>;
++            setMediaVisible: ReturnType<typeof vi.fn>;
++            onPlay: ReturnType<typeof vi.fn>;
++            onHiddenButtonClick: ReturnType<typeof vi.fn>;
++            onPreviewClick: ReturnType<typeof vi.fn>;
++        }
++    > = [];
++    const mediaHelpers: Array<{
++        destroy: ReturnType<typeof vi.fn>;
++        event?: unknown;
++        resolveUrl: (url: string | null) => void;
++        rejectUrl: (e: unknown) => void;
++    }> = [];
++    const settings: Record<string, unknown> = {};
++    /** M11 Y2: the beta features `SettingsStore.getFeatureSettingNames` lists (name -> `getBetaInfo`); none by default. */
++    const betas: Record<string, unknown> = {};
++    const roomEncrypted = { value: true };
++    /** `client.hasLazyLoadMembersEnabled()`: Element's production client always has it on. */
++    const lazyLoad = { value: false };
++    const watchers = new Map<string, { name: string; roomId: string | null; cb: () => void }>();
++    const urlPreviewVms: Array<
++        InstanceType<typeof FakeVm<Record<string, unknown>>> & {
++            props: Record<string, unknown>;
++            hidden: boolean;
++            elements: Array<{ html: string; links: string[] }>;
++            updateEventElement: ReturnType<typeof vi.fn>;
++            updateUrlPreviewVisible: ReturnType<typeof vi.fn>;
++            updateMediaVisible: ReturnType<typeof vi.fn>;
++        }
++    > = [];
++    const mediaVisible = { value: true };
++    const mediaVm = (kind: "image" | "video" | "file", state: Record<string, unknown>) =>
++        class extends FakeVm<Record<string, unknown>> {
++            public kind = kind;
++            public loadInitialMediaIfVisible = vi.fn();
++            public onPlay = vi.fn(async () => {});
++            public setMediaVisible = vi.fn((visible: boolean) => {
++                this.props = { ...this.props, mediaVisible: visible };
++                // The real view-model leaves the hidden state once media is visible.
++                if (visible && this.snapshot.state === "HIDDEN") this.set({ state: "READY" });
++            });
++            /** The shared actions of the real view-models (ImageBodyViewModel / VideoBodyViewModel). */
++            public onHiddenButtonClick = vi.fn(() =>
++                (this.props.setMediaVisible as ((v: boolean) => void) | undefined)?.(true),
++            );
++            public onPreviewClick = vi.fn(() => (this.props.onPreviewClick as (() => void) | undefined)?.());
++            public constructor(public props: Record<string, unknown>) {
++                super(state);
++                mediaVms.push(this as never);
++            }
++        };
++    const actionBars: Array<{
++        props: Record<string, unknown>;
++        onReplyClick: Mock;
++        onEditClick: Mock;
++        onPinClick: Mock;
++        onDownloadClick: Mock;
++        showDownload: boolean;
++        dispose: Mock;
++    }> = [];
++    const eventUtils = { canEdit: true, canDownload: true, canCopyMarkdown: true };
++    const pins = { pinned: false, canPin: true, canUnpin: true, press: undefined as undefined | (() => Promise<void>) };
++    const roomLists: Array<InstanceType<typeof FakeVm<{ sections: { roomIds: string[] }[] }>>> = [];
++    const sdkContext: { roomViewStore?: { getRoomId: () => string | null } } = {};
++
++    return {
++        sendText: vi.fn(),
++        userProviders: [] as { room: unknown; destroy: Mock }[],
++        userProviderCompletions: vi.fn(),
++        editText: vi.fn(),
++        redact: vi.fn(),
++        downloadMedia: vi.fn(),
++        /** M12 Z3: Element's per-event reveal: async, writes the setting, and the settings watchers fire. */
++        setMediaVisibility: vi.fn(async (_ev: unknown, visible: boolean): Promise<void> => {
++            await Promise.resolve();
++            mediaVisible.value = visible;
++            [...watchers.values()].filter((w) => w.name === "showMediaEventIds").forEach((w) => w.cb());
++        }),
++        forwardViaDialog: vi.fn(),
++        viewSourceViaDialog: vi.fn(),
++        /** M14 K6: Element's `eventToMarkdown` and the clipboard write (`copyPlainTextToClipboard`). */
++        eventToMarkdown: vi.fn(),
++        copyPlainText: vi.fn(),
++        createDialog: vi.fn(),
++        actionBars,
++        eventUtils,
++        pins,
++        sdkContext,
++        roomLists,
++        mediaVm,
++        FakeVm,
++        mediaVms,
++        mediaHelpers,
++        mediaVisible,
++        settings,
++        betas,
++        roomEncrypted,
++        lazyLoad,
++        watchers,
++        urlPreviewVms,
++        threadSummaries,
++        releaseThreadSummary,
++        room,
++        timelineSet,
++        item,
++        timeline,
++        statusBar,
++        member,
++        avatar,
++        padlocks,
++        bodies,
++        replies,
++        reactionButtons,
++        buttonClick,
++        getEventTimeline,
++    };
++});
++
++/** The second room's timeline view-model (rebuilt per test) and the controllable `textForEvent`. */
++const hb = vi.hoisted(() => ({ timelineB: undefined as any, textForEvent: vi.fn((..._a: unknown[]): string => "") }));
++vi.mock("../TextForEvent", () => ({ textForEvent: (...a: unknown[]) => hb.textForEvent(...a) }));
++
++vi.mock("../viewmodels/room-list/RoomListViewModel", () => ({
++    RoomListViewModel: class extends h.FakeVm<{ sections: { roomIds: string[] }[] }> {
++        public constructor() {
++            super({ sections: [{ roomIds: ["!a"] }] });
++            h.roomLists.push(this);
++        }
++        public updateVisibleRooms = vi.fn();
++        public get roomIds(): string[] {
++            return this.snapshot.sections.flatMap((s) => s.roomIds);
++        }
++        public getRoomItemViewModel = (id: string) => (id === "!a" || id === "!b" ? h.item : undefined);
++    },
++}));
++vi.mock("../stores/room-list-v3/RoomListStoreV3", () => ({
++    RoomListStoreV3Event: { ListsUpdate: "ListsUpdate" },
++    default: { instance: { on: vi.fn(), off: vi.fn() } },
++}));
++vi.mock("../viewmodels/menus/UserMenuViewModel", () => ({
++    UserMenuViewModel: class extends h.FakeVm<object> {
++        public constructor() {
++            super({ userId: "@me:example.org", displayName: "Me", avatarUrl: "http://avatar/me" });
++        }
++    },
++}));
++vi.mock("../viewmodels/room/timeline/RoomTimelineViewModel", () => ({
++    RoomTimelineViewModel: vi.fn(function (p: { room: { roomId: string } }) {
++        return p.room.roomId === "!b" ? hb.timelineB : h.timeline;
++    }),
++}));
++vi.mock("../viewmodels/room/RoomStatusBar", () => ({
++    RoomStatusBarViewModel: vi.fn(function () {
++        return h.statusBar;
++    }),
++}));
++vi.mock("../components/viewmodels/avatars/MemberAvatarViewModel", () => ({
++    MemberAvatarViewModel: vi.fn(function () {
++        return h.avatar;
++    }),
++}));
++vi.mock("../viewmodels/room/timeline/event-tile/EventTileViewModel", () => ({
++    EventTileViewModel: class extends h.FakeVm<object> {
++        public constructor({
++            mxEvent,
++        }: {
++            mxEvent: { getId: () => string; getType?: () => string; getContent?: () => { msgtype?: string } };
++        }) {
++            super({
++                snapshot: {
++                    event: {
++                        eventId: mxEvent.getId(),
++                        eventType: mxEvent.getType?.() ?? "m.room.message",
++                        msgtype: mxEvent.getContent?.().msgtype ?? "m.text",
++                    },
++                    sender: { senderId: "@bob:example.org" },
++                    timestamp: { value: 1 },
++                },
++            });
++        }
++        /** The tile's lazily created thread summary view-model (one per tile, as the real one). */
++        private threadSummary?: unknown;
++        public getThreadSummaryViewModel = vi.fn((props: unknown) => {
++            if (!this.threadSummary) {
++                const vm = Object.assign(new h.FakeVm({ isVisible: true, previewVm: new h.FakeVm<object>({}) }), {
++                    props,
++                    setThread: vi.fn(),
++                });
++                h.threadSummaries.push(vm as never);
++                this.threadSummary = vm;
++            }
++            return this.threadSummary as (typeof h.threadSummaries)[number];
++        });
++        public releaseThreadSummaryViewModel = (): void => {
++            h.releaseThreadSummary();
++            this.threadSummary = undefined;
++        };
++    },
++}));
++vi.mock("../viewmodels/message-body/EventContentBodyViewModel", () => ({
++    EventContentBodyViewModel: class extends h.FakeVm<object> {
++        public setEventContent = vi.fn();
++        public constructor() {
++            super({ body: "hi" });
++            h.bodies.push(this);
++        }
++    },
++}));
++vi.mock("../viewmodels/room/timeline/event-tile/EventTileE2eViewModel", () => ({
++    EventTileE2eViewModel: vi.fn(function () {
++        const vm = Object.assign(new h.FakeVm<object>({ kind: "none" }), { start: vi.fn(), setProps: vi.fn() });
++        h.padlocks.push(vm as never);
++        return vm;
++    }),
++}));
++vi.mock("../viewmodels/room/timeline/event-tile/ReplyTileViewModel", () => ({
++    ReplyTileViewModel: class extends h.FakeVm<object> {
++        public constructor(public props: unknown) {
++            super({
++                href: "",
++                body: null,
++                sender: { profileViewModel: { getSnapshot: () => ({ displayName: "Bob" }) } },
++            });
++            h.replies.push(this as never);
++        }
++    },
++}));
++vi.mock("../viewmodels/room/timeline/event-tile/reactions/ReactionsRowButtonViewModel", () => ({
++    ReactionsRowButtonViewModel: class extends h.FakeVm<{ count: number; isSelected: boolean; isDisabled: boolean }> {
++        public constructor(
++            public props: { content: string; count: number; myReactionEvent?: unknown; disabled?: boolean },
++        ) {
++            super({ count: props.count, isSelected: !!props.myReactionEvent, isDisabled: !!props.disabled });
++            h.reactionButtons.push(this as never);
++        }
++        public setReactionData = vi.fn();
++        public setCount = (count: number): void => this.set({ count });
++        public setMyReactionEvent = (ev?: unknown): void => this.set({ isSelected: !!ev });
++        public setDisabled = (disabled?: boolean): void => {
++            this.props = { ...this.props, disabled };
++            this.set({ isDisabled: !!disabled });
++        };
++        // The real click is a no-op while disabled, else it sends or redacts.
++        public onClick = vi.fn(() => {
++            if (!this.props.disabled) h.buttonClick.run(this.props.content);
++        });
++    },
++}));
++vi.mock("../viewmodels/message-body/ImageBodyViewModel", () => ({
++    ImageBodyViewModel: h.mediaVm("image", { state: "READY", alt: "cat.png" }),
++}));
++vi.mock("../viewmodels/message-body/VideoBodyViewModel", () => ({
++    VideoBodyViewModel: h.mediaVm("video", { state: "READY", videoTitle: "clip.webm", src: "http://hs/clip" }),
++}));
++vi.mock("../viewmodels/message-body/FileBodyViewModel", () => ({
++    FileBodyViewModel: h.mediaVm("file", {
++        state: "UNENCRYPTED",
++        infoTooltip: "notes.txt (12 bytes)",
++        downloadHref: "http://hs/notes",
++    }),
++}));
++vi.mock("../utils/MediaEventHelper", () => ({
++    MediaEventHelper: class {
++        public destroy = vi.fn();
++        public resolveUrl!: (url: string | null) => void;
++        public rejectUrl!: (e: unknown) => void;
++        public sourceUrl!: { value: Promise<string | null> };
++        public constructor(public event: unknown) {
++            const url = new Promise<string | null>((resolve, reject) => {
++                this.resolveUrl = resolve;
++                this.rejectUrl = reject;
++            });
++            this.sourceUrl = { value: url };
++            h.mediaHelpers.push(this);
++        }
++    },
++}));
++vi.mock("../utils/FileUtils", () => ({
++    presentableTextForFile: (content: { filename?: string; body?: string }) => content.filename ?? content.body,
++}));
++vi.mock("../viewmodels/message-body/UrlPreviewGroupViewModel", () => ({
++    BUNDLED_LINK_PREVIEWS: "com.beeper.linkpreviews",
++    UrlPreviewGroupViewModel: class extends h.FakeVm<Record<string, unknown>> {
++        public hidden = false;
++        public elements: Array<{ html: string; links: string[] }> = [];
++        public updateEventElement = vi.fn(async (el: Element) => {
++            this.elements.push({
++                html: el.innerHTML,
++                links: [...el.querySelectorAll("a")].map((a) => a.getAttribute("href") ?? ""),
++            });
++        });
++        public updateUrlPreviewVisible = vi.fn(async () => {});
++        public updateMediaVisible = vi.fn(async () => {});
++        public get isPreviewHiddenByUser(): boolean {
++            return this.hidden;
++        }
++        public constructor(public props: Record<string, unknown>) {
++            super({ previews: [], totalPreviewCount: 0, previewsLimited: true, overPreviewLimit: false });
++            h.urlPreviewVms.push(this as never);
++        }
++    },
++}));
++// bodyToNode linkifies through the logged-in client's settings; the fake linkifies a plain URL the way the stock body shows it.
++vi.mock("../HtmlUtils", () => ({
++    bodyToNode: (content: { body: string; formatted_body?: string }) => ({
++        strippedBody: content.body,
++        formattedBody: content.formatted_body ?? content.body.replace(/(https?:\/\/\S+)/g, '<a href="$1">$1</a>'),
++    }),
++}));
++vi.mock("../modules/Api", () => ({ ModuleApi: { instance: { urlPreviews: { module: "url-preview-api" } } } }));
++vi.mock("../utils/media/mediaVisibility", () => ({
++    getMediaVisibility: () => h.mediaVisible.value,
++    setMediaVisibility: (ev: unknown, visible: boolean) => h.setMediaVisibility(ev, visible),
++}));
++vi.mock("../settings/SettingsStore", () => ({
++    default: {
++        getValue: (name: string) => h.settings[name] ?? false,
++        getFeatureSettingNames: () => Object.keys(h.betas),
++        getBetaInfo: (name: string) => h.betas[name],
++        watchSetting: vi.fn((name: string, roomId: string | null, cb: () => void) => {
++            const id = `w${h.watchers.size}_${name}_${Math.random()}`;
++            h.watchers.set(id, { name, roomId, cb });
++            return id;
++        }),
++        unwatchSetting: vi.fn((id: string) => {
++            h.watchers.delete(id);
++        }),
++    },
++}));
++vi.mock("../contexts/SDKContextClass", () => ({ SDKContextClass: { instance: h.sdkContext } }));
++vi.mock("../utils/EventUtils", async (orig) => ({
++    ...(await orig<typeof import("../utils/EventUtils")>()),
++    canEditContent: () => h.eventUtils.canEdit,
++}));
++vi.mock("../utils/PinningUtils", () => ({
++    default: {
++        isPinned: () => h.pins.pinned,
++        canPin: () => h.pins.canPin,
++        canUnpin: () => h.pins.canUnpin,
++    },
++}));
++vi.mock("../viewmodels/room/EventTileActionBarViewModel", () => ({
++    EventTileActionBarViewModel: class {
++        public onReplyClick = vi.fn();
++        public onEditClick = vi.fn();
++        public onPinClick = vi.fn(async () => {
++            await h.pins.press?.();
++        });
++        public onDownloadClick = vi.fn(async () => {});
++        public showDownload = true;
++        public getSnapshot = (): { actions: string[] } => ({ actions: this.showDownload ? ["download"] : [] });
++        public dispose = vi.fn();
++        public constructor(public props: Record<string, unknown>) {
++            h.actionBars.push(this as never);
++        }
++    },
++}));
++vi.mock("../viewmodels/message-body/RedactedBodyViewModel", () => ({
++    RedactedBodyViewModel: class extends h.FakeVm<{ text: string }> {
++        public setProps = (p: { text: string }): void => this.set(p);
++    },
++}));
++vi.mock("../viewmodels/room/timeline/event-tile/EventTileRedactedBodyState", () => ({
++    getRedactedBodyViewModelProps: () => ({ text: "Message deleted" }),
++}));
++vi.mock("../stores/OwnProfileStore", () => ({ OwnProfileStore: { instance: {} } }));
++vi.mock("../Avatar", () => ({ avatarUrlForRoom: () => "http://avatar/room" }));
++vi.mock("../autocomplete/UserProvider", () => ({
++    default: class UserProviderStub {
++        public constructor(public room: unknown) {
++            h.userProviders.push(this as unknown as (typeof h.userProviders)[number]);
++        }
++        public getCompletions = (...args: unknown[]) => h.userProviderCompletions(...args);
++        public destroy = vi.fn();
++    },
++}));
++vi.mock("./InterimActions", () => ({
++    sendText: (...args: unknown[]) => h.sendText(...args),
++    editText: (...args: unknown[]) => h.editText(...args),
++    redact: (...args: unknown[]) => h.redact(...args),
++}));
++vi.mock("../utils/eventToMarkdown", () => ({
++    canCopyMarkdown: () => h.eventUtils.canCopyMarkdown,
++    eventToMarkdown: (...args: unknown[]) => h.eventToMarkdown(...args),
++}));
++vi.mock("@element-hq/element-web-shared-utils", async (orig) => ({
++    ...(await orig<typeof import("@element-hq/element-web-shared-utils")>()),
++    copyPlainTextToClipboard: (...args: unknown[]) => h.copyPlainText(...args),
++}));
++vi.mock("./DownloadAction", () => ({
++    canDownloadMedia: () => h.eventUtils.canDownload,
++    downloadMedia: (...args: unknown[]) => h.downloadMedia(...args),
++}));
++vi.mock("./RoomActions", async (orig) => ({
++    ...(await orig<typeof import("./RoomActions")>()),
++    forwardViaDialog: (...args: unknown[]) => h.forwardViaDialog(...args),
++    viewSourceViaDialog: (...args: unknown[]) => h.viewSourceViaDialog(...args),
++}));
++vi.mock("../Modal", () => ({ default: { createDialog: (...args: unknown[]) => h.createDialog(...args) } }));
++vi.mock("../components/structures/ViewSource", () => ({ default: class ViewSourceStub {} }));
++vi.mock("./registry", () => ({
++    getClientViews: () => [{ id: "fixture", name: "Fixture", url: "/kits/fixture/" }],
++    getMeetUrl: vi.fn(() => "https://meet.example.org"),
++    selectClientView: vi.fn(async () => {}),
++}));
++
++/** A MatrixEvent stand-in with the methods the bridge and its view-model constructors read. */
++const fakeEvent = (id: string, over: Record<string, unknown> = {}) => {
++    const content = { msgtype: "m.text", body: "hi" };
++    return {
++        getId: () => id,
++        getContent: () => content,
++        getRoomId: () => "!a",
++        getSender: () => "@bob:example.org",
++        getType: () => "m.room.message",
++        isEncrypted: () => false,
++        isDecryptionFailure: () => false,
++        getClearContent: () => null,
++        decryptionFailureReason: null,
++        status: null,
++        replacingEvent: () => null,
++        replacingEventDate: () => undefined as Date | undefined,
++        replacingEventId: () => undefined as string | undefined,
++        isRedacted: () => false,
++        getWireContent: () => ({}),
++        getTs: () => 1,
++        getTxnId: () => undefined as string | undefined,
++        getUnsigned: () => ({}) as { transaction_id?: string },
++        getThread: () => null,
++        getRelation: () => null,
++        isRelation: (_type?: string) => false,
++        threadRootId: undefined as string | undefined,
++        replyEventId: undefined as string | undefined,
++        on: vi.fn(),
++        off: vi.fn(),
++        ...over,
++    };
++};
++
++/*
++ * M4 (D15): room retention in the face. The bridge hides expired messages from the kit by a stub (the kit never drops a
++ * message that is merely absent from a snapshot), keeps one timer for the next expiry, hands over the retention notice
++ * as a line without the sender's name, and quotes no expired parent. Entry 13's helpers are real here (SdkConfig,
++ * MatrixClientPeg); only the view-models and `textForEvent` are fakes.
++ */
++const T0 = Date.UTC(2026, 10, 18, 12, 0, 0);
++const MIN = 60_000;
++const DAY = 86_400_000;
++const retentionOn = (choices: { ms: number; label: string }[] = []) =>
++    SdkConfig.put({ [ROOM_RETENTION_CONFIG_KEY]: { choices } } as unknown as Parameters<typeof SdkConfig.put>[0]);
++
++describe("ViewModelBridge and room retention (M4)", () => {
++    let bridge: ViewModelBridge;
++    let emitter: EventEmitter;
++    let emitted: { kind: string; roomId?: string }[];
++    /** max_lifetime per room id as the room state says it (undefined = no policy). */
++    let lifetimes: Record<string, number | undefined>;
++    let roomB: Record<string, unknown>;
++
++    /** A message event of a room, `ageMs` old at T0. */
++    const msg = (id: string, ageMs: number, roomId = "!a", over: Record<string, unknown> = {}) =>
++        fakeEvent(id, {
++            getRoomId: () => roomId,
++            getTs: () => T0 - ageMs,
++            isState: () => false,
++            isSending: () => false,
++            ...over,
++        });
++    const itemsOf = (...events: unknown[]) =>
++        events.map((event, i) => ({ kind: "event" as const, key: `k${i}`, event, continuation: false }));
++    const timelineB = () => {
++        const vm = Object.assign(new h.FakeVm({ items: [] as unknown[], atLiveEnd: true }), {
++            start: vi.fn(),
++            onJumpToLive: vi.fn(),
++            onMarkAllAsRead: vi.fn(),
++        });
++        return vm;
++    };
++    const retentionEvent = (over: Record<string, unknown> = {}) =>
++        fakeEvent("$ret", {
++            getType: () => "m.room.retention",
++            getStateKey: () => "",
++            isState: () => true,
++            getTs: () => T0,
++            getSender: () => "@alice:example.org",
++            sender: { name: "Alice" },
++            getContent: () => ({ max_lifetime: DAY }),
++            getPrevContent: () => ({}),
++            ...over,
++        });
++
++    beforeEach(() => {
++        vi.useFakeTimers();
++        vi.setSystemTime(T0);
++        vi.clearAllMocks();
++        SdkConfig.reset();
++        h.timeline.listeners.clear();
++        h.timeline.snapshot = { items: [], atLiveEnd: true };
++        h.padlocks.length = 0;
++        h.bodies.length = 0;
++        h.replies.length = 0;
++        h.reactionButtons.length = 0;
++        h.threadSummaries.length = 0;
++        h.mediaVms.length = 0;
++        h.urlPreviewVms.length = 0;
++        h.watchers.clear();
++        h.settings.urlPreviewsEnabled = true;
++        h.roomEncrypted.value = true;
++        h.timelineSet.relations.getChildEventsForEvent.mockReturnValue(undefined);
++        h.room.findEventById.mockImplementation(() => undefined);
++        hb.timelineB = timelineB();
++        hb.textForEvent.mockReset();
++        hb.textForEvent.mockReturnValue("");
++        lifetimes = { "!a": DAY, "!b": DAY };
++        const stateOf =
++            (id: string) =>
++            (..._args: unknown[]) =>
++                lifetimes[id] === undefined ? undefined : { getContent: () => ({ max_lifetime: lifetimes[id] }) };
++        h.room.currentState.getStateEvents.mockImplementation(stateOf("!a"));
++        roomB = { ...h.room, roomId: "!b", currentState: { ...h.room.currentState, getStateEvents: stateOf("!b") } };
++        vi.spyOn(MatrixClientPeg, "get").mockReturnValue({
++            getRoom: (id: string) =>
++                lifetimes[id] === undefined
++                    ? { currentState: { getStateEvents: () => null } }
++                    : {
++                          currentState: {
++                              getStateEvents: () => ({ getContent: () => ({ max_lifetime: lifetimes[id] }) }),
++                          },
++                      },
++        } as never);
++        emitter = new EventEmitter();
++        const client = {
++            getRoom: (id: string) => (id === "!a" ? h.room : id === "!b" ? roomB : null),
++            getUserId: () => "@me:example.org",
++            isGuest: () => false,
++            isRoomEncrypted: () => true,
++            hasLazyLoadMembersEnabled: () => false,
++            getCrypto: () => undefined,
++            getEventTimeline: h.getEventTimeline,
++            on: (e: string, f: (...a: unknown[]) => void) => emitter.on(e, f),
++            off: (e: string, f: (...a: unknown[]) => void) => emitter.off(e, f),
++        } as unknown as MatrixClient;
++        bridge = new ViewModelBridge(client);
++        emitted = [];
++        bridge.onChange((e) => emitted.push(e as never));
++    });
++
++    afterEach(() => {
++        bridge.dispose();
++        vi.useRealTimers();
++        vi.restoreAllMocks();
++        SdkConfig.reset();
++    });
++
++    describe("expired messages", () => {
++        it("an expired message tile becomes a stub the kit can remove, a live one is mapped as before", () => {
++            retentionOn();
++            h.timeline.snapshot = { items: itemsOf(msg("$old", 2 * DAY), msg("$new", MIN)), atLiveEnd: true };
++            const out = bridge.timeline("!a");
++            expect(out).toHaveLength(2);
++            expect(out.find((m) => m.id === "$old")).toEqual({
++                id: "$old",
++                roomId: "!a",
++                senderId: "@bob:example.org",
++                senderName: "",
++                ts: T0 - 2 * DAY,
++                body: "",
++                kind: "other",
++                expired: true,
++            });
++            expect(out.find((m) => m.id === "$new")).not.toHaveProperty("expired");
++            expect(out.find((m) => m.id === "$new")).toMatchObject({ body: expect.any(String), roomId: "!a" });
++        });
++
++        it("the rebuild race: a message handed over, expired, then left out by the view-model's rebuild still gets its stub", () => {
++            retentionOn();
++            const ev = msg("$race", DAY - MIN);
++            h.timeline.snapshot = { items: itemsOf(ev), atLiveEnd: true };
++            expect(bridge.timeline("!a")[0]).not.toHaveProperty("expired");
++            vi.setSystemTime(T0 + 2 * MIN); // now past max_lifetime
++            h.timeline.snapshot = { items: [], atLiveEnd: true }; // the view-model dropped it on its own rebuild
++            const out = bridge.timeline("!a");
++            expect(out).toHaveLength(1);
++            expect(out[0]).toMatchObject({
++                id: "$race",
++                roomId: "!a",
++                expired: true,
++                body: "",
++                kind: "other",
++                senderName: "",
++            });
++        });
++
++        it("an id absent for another reason (left the window, not expired) gets no stub", () => {
++            retentionOn();
++            h.timeline.snapshot = { items: itemsOf(msg("$gone", MIN), msg("$stay", MIN)), atLiveEnd: true };
++            expect(bridge.timeline("!a")).toHaveLength(2);
++            h.timeline.snapshot = { items: itemsOf(msg("$stay", MIN)), atLiveEnd: true };
++            expect(bridge.timeline("!a").map((m) => m.id)).toEqual(["$stay"]);
++        });
++
++        it("a stub of one room is not emitted in another room's timeline", () => {
++            retentionOn();
++            h.timeline.snapshot = { items: itemsOf(msg("$a1", DAY - MIN)), atLiveEnd: true };
++            bridge.timeline("!a");
++            hb.timelineB.snapshot = { items: [], atLiveEnd: true };
++            vi.setSystemTime(T0 + 2 * MIN);
++            expect(bridge.timeline("!b")).toEqual([]);
++        });
++
++        it("key absent: nothing is hidden, no stub, no timer", () => {
++            h.timeline.snapshot = { items: itemsOf(msg("$old", 2 * DAY)), atLiveEnd: true };
++            const out = bridge.timeline("!a");
++            expect(out).toHaveLength(1);
++            expect(out[0]).not.toHaveProperty("expired");
++            h.timeline.set({ items: itemsOf(msg("$old", 2 * DAY), msg("$x", MIN)) });
++            expect(vi.getTimerCount()).toBe(0);
++        });
++    });
++
++    describe("the expiry timer", () => {
++        const openBoth = () => {
++            bridge.timeline("!a");
++            bridge.timeline("!b");
++        };
++
++        it("fires at the next expiry (+250 ms), emits `timeline` for the due room only, then re-arms for the next room", () => {
++            retentionOn();
++            lifetimes = { "!a": MIN, "!b": 2 * MIN };
++            h.timeline.snapshot = { items: itemsOf(msg("$a", 10_000, "!a")), atLiveEnd: true };
++            hb.timelineB.snapshot = { items: itemsOf(msg("$b", 10_000, "!b")), atLiveEnd: true };
++            openBoth();
++            h.timeline.set({}); // a timeline change arms the timer
++            hb.timelineB.set({});
++            emitted.length = 0;
++            expect(vi.getTimerCount()).toBe(1);
++            vi.advanceTimersByTime(50_249);
++            expect(emitted).toEqual([]);
++            vi.advanceTimersByTime(1);
++            expect(emitted).toEqual([{ kind: "timeline", roomId: "!a" }]);
++            expect(vi.getTimerCount()).toBe(1); // re-armed for room b
++            emitted.length = 0;
++            vi.advanceTimersByTime(60_000);
++            expect(emitted).toEqual([{ kind: "timeline", roomId: "!b" }]);
++            expect(vi.getTimerCount()).toBe(0); // nothing left to expire
++        });
++
++        it("dispose clears the timer", () => {
++            retentionOn();
++            h.timeline.snapshot = { items: itemsOf(msg("$a", 10_000)), atLiveEnd: true };
++            bridge.timeline("!a");
++            h.timeline.set({});
++            expect(vi.getTimerCount()).toBe(1);
++            bridge.dispose();
++            expect(vi.getTimerCount()).toBe(0);
++        });
++
++        it("a retention state event of an open room re-arms the timer (a policy that arrives later)", () => {
++            retentionOn();
++            lifetimes = { "!a": undefined };
++            h.timeline.snapshot = { items: itemsOf(msg("$a", 10_000)), atLiveEnd: true };
++            bridge.timeline("!a");
++            h.timeline.set({});
++            expect(vi.getTimerCount()).toBe(0); // no policy yet
++            lifetimes = { "!a": MIN };
++            emitter.emit(RoomStateEvent.Events, retentionEvent({ getRoomId: () => "!a" }));
++            expect(vi.getTimerCount()).toBe(1);
++        });
++
++        it("a delay beyond the 32-bit timer limit is capped", () => {
++            retentionOn();
++            lifetimes = { "!a": 400 * DAY };
++            const spy = vi.spyOn(globalThis, "setTimeout");
++            h.timeline.snapshot = { items: itemsOf(msg("$a", 10_000)), atLiveEnd: true };
++            bridge.timeline("!a");
++            h.timeline.set({});
++            const delays = spy.mock.calls.map((c) => c[1] as number);
++            expect(delays.length).toBeGreaterThan(0);
++            expect(Math.max(...delays)).toBeLessThanOrEqual(2147483647);
++        });
++    });
++
++    describe("the retention notice", () => {
++        const read = (event: unknown) => {
++            h.timeline.snapshot = { items: itemsOf(event), atLiveEnd: true };
++            return bridge.timeline("!a");
++        };
++
++        it("set: a line of kind other with the text without the sender's name", () => {
++            retentionOn([{ ms: DAY, label: "1 day" }]);
++            hb.textForEvent.mockReturnValue("Alice set messages in this room to disappear after 1 day.");
++            const ev = retentionEvent();
++            const out = read(ev);
++            expect(hb.textForEvent).toHaveBeenCalledWith(ev, expect.anything());
++            expect(out).toHaveLength(1);
++            expect(out[0]).toMatchObject({
++                id: "$ret",
++                roomId: "!a",
++                senderId: "@alice:example.org",
++                senderName: "Alice",
++                ts: T0,
++                body: "",
++                kind: "other",
++                retention: { text: "set messages in this room to disappear after 1 day." },
++            });
++        });
++
++        it("off: the text of turning it off, without the name", () => {
++            retentionOn([{ ms: DAY, label: "1 day" }]);
++            hb.textForEvent.mockReturnValue("Alice turned off disappearing messages.");
++            const out = read(
++                retentionEvent({
++                    getContent: () => ({ min_lifetime: 0 }),
++                    getPrevContent: () => ({ max_lifetime: DAY }),
++                }),
++            );
++            expect(out).toHaveLength(1);
++            expect(out[0].retention).toEqual({ text: "turned off disappearing messages." });
++        });
++
++        it("no line when textForEvent says there is no notice (no change, or the key is absent)", () => {
++            retentionOn();
++            hb.textForEvent.mockReturnValue("");
++            expect(read(retentionEvent())).toEqual([]);
++        });
++    });
++
++    describe("replies", () => {
++        it("an expired parent gives no quote; a live parent still does", () => {
++            retentionOn();
++            const reply = (parentId: string) =>
++                msg(`$reply-${parentId}`, MIN, "!a", {
++                    getContent: () => ({ msgtype: "m.text", body: "answer" }),
++                    getWireContent: () => ({ "m.relates_to": { "m.in_reply_to": { event_id: parentId } } }),
++                    replyEventId: parentId,
++                });
++            const oldParent = msg("$p-old", 2 * DAY);
++            const newParent = msg("$p-new", MIN, "!a", { getContent: () => ({ msgtype: "m.text", body: "live" }) });
++            h.room.findEventById.mockImplementation((id: string) =>
++                id === "$p-old" ? oldParent : id === "$p-new" ? newParent : undefined,
++            );
++            h.timeline.snapshot = { items: itemsOf(reply("$p-old")), atLiveEnd: true };
++            expect(bridge.timeline("!a")[0]).not.toHaveProperty("replyTo");
++            h.timeline.snapshot = { items: itemsOf(reply("$p-new")), atLiveEnd: true };
++            expect(bridge.timeline("!a")[0].replyTo).toMatchObject({ eventId: "$p-new", text: "live" });
++        });
++    });
++});
+diff --git a/apps/web/src/client-views/ViewModelBridge.ts b/apps/web/src/client-views/ViewModelBridge.ts
+index 0ba5cc3..8e8122d 100644
+--- a/apps/web/src/client-views/ViewModelBridge.ts
++++ b/apps/web/src/client-views/ViewModelBridge.ts
+@@ -87,6 +87,16 @@ import { UserMenuViewModel } from "../viewmodels/menus/UserMenuViewModel";
+ import { RoomStatusBarViewModel } from "../viewmodels/room/RoomStatusBar";
+ import { MemberAvatarViewModel } from "../components/viewmodels/avatars/MemberAvatarViewModel";
+ import { _t } from "../languageHandler";
++import { textForEvent } from "../TextForEvent";
++import {
++    ROOM_RETENTION_EVENT_TYPE,
++    getRetentionConfig,
++    isEventExpired,
++    isRetentionEnabled,
++    labelForLifetime,
++    maxLifetimeFromContent,
++    nextExpiryDelay,
++} from "../utils/RoomRetention";
+ import { CallCard } from "./CallCard";
+ import { getClientViews, getMeetUrl, selectClientView } from "./registry";
+ import { toViewAudio, toViewE2e, toViewMedia, toViewMessage, toViewRoom, toViewUrlPreviews } from "./mapping";
+@@ -586,6 +596,8 @@ class EventRow {
+             }
+             return undefined;
+         }
++        // Room retention: an expired parent is not quoted (the kit would show text the room no longer keeps).
++        if (isEventExpired(parent)) return undefined;
+         const edit = parent.replacingEvent();
+         if (edit !== this.replyEdit) {
+             this.replyEdit?.off(MatrixEventEvent.Decrypted, this.changed);
+@@ -1177,6 +1189,11 @@ export class ViewModelBridge implements ClientViewBridge {
+     private readonly rows = new Map<string, EventRow>();
+     /** The call card (Element's RootCallTileViewModel) of each call notification the kit was handed, by event id. */
+     private readonly callCards = new Map<string, CallCard>();
++    /** Room retention: the messages handed to the kit per room (id to event), so an expired one can still be named by a stub after the view-model's rebuild dropped it. Filled only while retention is configured. */
++    private readonly handedOver = new Map<string, Map<string, MatrixEvent>>();
++    /** Room retention: the one timer for the next expiry over all open timelines, and when each room's next message expires. */
++    private retentionTimer: ReturnType<typeof setTimeout> | undefined;
++    private readonly retentionDue = new Map<string, number>();
+     /**
+      * M12 Z4: the encryption tile view-model (Element's `EncryptionEventViewModel`, built as EventTileFactory builds it)
+      * of each `m.room.encryption` event the kit was handed, by event id, with how to stop following it.
+@@ -1285,6 +1302,7 @@ export class ViewModelBridge implements ClientViewBridge {
+         this.watchLocalVerification();
+         this.watchEncryption();
+         this.watchPins();
++        this.watchRetention();
+         // A local chat room changes state (creating, created, error) through client room events.
+         const onLocalRoom = (room: Room): void => {
+             if (this.localChats.has(room.roomId)) this.syncRooms();
+@@ -1358,6 +1376,54 @@ export class ViewModelBridge implements ClientViewBridge {
+         this.disposers.push(() => this.client.off(RoomStateEvent.Members, onPowerApplied));
+     }
+ 
++    /** A retention policy of an open room changes which messages are due: its notice appears and the timer is armed again. */
++    private watchRetention(): void {
++        const onRetentionState = (ev: MatrixEvent): void => {
++            const roomId = ev.getRoomId();
++            if (ev.getType() !== ROOM_RETENTION_EVENT_TYPE || !roomId || !this.timelines.has(roomId)) return;
++            this.armRetention();
++            this.emit({ kind: "timeline", roomId });
++        };
++        this.client.on(RoomStateEvent.Events, onRetentionState);
++        this.disposers.push(() => this.client.off(RoomStateEvent.Events, onRetentionState));
++    }
++
++    /**
++     * Room retention: arm the one timer for the earliest expiry over the events of all open timelines (entry 13's
++     * `nextExpiryDelay`, the same +250 ms and 32-bit cap as its message panel). When it fires the rooms that are due get
++     * a `timeline` change (their snapshot now carries the stubs) and the timer is armed again. Never created while
++     * retention is not configured.
++     */
++    private armRetention(): void {
++        if (this.retentionTimer !== undefined) clearTimeout(this.retentionTimer);
++        this.retentionTimer = undefined;
++        this.retentionDue.clear();
++        if (this.disposed || !isRetentionEnabled()) return;
++        const now = Date.now();
++        let next: number | null = null;
++        for (const [roomId, vm] of this.timelines) {
++            const room = this.client.getRoom(roomId);
++            if (!room) continue;
++            const events: MatrixEvent[] = [];
++            for (const item of vm.getSnapshot().items)
++                if (item.kind === "event") events.push(item.event as MatrixEvent);
++            const delay = nextExpiryDelay(events, room, now);
++            if (delay === null) continue;
++            this.retentionDue.set(roomId, now + delay);
++            if (next === null || delay < next) next = delay;
++        }
++        if (next === null) return;
++        this.retentionTimer = setTimeout(
++            () => {
++                this.retentionTimer = undefined;
++                const due = [...this.retentionDue].filter(([, at]) => at <= Date.now()).map(([roomId]) => roomId);
++                due.forEach((roomId) => this.emit({ kind: "timeline", roomId }));
++                this.armRetention();
++            },
++            Math.min(next + 250, 2147483647),
++        );
++    }
++
+     /** useIsEncrypted re-reads the flag on every m.room.encryption state event. */
+     private watchEncryption(): void {
+         const onState = (ev: MatrixEvent): void => {
+@@ -1566,6 +1632,7 @@ export class ViewModelBridge implements ClientViewBridge {
+                     opened = true;
+                     if (!s.atLiveEnd) vm.onJumpToLive(() => {});
+                 }
++                this.armRetention();
+                 this.emit({ kind: "timeline", roomId });
+             }),
+         );
+@@ -1675,12 +1742,15 @@ export class ViewModelBridge implements ClientViewBridge {
+         const seenCalls = new Set<string>();
+         // Encryption events of this window, same rule as the calls.
+         const seenEncryption = new Set<string>();
++        // Every event id of this window, for the retention stubs below.
++        const inWindow = new Set<string>();
+         for (const item of vm.getSnapshot().items) {
+             if (item.kind !== "event") continue;
+             const eventItem = item;
+             if (eventItem.sendState && eventItem.sendState !== "sent") continue;
+             const id = (eventItem.event as MatrixEvent).getId();
+             if (!id || id.startsWith("~")) continue;
++            inWindow.add(id);
+             if ((eventItem.event as MatrixEvent).getType() === EventType.RTCNotification) {
+                 seenCalls.add(id);
+                 const call = this.callMessage(eventItem.event as MatrixEvent, roomId);
+@@ -1696,6 +1766,12 @@ export class ViewModelBridge implements ClientViewBridge {
+                 }
+                 continue;
+             }
++            // Room retention notice: a line when Element itself shows one; the face drops every other state notice.
++            if ((eventItem.event as MatrixEvent).getType() === ROOM_RETENTION_EVENT_TYPE) {
++                const notice = this.retentionMessage(eventItem.event as MatrixEvent, roomId);
++                if (notice) messages.push(notice);
++                continue;
++            }
+             const row = this.row(eventItem, roomId);
+             const tile = row.tile.getSnapshot().snapshot;
+             // An event still waiting for its key keeps the SDK type m.room.encrypted (a failed one is m.room.message).
+@@ -1706,6 +1782,11 @@ export class ViewModelBridge implements ClientViewBridge {
+             // response (real event id, status SENT) and the remote echo kept it for good and hid the own message forever.
+             // The event's status is read live.
+             if (!isMessage || (eventItem.event as MatrixEvent).status != null) continue;
++            // A message past its room's max_lifetime: a stub instead, the kit never drops what is merely absent.
++            if (isEventExpired(eventItem.event as MatrixEvent)) {
++                messages.push(this.expiredStub(eventItem.event as MatrixEvent, roomId, id));
++                continue;
++            }
+             const senderAvatarUrl = tile.sender.senderId
+                 ? this.senderAvatarUrl(roomId, tile.sender.senderId)
+                 : undefined;
+@@ -1732,11 +1813,21 @@ export class ViewModelBridge implements ClientViewBridge {
+                     permalink: this.permalinkOf(roomId, id),
+                 },
+             );
++            if (message && isRetentionEnabled()) {
++                let handed = this.handedOver.get(roomId);
++                if (!handed) this.handedOver.set(roomId, (handed = new Map()));
++                handed.set(id, eventItem.event as MatrixEvent);
++            }
+             if (message) {
+                 const txnId = this.ownTxnId(eventItem.event as MatrixEvent);
+                 messages.push(txnId ? { ...message, txnId } : message);
+             }
+         }
++        // The view-model drops an expired event on its next rebuild: a message handed over earlier that is gone from the
++        // window and has expired since still needs its stub (one gone for another reason gets none).
++        this.handedOver.get(roomId)?.forEach((event, id) => {
++            if (!inWindow.has(id) && isEventExpired(event)) messages.push(this.expiredStub(event, roomId, id));
++        });
+         this.pruneCallCards(roomId, seenCalls);
+         this.pruneEncryptionCards(roomId, seenEncryption);
+         return messages.sort((a, b) => a.ts - b.ts);
+@@ -1776,6 +1867,49 @@ export class ViewModelBridge implements ClientViewBridge {
+         }
+     }
+ 
++    /** What stands in for an expired message: enough for the kit to find and remove it, nothing of its content. */
++    private expiredStub(event: MatrixEvent, roomId: string, id: string): ViewMessage {
++        return {
++            id,
++            roomId,
++            senderId: event.getSender() ?? "",
++            senderName: "",
++            ts: event.getTs(),
++            body: "",
++            kind: "other",
++            expired: true,
++        };
++    }
++
++    /**
++     * The entry of an `m.room.retention` state event, built like the encryption line: undefined unless Element's own
++     * `textForEvent` has a notice for it (key absent and an unchanged `max_lifetime` give none). The text is Element's
++     * sentence without the sender's name, which the kit's system line prints itself.
++     */
++    private retentionMessage(event: MatrixEvent, roomId: string): ViewMessage | undefined {
++        const id = event.getId();
++        const cfg = getRetentionConfig();
++        if (!id || !cfg || !event.isState() || !textForEvent(event, this.client)) return undefined;
++        const lifetime = maxLifetimeFromContent(event.getContent());
++        const text =
++            lifetime === null
++                ? _t("room_retention|face_notice_off")
++                : _t("room_retention|face_notice_set", { duration: labelForLifetime(lifetime, cfg) });
++        const senderId = event.getSender() ?? "";
++        const avatarUrl = senderId ? this.senderAvatarUrl(roomId, senderId) : undefined;
++        return {
++            id,
++            roomId,
++            senderId,
++            senderName: event.sender?.name || senderId,
++            ...(avatarUrl ? { senderAvatarUrl: avatarUrl } : {}),
++            ts: event.getTs(),
++            body: "",
++            kind: "other",
++            retention: { text },
++        };
++    }
++
+     /**
+      * The entry of a room's `m.room.encryption` state event: `kind` "other", no body, and `encryption` from Element's
+      * `EncryptionEventViewModel` (cached per event id; its async refresh of the state fires a `timeline` event).
+@@ -2958,6 +3092,10 @@ export class ViewModelBridge implements ClientViewBridge {
+ 
+     public dispose(): void {
+         this.disposed = true;
++        if (this.retentionTimer !== undefined) clearTimeout(this.retentionTimer);
++        this.retentionTimer = undefined;
++        this.retentionDue.clear();
++        this.handedOver.clear();
+         this.closeReactionPicker();
+         this.closePanel();
+         this.filePicker?.cancel();
+diff --git a/apps/web/src/client-views/types.ts b/apps/web/src/client-views/types.ts
+index 44d4cb4..0c83291 100644
+--- a/apps/web/src/client-views/types.ts
++++ b/apps/web/src/client-views/types.ts
+@@ -190,6 +190,19 @@ export interface ViewMessage {
+      * M12 Z4, additive: a host without the field never sets it (a kit feature-checks, nothing to call).
+      */
+     encryption?: ViewEncryption;
++    /**
++     * Set (always `true`) on a stub that stands in for a message past its room's `max_lifetime` (room retention): the
++     * entry carries only id, room, sender id, ts and an empty body, and the kit removes the message it already holds
++     * under that id (a message merely absent from a snapshot is never dropped by a kit). Additive: a host without the
++     * field never sets it, and with retention not configured it never appears.
++     */
++    expired?: true;
++    /**
++     * Set on the entry of an `m.room.retention` state event that Element itself would show a notice for: `text` is the
++     * notice WITHOUT the sender's name (the kit's system line prints `senderName` itself), in the user's language.
++     * Additive, same rule as `encryption`.
++     */
++    retention?: { text: string };
+ }
+ 
+ /** The state of an encryption event line (see `ViewMessage.encryption`). */
+diff --git a/apps/web/src/components/viewmodels/right_panel/RoomSummaryCardViewModel.test.ts b/apps/web/src/components/viewmodels/right_panel/RoomSummaryCardViewModel.test.ts
+index d4571f1..15fa55f 100644
+--- a/apps/web/src/components/viewmodels/right_panel/RoomSummaryCardViewModel.test.ts
++++ b/apps/web/src/components/viewmodels/right_panel/RoomSummaryCardViewModel.test.ts
+@@ -13,6 +13,7 @@ import { act, renderHook, waitFor } from "test-utils-rtl";
+ import { mkStubRoom, stubClient, withClientContextRenderOptions } from "test-utils";
+ 
+ import { useRoomSummaryCardViewModel } from "./RoomSummaryCardViewModel";
++import { RoomSettingsTab } from "../../views/dialogs/RoomSettingsDialog-tab";
+ import defaultDispatcher from "../../../dispatcher/dispatcher";
+ import { DefaultTagID } from "../../../stores/room-list-v3/skip-list/tag";
+ import RightPanelStore from "../../../stores/right-panel/RightPanelStore";
+@@ -87,6 +88,18 @@ describe("useRoomSummaryCardViewModel", () => {
+         expect(spy).toHaveBeenCalledWith({ action: "open_room_settings" });
+     });
+ 
++    it("should handle disappearing messages click: opens this room's Security settings tab (M4)", () => {
++        const spy = vi.spyOn(defaultDispatcher, "dispatch").mockImplementation(() => {});
++        const { result } = render();
++
++        result.current.onRoomRetentionClick();
++        expect(spy).toHaveBeenCalledWith({
++            action: "open_room_settings",
++            room_id: room.roomId,
++            initial_tab_id: RoomSettingsTab.Security,
++        });
++    });
++
+     it("should handle leave room click", () => {
+         const spy = vi.spyOn(defaultDispatcher, "dispatch").mockImplementation(() => {});
+         const { result } = render();
+diff --git a/apps/web/src/components/viewmodels/right_panel/RoomSummaryCardViewModel.ts b/apps/web/src/components/viewmodels/right_panel/RoomSummaryCardViewModel.ts
+index 9d5d6d4..3afe4c1 100644
+--- a/apps/web/src/components/viewmodels/right_panel/RoomSummaryCardViewModel.ts
++++ b/apps/web/src/components/viewmodels/right_panel/RoomSummaryCardViewModel.ts
+@@ -36,6 +36,7 @@ import { PollHistoryDialog } from "../../views/dialogs/PollHistoryDialog";
+ import Modal from "../../../Modal";
+ import ExportDialog from "../../views/dialogs/ExportDialog";
+ import { ShareDialog } from "../../views/dialogs/ShareDialog";
++import { RoomSettingsTab } from "../../views/dialogs/RoomSettingsDialog-tab";
+ import { type RoomPermalinkCreator } from "../../../utils/permalinks/Permalinks";
+ import { ReportRoomDialog } from "../../views/dialogs/ReportRoomDialog";
+ import { Key } from "../../../Keyboard";
+@@ -103,6 +104,8 @@ export interface RoomSummaryCardState {
+     onRoomExtensionsClick: () => void;
+     onRoomPinsClick: () => void;
+     onRoomSettingsClick: (ev: Event) => void;
++    /** The face (host panel) offers only this one setting: opens the room settings on the tab that holds the retention picker. */
++    onRoomRetentionClick: () => void;
+     onLeaveRoomClick: () => void;
+     onShareRoomClick: () => void;
+     onRoomExportClick: () => Promise<void>;
+@@ -222,6 +225,14 @@ export function useRoomSummaryCardViewModel(
+         PosthogTrackers.trackInteraction("WebRightPanelRoomInfoSettingsButton", ev);
+     };
+ 
++    const onRoomRetentionClick = (): void => {
++        defaultDispatcher.dispatch({
++            action: "open_room_settings",
++            room_id: room.roomId,
++            initial_tab_id: RoomSettingsTab.Security,
++        });
++    };
++
+     const onShareRoomClick = (): void => {
+         Modal.createDialog(ShareDialog, {
+             target: room,
+@@ -291,6 +302,7 @@ export function useRoomSummaryCardViewModel(
+         onRoomExtensionsClick,
+         onRoomPinsClick,
+         onRoomSettingsClick,
++        onRoomRetentionClick,
+         onLeaveRoomClick,
+         onShareRoomClick,
+         onRoomExportClick,
+diff --git a/apps/web/src/components/views/right_panel/RoomSummaryCardView.test.tsx b/apps/web/src/components/views/right_panel/RoomSummaryCardView.test.tsx
+index 7769f13..5c5ecb7 100644
+--- a/apps/web/src/components/views/right_panel/RoomSummaryCardView.test.tsx
++++ b/apps/web/src/components/views/right_panel/RoomSummaryCardView.test.tsx
+@@ -17,6 +17,8 @@ import { LinkedTextContext } from "@element-hq/web-shared-components";
+ import { flushPromises, stubClient } from "test-utils";
+ 
+ import RoomSummaryCardView from "./RoomSummaryCardView";
++import SdkConfig from "../../../SdkConfig";
++import { ROOM_RETENTION_CONFIG_KEY } from "../../../utils/RoomRetention";
+ import MatrixClientContext from "../../../contexts/MatrixClientContext";
+ import { RoomPermalinkCreator } from "../../../utils/permalinks/Permalinks";
+ import { _t } from "../../../languageHandler";
+@@ -86,6 +88,7 @@ describe("<RoomSummaryCard />", () => {
+         onReportRoomClick: vi.fn(),
+         onFavoriteToggleClick: vi.fn(),
+         onInviteToRoomClick: vi.fn(),
++        onRoomRetentionClick: vi.fn(),
+     };
+ 
+     beforeEach(() => {
+@@ -235,6 +238,40 @@ describe("<RoomSummaryCard />", () => {
+         expect(vmDefaultValues.onRoomSettingsClick).toHaveBeenCalled();
+     });
+ 
++    describe("disappearing messages entry under the host panel (M4)", () => {
++        const label = (): string => _t("room_retention|legend");
++        const putConfig = (config: object): void => SdkConfig.put(config as Parameters<typeof SdkConfig.put>[0]);
++        const onRoomRetentionClick = vi.fn();
++
++        beforeEach(() => {
++            onRoomRetentionClick.mockClear();
++            vi.mocked(useRoomSummaryCardViewModel).mockReturnValue({ ...vmDefaultValues, onRoomRetentionClick });
++        });
++        afterEach(() => SdkConfig.reset());
++
++        it("hostPanel and the key set: the entry is there, calls its handler, and Settings is not offered", () => {
++            putConfig({ [ROOM_RETENTION_CONFIG_KEY]: { choices: [] } });
++            const { queryByText, getByText } = getComponent({ hostPanel: true });
++            expect(queryByText(_t("common|settings"))).not.toBeInTheDocument();
++            fireEvent.click(getByText(label()));
++            expect(onRoomRetentionClick).toHaveBeenCalled();
++            expect(vmDefaultValues.onRoomSettingsClick).not.toHaveBeenCalled();
++        });
++
++        it("hostPanel and the key absent: neither the entry nor Settings", () => {
++            const { queryByText } = getComponent({ hostPanel: true });
++            expect(queryByText(_t("common|settings"))).not.toBeInTheDocument();
++            expect(queryByText(label())).not.toBeInTheDocument();
++        });
++
++        it("no hostPanel: the stock Settings entry, and no new entry (key set or not)", () => {
++            putConfig({ [ROOM_RETENTION_CONFIG_KEY]: { choices: [] } });
++            const { queryByText, getByText } = getComponent();
++            expect(getByText(_t("common|settings"))).toBeInTheDocument();
++            expect(queryByText(label())).not.toBeInTheDocument();
++        });
++    });
++
+     it("opens room member list on button click", () => {
+         const { getByText } = getComponent();
+ 
+diff --git a/apps/web/src/components/views/right_panel/RoomSummaryCardView.tsx b/apps/web/src/components/views/right_panel/RoomSummaryCardView.tsx
+index 259489c..089c5fa 100644
+--- a/apps/web/src/components/views/right_panel/RoomSummaryCardView.tsx
++++ b/apps/web/src/components/views/right_panel/RoomSummaryCardView.tsx
+@@ -24,6 +24,7 @@ import FavouriteIcon from "@vector-im/compound-design-tokens/assets/web/icons/fa
+ import UserAddIcon from "@vector-im/compound-design-tokens/assets/web/icons/user-add";
+ import LinkIcon from "@vector-im/compound-design-tokens/assets/web/icons/link";
+ import SettingsIcon from "@vector-im/compound-design-tokens/assets/web/icons/settings";
++import TimeIcon from "@vector-im/compound-design-tokens/assets/web/icons/time";
+ import ExportArchiveIcon from "@vector-im/compound-design-tokens/assets/web/icons/export-archive";
+ import LeaveIcon from "@vector-im/compound-design-tokens/assets/web/icons/leave";
+ import FilesIcon from "@vector-im/compound-design-tokens/assets/web/icons/files";
+@@ -45,6 +46,7 @@ import BaseCard from "./BaseCard.tsx";
+ import { _t } from "../../../languageHandler";
+ import RoomAvatar from "../avatars/RoomAvatar";
+ import { E2EStatus } from "../../../utils/ShieldUtils.ts";
++import { isRetentionEnabled } from "../../../utils/RoomRetention.ts";
+ import { type RoomPermalinkCreator } from "../../../utils/permalinks/Permalinks.ts";
+ import { topicToHtml } from "../../../HtmlUtils.tsx";
+ import { useRoomSummaryCardViewModel } from "../../viewmodels/right_panel/RoomSummaryCardViewModel";
+@@ -312,6 +314,11 @@ const RoomSummaryCardView: React.FC<IProps> = ({
+                     <MenuItem Icon={SettingsIcon} label={_t("common|settings")} onSelect={vm.onRoomSettingsClick} />
+                 )}
+ 
++                {/* The face hides Settings; the one setting a room member still needs there is room retention (M4). */}
++                {hostPanel && isRetentionEnabled() && (
++                    <MenuItem Icon={TimeIcon} label={_t("room_retention|legend")} onSelect={vm.onRoomRetentionClick} />
++                )}
++
+                 <Separator />
+                 <div className="mx_RoomSummaryCard_bottomOptions">
+                     <MenuItem
+diff --git a/apps/web/src/i18n/strings/en_EN.json b/apps/web/src/i18n/strings/en_EN.json
+index 1f8297b..d3c088d 100644
+--- a/apps/web/src/i18n/strings/en_EN.json
++++ b/apps/web/src/i18n/strings/en_EN.json
+@@ -2178,6 +2178,8 @@
+     "room_retention": {
+         "admin_only": "Only room admins can change this.",
+         "custom": "Custom (%(duration)s)",
++        "face_notice_off": "turned off disappearing messages.",
++        "face_notice_set": "set messages in this room to disappear after %(duration)s.",
+         "legend": "Disappearing messages",
+         "notice_off": "%(senderName)s turned off disappearing messages.",
+         "notice_set": "%(senderName)s set messages in this room to disappear after %(duration)s.",

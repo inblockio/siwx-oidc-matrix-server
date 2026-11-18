@@ -7,8 +7,8 @@ runs `entrypoints/element_entrypoint.sh`.
 
 ## Why from source
 
-We carry fourteen vendored patches that cannot ship on the prebuilt
-`vectorim/element-web` image, and a fifteenth and a sixteenth that patch Element Call, whose
+We carry fifteen vendored patches that cannot ship on the prebuilt
+`vectorim/element-web` image, and a sixteenth and a seventeenth that patch Element Call, whose
 embedded widget the image builds from source (stage `element-call`) because Element Web only copies
 a prebuilt npm package. The **canonical list** — what, why, upstream status,
 retirement condition, and the order they are applied in — is
