@@ -2135,7 +2135,7 @@ needs only a context port. Entry 13 is gated by the `config.json` key `io.inbloc
     2026-11-18): with a choice above the limit the purge job deletes messages at the clamp, earlier than the room's setting
     says. Keep the config's choices within the server's limits (the `retention` section, on our servers the file
     `/data/conf.d/retention.yaml` loaded by `entrypoints/matrix_server.sh`).
-  Ships 160 vitest tests in 16 test files (list under Coverage); 2 new source files (`utils/RoomRetention.ts`,
+  Ships 163 vitest tests in 16 test files (list under Coverage); 2 new source files (`utils/RoomRetention.ts`,
   `RoomRetentionSection.tsx`), 16 stock files changed, 34 files in all. Marker in the built i18n file `en_EN.json`:
   `turned off disappearing messages.` (the Off notice).
 - **Limits (stated, not hidden):** *Not updated while open:* search results, pinned messages, a reply quote and the thread
@@ -2164,7 +2164,7 @@ needs only a context port. Entry 13 is gated by the `config.json` key `io.inbloc
   `SecurityRoomSettingsTab.tsx`, `MessagePanel.tsx` or `shouldHideEvent.ts`, or becomes redundant: check), or the deployment
   drops the feature. Remove the patch, the `room_retention` strings, the `io.inblock.room_retention` key from the
   deployments' configs, the `markers.tsv` row and this entry.
-- **Coverage:** the 16 vitest files in the patch, 160 tests, run by the `patch-tests` stage on every pull request:
+- **Coverage:** the 16 vitest files in the patch, 163 tests, run by the `patch-tests` stage on every pull request:
   `utils/RoomRetention.test.ts`, `shouldHideEvent.roomRetention.test.ts`,
   `components/structures/MessagePanel.roomRetention.test.tsx`, `utils/createMatrixClient.roomRetention.test.ts`,
   `components/views/settings/tabs/room/SecurityRoomSettingsTab.roomRetention.test.tsx`,

@@ -1,9 +1,9 @@
 diff --git a/apps/web/src/RoomNotifs.roomRetention.test.ts b/apps/web/src/RoomNotifs.roomRetention.test.ts
 new file mode 100644
-index 0000000..8380d33
+index 0000000..24c1dd8
 --- /dev/null
 +++ b/apps/web/src/RoomNotifs.roomRetention.test.ts
-@@ -0,0 +1,223 @@
+@@ -0,0 +1,251 @@
 +/*
 +Copyright 2026 inblock.io
 +
@@ -161,17 +161,45 @@ index 0000000..8380d33
 +        });
 +
 +        it("shows no count when the alive events are all read and the rest has expired", async () => {
-+            await room.addLiveEvents([message("$a", 3 * DAY), message("$b", 2000), message("$c", 1000)], {
-+                addToState: false,
-+            });
++            // an expired event after the read position is what proves the count is made of expired events
++            await room.addLiveEvents(
++                [message("$a", 3 * DAY), message("$b", 2000), message("$c", 1000), message("$d", 2 * DAY)],
++                { addToState: false },
++            );
 +            readUpTo("$c");
-+            serverCounts(2);
++            serverCounts(1);
 +            expect(determineUnreadState(room).count).toBe(0);
 +        });
 +
 +        it("ignores events of our own when looking for an alive unread event", async () => {
-+            await room.addLiveEvents([message("$a", 3 * DAY), message("$b", 1000, me)], { addToState: false });
++            // an event of ours is the read position, and an expired event after it is what the count is made of
++            await room.addLiveEvents([message("$a", 3 * DAY), message("$b", 1000, me), message("$c", 2 * DAY)], {
++                addToState: false,
++            });
 +            serverCounts(1);
++            expect(determineUnreadState(room).count).toBe(0);
++        });
++
++        it("keeps the server count when the newest event is our own and an older one from someone else is alive", async () => {
++            await room.addLiveEvents([message("$a", 2000), message("$b", 1000, me)], { addToState: false });
++            serverCounts(1);
++            expect(determineUnreadState(room).count).toBe(1);
++        });
++
++        it("keeps the server count when the newest event counts as read and nothing after it has expired", async () => {
++            await room.addLiveEvents([message("$a", 2000), message("$b", 1000)], { addToState: false });
++            vi.spyOn(room, "hasUserReadEvent").mockImplementation((_userId, eventId) => eventId === "$b");
++            serverCounts(1);
++            expect(determineUnreadState(room).count).toBe(1);
++        });
++
++        it("shows no count when three expired unread events lie after the read position", async () => {
++            await room.addLiveEvents(
++                [message("$a", 2000), message("$b", 3 * DAY), message("$c", 3 * DAY), message("$d", 2 * DAY)],
++                { addToState: false },
++            );
++            readUpTo("$a");
++            serverCounts(3);
 +            expect(determineUnreadState(room).count).toBe(0);
 +        });
 +
@@ -228,7 +256,7 @@ index 0000000..8380d33
 +    });
 +});
 diff --git a/apps/web/src/RoomNotifs.ts b/apps/web/src/RoomNotifs.ts
-index 3dc0708..0ea52c6 100644
+index 3dc0708..ada4bf5 100644
 --- a/apps/web/src/RoomNotifs.ts
 +++ b/apps/web/src/RoomNotifs.ts
 @@ -19,10 +19,16 @@ import { KnownMembership } from "matrix-js-sdk/src/types";
@@ -249,7 +277,7 @@ index 3dc0708..0ea52c6 100644
  
  /**
   * Gets all pending events in a room that have a status of `EventStatus.NOT_SENT`
-@@ -96,6 +102,28 @@ export function setRoomNotifsState(client: MatrixClient, roomId: string, newStat
+@@ -96,6 +102,30 @@ export function setRoomNotifsState(client: MatrixClient, roomId: string, newStat
      }
  }
  
@@ -257,7 +285,9 @@ index 3dc0708..0ea52c6 100644
 + * Room retention: true when the server's count for the main timeline of this room can only be made of expired
 + * events. Synapse keeps counting them and refuses a read receipt for them, so the count would stick for good.
 + * Safe direction only: false when the feature is off, the room has no policy, the loaded timeline is empty, an
-+ * unread event that is still alive is loaded, or nothing says the count is made of expired events.
++ * unread event that is still alive is loaded, or nothing says the count is made of expired events. Reaching the read
++ * position proves it only when at least one expired event lies after it: with none, the unread events are alive or
++ * older than the read position, so the server's count stays.
 + */
 +function isUnreadCountOnlyExpired(room: Room): boolean {
 +    if (!isRetentionEnabled() || getRoomMaxLifetime(room) === null) return false;
@@ -267,7 +297,7 @@ index 3dc0708..0ea52c6 100644
 +    for (let i = events.length - 1; i >= 0; i--) {
 +        const ev = events[i];
 +        const id = ev.getId();
-+        if (id && room.hasUserReadEvent(room.myUserId, id)) return true;
++        if (id && room.hasUserReadEvent(room.myUserId, id)) return sawExpired;
 +        if (isEventExpired(ev)) sawExpired = true;
 +        else if (eventTriggersUnreadCount(room.client, ev)) return false;
 +    }
@@ -278,7 +308,7 @@ index 3dc0708..0ea52c6 100644
  export function getUnreadNotificationCount(
      room: Room,
      type: NotificationCountType,
-@@ -103,7 +131,10 @@ export function getUnreadNotificationCount(
+@@ -103,7 +133,10 @@ export function getUnreadNotificationCount(
      threadId?: string,
  ): number {
      const getCountShownForRoom = (r: Room, type: NotificationCountType): number => {
@@ -290,7 +320,7 @@ index 3dc0708..0ea52c6 100644
      };
  
      let notificationCount = !!threadId
-@@ -318,6 +349,9 @@ export function determineUnreadState(
+@@ -318,6 +351,9 @@ export function determineUnreadState(
              hasUnread = doesRoomOrThreadHaveUnreadMessages(thread);
          }
          // If the thread does not exist, assume it contains no unreads
