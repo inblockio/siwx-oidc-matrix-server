@@ -2143,6 +2143,20 @@ It is gated by `io.inblock.room_retention` and by the two gates of entry 14.
     is kept whenever this cannot be told (over-count in doubt). Thread counts, other devices' counts, push and e-mail counts
     are unchanged. (b) No read receipt and no fully-read marker is sent for an expired event (`TimelinePanel.tsx`).
     (c) When the tile the timeline was pinned to expires, the timeline goes to the newest messages (`MessagePanel.tsx`).
+  - **Four follow-up fixes (2026-11-18, track room_retention M6, from the dev trial and the review of it):**
+    (I24) the badge no longer stays when all unread messages have expired: the "disappearing messages" notice itself
+    (`m.room.retention`, a state event that never expires, has a tile renderer from this entry) no longer counts as unread
+    activity, nor do reactions and edits (`isNeverCounted` in `RoomNotifs.ts`). (I10) an alive non-state event of another user
+    that Element does not render (no tile) still keeps the unread count, as does a redacted one: the count is dropped only
+    when everything after the read position is expired or never counted. (I1) a reply stops showing the quoted text once the
+    quoted message has expired while the room stays open: `ReplyChain` subscribes to a small tick (`onRetentionTick` /
+    `emitRetentionTick` in `utils/RoomRetention.ts`, emitted by the one `MessagePanel` timer, no timer per tile) and filters
+    expired events at render; with nothing left it shows the existing "could not be loaded" line, the reply itself stays.
+    (I2) the pinned-messages banner and card drop an expired pinned message without a reload: `usePinnedEvents` arms one
+    timer per hook instance for the next expiry (re-armed, cleared on unmount, none when the key is absent or no policy or
+    nothing left to expire). Key absent stays stock in all four. No new test file: 13 tests were added to
+    `RoomNotifs.roomRetention.test.ts` (+5), `components/views/elements/ReplyChain.roomRetention.test.tsx` (+4),
+    `components/structures/MessagePanel.roomRetention.test.tsx` (+1) and `hooks/usePinnedEvents.roomRetention.test.tsx` (+3).
   - **The SDK's own retention is forced off while the key is set.** `utils/createMatrixClient.ts` passes
     `unstableMSC1763Retention: false` instead of the `feature_retention` labs value: that SDK path treats Off written as
     `{"min_lifetime": 0}` wrongly and turns expired events into "Message deleted" tiles. Key absent: the line behaves as
@@ -2152,12 +2166,16 @@ It is gated by `io.inblock.room_retention` and by the two gates of entry 14.
     2026-11-18): with a choice above the limit the purge job deletes messages at the clamp, earlier than the room's setting
     says. Keep the config's choices within the server's limits (the `retention` section, on our servers the file
     `/data/conf.d/retention.yaml` loaded by `entrypoints/matrix_server.sh`).
-  Ships 163 vitest tests in 16 test files (list under Coverage); 2 new source files (`utils/RoomRetention.ts`,
+  Ships 176 vitest tests in 16 test files (list under Coverage; 163 + 13 new in the M6 round, derived by counting added
+  `it(` lines, not by running the sum); 2 new source files (`utils/RoomRetention.ts`,
   `RoomRetentionSection.tsx`), 16 stock files changed, 34 files in all. Marker in the built i18n file `en_EN.json`:
   `turned off disappearing messages.` (the Off notice).
-- **Limits (stated, not hidden):** *Not updated while open:* search results, pinned messages, a reply quote and the thread
-  summary are evaluated when they render or load; a message that expires while one of them is open stays until it is
-  rendered again (the room timeline and the room list preview do update). Search result counts still count expired hits,
+- **Limits (stated, not hidden):** *Not updated while open:* search results and the thread summary are evaluated when they
+  render or load; a message that expires while one of them is open stays until it is rendered again (the room timeline,
+  the room list preview, the pinned messages banner and card and, for a quoted message that is in the panel's loaded events,
+  the reply quote do update; a quote of an event older than the loaded window is re-checked at the next tick or render).
+  *Not covered by M6's fixes:* other alive state events (name, topic) after the read position still keep the unread count
+  (the safe direction), the browser look of the four fixes, and the banner's own index after a dropped pin (stock logic). Search result counts still count expired hits,
   and a search tile may treat a hidden expired event as its predecessor when it decides on a continuation. *Not covered:* the
   composer's reply preview, exports, OS notifications, the browser search index's stored copies (entry 6), other devices'
   caches and clients, and client clock skew (a clock that runs behind shows a message slightly longer until the server stops
@@ -2181,7 +2199,7 @@ It is gated by `io.inblock.room_retention` and by the two gates of entry 14.
   `SecurityRoomSettingsTab.tsx`, `MessagePanel.tsx` or `shouldHideEvent.ts`, or becomes redundant: check), or the deployment
   drops the feature. Remove the patch, the `room_retention` strings, the `io.inblock.room_retention` key from the
   deployments' configs, the `markers.tsv` row and this entry.
-- **Coverage:** the 16 vitest files in the patch, 163 tests, run by the `patch-tests` stage on every pull request:
+- **Coverage:** the 16 vitest files in the patch, 176 tests, run by the `patch-tests` stage on every pull request:
   `utils/RoomRetention.test.ts`, `shouldHideEvent.roomRetention.test.ts`,
   `components/structures/MessagePanel.roomRetention.test.tsx`, `utils/createMatrixClient.roomRetention.test.ts`,
   `components/views/settings/tabs/room/SecurityRoomSettingsTab.roomRetention.test.tsx`,
