@@ -2,7 +2,7 @@
 
 This directory is the **complete, canonical list of every modification we apply to
 upstream Element Web source** before building, and to the Element Call embedded build
-that the image serves (entries 13 and 14, whose patch files live in
+that the image serves (entries 14 and 15, whose patch files live in
 [`patches/element-call/`](../element-call/)). `dockerfiles/Dockerfile.element` is the
 single build source for the element-web image that CI publishes from `main`, and it
 applies exactly the patches listed here, each with `git apply --verbose` so **a patch
@@ -12,7 +12,7 @@ that stops applying fails the image build loudly** — never silently at runtime
 repository. Each change is licensed like the Element Web file it changes, which for the
 code the image ships means AGPL-3.0-only OR GPL-3.0-only. A docs file, an Apache-2.0 test
 and two tests that adapt an AGPL-only harness differ; [`NOTICE`](../../NOTICE) lists them.
-Entries 13 and 14 change Element Call, which is AGPL-3.0-only OR LicenseRef-Element-Commercial,
+Entries 14 and 15 change Element Call, which is AGPL-3.0-only OR LicenseRef-Element-Commercial,
 so those changes are AGPL-3.0-only (NOTICE).
 
 Rules of this registry:
@@ -100,16 +100,16 @@ Rules of this registry:
    this file): the Dockerfile fails the build on a row that no longer holds, and a row that
    stock now also carries (upstream shipped the string) no longer discriminates.
 
-   **Entries 13 and 14 are not in that loop**: they patch Element Call, not Element Web, and
+   **Entries 14 and 15 are not in that loop**: they patch Element Call, not Element Web, and
    their patch files are in `patches/element-call/`. At every bump read the version of
    `@element-hq/element-call-embedded` in the new tag's `apps/web/package.json`. The build
    fails when it differs from `ARG ELEMENT_CALL_STOCK_VERSION` in `deps`, so a bump cannot
    silently serve an older Element Call than the one Element Web moved to. When it moved,
    rebase the `element-call` stage: new `ELEMENT_CALL_TAG` and `ELEMENT_CALL_COMMIT`
    together (`git ls-remote https://github.com/element-hq/element-call 'refs/tags/<tag>^{}'`),
-   try both patches, 12 and then 13, against a fresh clone of that tag (`git apply --check`
-   after applying 13), and read the retirement conditions of entries 13 and 14 before
-   forward-porting either (13 names the upstream issue to check first).
+   try both patches, 14 and then 15, against a fresh clone of that tag (`git apply --check`
+   after applying 15), and read the retirement conditions of entries 14 and 15 before
+   forward-porting either (14 names the upstream issue to check first).
 
    **4b. Upstream refresh (every tag bump, from the repo root).** First, refresh the
    upstream status of every upstream link in both registries and update each entry's
@@ -241,10 +241,11 @@ re-litigated each time someone audits the registry.
 | 10 | `sw-media-401-token-retry` | A media request that 401s with the stored token waits (5 s bound) for the app's refresh and retries once. | none |
 | 11 | `copy-markdown` | Right-click "Copy Markdown" directly above Pin: copies a text, notice or emote message as clean CommonMark + GFM, converted from `formatted_body` (no HTML emitted), instead of the lossy rendered-text copy or the JSON of View source. | none |
 | 12 | `sw-idb-reconnect` | The IndexedDB connection the service worker reads the access token through is dropped on close and on version change and reopened once on a closing connection, so a failed connection no longer sends every media request without a token for the worker's whole life. | none |
-| 13 | `0180-bt-audio-output` | Patch to the **Element Call** embedded build, not to Element Web (file in `patches/element-call/`, built by the `element-call` stage): calls stay audible with Bluetooth headsets. A Windows hands-free output rule, an audio-output guard that holds LiveKit's remote audio on the chosen output and replays it after device or microphone changes, and autoplay-block reporting. | none |
-| 14 | `0190-media-key-recovery` | Second patch to the **Element Call** embedded build (file in `patches/element-call/`, built by the same `element-call` stage, applied after 12): a call recovers when a media E2EE key is lost. The widget client's call-key to-device sends are retried and sent again, and a watchdog re-sends our own call membership with a fresh `created_ts` when a remote stays undecryptable without a key. | none |
+| 13 | `room-retention` | Disappearing messages. A picker in Room Settings -> Security & Privacy writes `m.room.retention`, a timeline notice says who changed it, and events older than the room's `max_lifetime` are hidden in the client, also while the room is open. | config key `io.inblock.room_retention` |
+| 14 | `0180-bt-audio-output` | Patch to the **Element Call** embedded build, not to Element Web (file in `patches/element-call/`, built by the `element-call` stage): calls stay audible with Bluetooth headsets. A Windows hands-free output rule, an audio-output guard that holds LiveKit's remote audio on the chosen output and replays it after device or microphone changes, and autoplay-block reporting. | none |
+| 15 | `0190-media-key-recovery` | Second patch to the **Element Call** embedded build (file in `patches/element-call/`, built by the same `element-call` stage, applied after 14): a call recovers when a media E2EE key is lost. The widget client's call-key to-device sends are retried and sent again, and a watchdog re-sends our own call membership with a fresh `created_ts` when a remote stays undecryptable without a key. | none |
 
-Entry 6 is the only gated one:
+Entry 6 is gated by a labs flag:
 
 ```
 feature_web_event_index === true   -> ON (config.json `features`, or per-device in Labs)
@@ -258,28 +259,37 @@ also turned the feature on by hostname (`STAGING_HOSTS`); that fallback is gone,
 note calling the feature "staging only" or "gated off by hostname" describes a gate that
 no longer exists.
 
+Entry 13 is gated by the `config.json` key `io.inblock.room_retention` (an object with the picker's
+choices): key absent, null or not an object means stock Element, and tests prove it. `config/element-config.json`
+in this repository does not carry the key; a deployment's own config does (set through aqua-ops).
+
 Which build a given deployment runs, and so which of these entries it carries, is
 recorded by that deployment, not here.
 
 ## Which Dockerfile applies what
 
-**One Dockerfile, all fourteen patches.** `dockerfiles/Dockerfile.element` applies every
+**One Dockerfile, all fifteen patches.** `dockerfiles/Dockerfile.element` applies every
 numbered patch below, in this file's order. **8 depends on 7** and **10 depends on 9**;
 each must stay after the entry it depends on (see their Order notes). **11 is applied
 after 1-10**: its `en_EN.json` hunk was generated against the tree with
-1-10 applied. **13 patches Element Call, not Element Web**: it is applied in its own build
+1-10 applied. **14 patches Element Call, not Element Web**: it is applied in its own build
 stage `element-call`, which precedes `deps`, to a clone of Element Call, and stage `deps`
 then replaces the `dist/` of the installed `@element-hq/element-call-embedded` package with
 that stage's build, right after `pnpm install`. It touches no Element Web file, so it is
-independent of 1-12 and of their order. **14 patches Element Call too**: it is applied in the
-same stage right after 13, because it is generated on top of the tree with 13 applied (the two
+independent of 1-13 and of their order. **15 patches Element Call too**: it is applied in the
+same stage right after 14, because it is generated on top of the tree with 14 applied (the two
 change no file in common). Until 2026-09-01 a
 separate `dev` branch applied a different subset; that branch was merged into `main` and
 deleted, so there is a single Dockerfile.
 
-A tag bump must try every Element Web patch (1-12) in this file's order, and check entries
-13 and 14 as rule 4 says. **12 is applied after 11**, last of the Element Web patches; it touches
-only `apps/web/src/utils/StorageAccess{,.test}.ts`, no file of 1-11.
+A tag bump must try every Element Web patch (1-13) in this file's order, and check entries
+14 and 15 as rule 4 says. **12 is applied after 11**; it touches
+only `apps/web/src/utils/StorageAccess{,.test}.ts`, no file of 1-11. **13 is applied after 12**,
+last of the Element Web patches; of the stock files it changes only `en_EN.json` is also changed
+by an earlier entry (1, 3-8, 11), in a different place (its hunk is generated on the tree with 1-12
+applied), so a tag bump that moves the `room_settings` or `room_list` neighbourhood of that file
+needs only a context port. Entry 13 is gated by the `config.json` key `io.inblock.room_retention`
+(not by a labs flag): key absent means stock Element.
 
 ---
 
@@ -2074,14 +2084,94 @@ only `apps/web/src/utils/StorageAccess{,.test}.ts`, no file of 1-11.
   None of the guards caught it: (A) and (B) do not apply to a controlled page, (E) heals only a worker whose fetch
   hangs, and the per-build `sw.js` stamp acts only on a deploy. Record: aqua-ops
   `migrations/hosts/2026-10-25-matrix-to-prod-01-after-action.md`, F6.
-- **Order:** after entry 11, last of the Element Web patches; independent of every other patch.
+- **Order:** after entry 11; touches no file of any other entry. Entry 13 comes after it.
 - **Upstream status:** UPSTREAM DEFECT, not filed. The connection cache in `StorageAccess.ts` has no close or
   version-change handling at v1.12.32.
 - **Retirement:** upstream handles a closed connection in `StorageAccess.ts` (any form). The patch then fails to
   apply or becomes redundant: check, and drop it.
 - **Coverage:** the vitest file in the patch, run by the `patch-tests` stage on every pull request.
 
-### 13. `0180-bt-audio-output.patch` - UPSTREAM DEFECT, our own fix (deliberately not filed; carry until upstream fixes it)
+### 13. `room-retention.patch` - FEATURE, local (no upstream PR opened by us; carry until upstream ships an equivalent)
+
+- **What:** disappearing messages in Element Web, all of it behind **one** `config.json` key,
+  `io.inblock.room_retention`, an object `{"choices":[{"ms":86400000,"label":"1 day"}, ...]}` (a choice needs a positive
+  integer `ms` and a non-empty `label`; other entries are dropped). **Key absent, null, a string or an array means stock
+  Element in every respect**: no picker, no notice, nothing hidden, no timer, the SDK option untouched (tests prove each
+  point, including that `m.room.retention` events get the same tile factory result as on the base commit in both modes of
+  "show hidden events"). With the key set:
+  - **Picker** (Room Settings -> Security & Privacy, section "Disappearing messages", `RoomRetentionSection.tsx`): Off, then
+    the configured choices in config order. A choice writes `{"max_lifetime": <ms>}` to `m.room.retention` (state key `""`).
+    **Off is written as `{"min_lifetime": 0}`, never `{}`**, because a running Synapse ignores a retention event that has
+    no integer key. Read side: `{}`, `null`, a min-only value, a string, a float, 0 and a negative number all show as Off.
+    A value outside the configured choices (written by another client, or a choice since removed from the config) is
+    shown, selected, as a custom value ("Custom (2m)" when exact in its largest unit, else "<N> ms"); a value equal to a
+    choice's `ms` shows that choice's label. Without the power level to send the state event the control is disabled, shows
+    the value and says only room admins can change it; no send is attempted. A failed send rolls the selection back and shows
+    an error dialog (not the raw server text). The section follows room state from other clients (`refreshWhenTypes`).
+  - **Timeline notice:** "%(senderName)s set messages in this room to disappear after %(duration)s." and "... turned off
+    disappearing messages."; none for an event that changes nothing.
+  - **Hiding:** an event older than the room's `max_lifetime` is not shown (non-state events only, as Synapse applies
+    retention). `shouldHideEvent.ts` covers the timeline, threads and thread panel, the read-marker scan, unread logic, the
+    room list preview, edit-last and the new timeline view model; `MessagePanel.shouldShowEvent` checks it before the "show
+    hidden events" early return and the highlighted-event override, so an expired event is never drawn. `MessagePanel` keeps
+    one timer for the next expiry so an event that is fresh at mount disappears while the room stays open, no interval and
+    no timer when the feature is off or the room has no policy. Own guards: search results (`RoomSearchView`,
+    `SearchResultTile`), pinned messages (`usePinnedEvents`), the reply quote (`ReplyChain`), the thread summary's last
+    reply (`ThreadSummaryViewModel`), and the room list preview re-generates when its event expires
+    (`MessagePreviewStore`, one timer per room with a policy).
+  - **The SDK's own retention is forced off while the key is set.** `utils/createMatrixClient.ts` passes
+    `unstableMSC1763Retention: false` instead of the `feature_retention` labs value: that SDK path treats Off written as
+    `{"min_lifetime": 0}` wrongly and turns expired events into "Message deleted" tiles. Key absent: the line behaves as
+    on the base commit.
+  - **Server limits:** the picker's choices must lie inside the server's `allowed_lifetime_max`. Synapse serves by the
+    room's raw `max_lifetime` and applies the `allowed_lifetime_*` clamp only in its purge job (measured on dev,
+    2026-11-18): with a choice above the limit the purge job deletes messages at the clamp, earlier than the room's setting
+    says. Keep the config's choices within the server's limits (the `retention` section, on our servers the file
+    `/data/conf.d/retention.yaml` loaded by `entrypoints/matrix_server.sh`).
+  Ships 124 vitest tests in 13 test files (list under Coverage); 2 new source files (`utils/RoomRetention.ts`,
+  `RoomRetentionSection.tsx`), 13 stock files changed, 28 files in all. Marker in the built i18n file `en_EN.json`:
+  `turned off disappearing messages.` (the Off notice).
+- **Limits (stated, not hidden):** *Not updated while open:* search results, pinned messages, a reply quote and the thread
+  summary are evaluated when they render or load; a message that expires while one of them is open stays until it is
+  rendered again (the room timeline and the room list preview do update). Search result counts still count expired hits,
+  and a search tile may treat a hidden expired event as its predecessor when it decides on a continuation. *Not covered:* the
+  composer's reply preview, exports, OS notifications, the browser search index's stored copies (entry 6), other devices'
+  caches and clients, and client clock skew (a clock that runs behind shows a message slightly longer until the server stops
+  serving it; the check uses the event's server timestamp against the local clock). Hiding is a display rule: the server
+  purges on its own schedule, and a client without this patch still shows an expired event until then.
+- **Why (2026-11-18, track room_retention M2):** rooms need a disappearing-messages setting that users can see and set, and
+  that also holds in the interface between the server's purge runs. Stock Element has no stable picker (its retention support
+  is a labs flag that only drops events inside the SDK) and no notice for `m.room.retention`. The behaviour sits behind a
+  config key so a deployment turns it on per environment and the same build serves everyone else unchanged.
+- **Order:** after entry 12, last of the Element Web patches. Stock files it changes that another entry also changes:
+  only `apps/web/src/i18n/strings/en_EN.json` (entries 1, 3, 4, 5, 6, 7, 8 and 11 also touch it; checked with `grep '^+++ b/'`
+  over the other patches), in a different place (a new top-level `room_retention` object between `room_list` and
+  `room_settings`); its hunk was generated on the tree with entries 1-12 applied. No other stock file is shared, so a
+  reorder against 1-11 is possible only as far as that `en_EN.json` context allows; keep it last. It adds no dependency and
+  changes no lockfile. Checked 2026-11-18: `git apply --check` of entries 1-12 then 13 on a fresh export of v1.12.33
+  succeeds, and the result is the same tree (git tree hash) as the development branch.
+- **Upstream status:** FEATURE, local. **No upstream PR is opened by us:** whether to propose it upstream is the owner's own
+  decision. Nothing equivalent is shipped upstream at v1.12.33 (the `feature_retention` labs flag is SDK-level, has no
+  picker and no notice).
+- **Retirement:** upstream ships a disappearing-messages picker with client-side hiding (the patch then fails to apply on
+  `SecurityRoomSettingsTab.tsx`, `MessagePanel.tsx` or `shouldHideEvent.ts`, or becomes redundant: check), or the deployment
+  drops the feature. Remove the patch, the `room_retention` strings, the `io.inblock.room_retention` key from the
+  deployments' configs, the `markers.tsv` row and this entry.
+- **Coverage:** the 13 vitest files in the patch, 124 tests, run by the `patch-tests` stage on every pull request:
+  `utils/RoomRetention.test.ts`, `shouldHideEvent.roomRetention.test.ts`,
+  `components/structures/MessagePanel.roomRetention.test.tsx`, `utils/createMatrixClient.roomRetention.test.ts`,
+  `components/views/settings/tabs/room/SecurityRoomSettingsTab.roomRetention.test.tsx`,
+  `TextForEvent.roomRetention.test.ts`, `events/EventTileFactory.roomRetention.test.ts`,
+  `stores/message-preview/MessagePreviewStore.roomRetention.test.ts`, `hooks/usePinnedEvents.roomRetention.test.tsx`,
+  `components/views/elements/ReplyChain.roomRetention.test.tsx`,
+  `components/views/rooms/SearchResultTile.roomRetention.test.tsx`,
+  `components/structures/RoomSearchView.roomRetention.test.tsx` and
+  `viewmodels/room/timeline/event-tile/ThreadSummaryViewModel.roomRetention.test.ts` (all under `apps/web/src/`; none edits a
+  stock test file). The key-absent cases (stock behaviour) are in every one of them. **Coverage (rule 2):** Playwright leg:
+  siwx-oidc `e2e/element/ew-room-retention.spec.mjs`, lands with the dev deploy (track room_retention M6); until then there is
+  no browser leg, and the look of the picker (spacing of its hint) has not been seen in a browser.
+
+### 14. `0180-bt-audio-output.patch` - UPSTREAM DEFECT, our own fix (deliberately not filed; carry until upstream fixes it)
 
 This is the only entry that is not a patch to Element Web: the file is
 [`patches/element-call/0180-bt-audio-output.patch`](../element-call/0180-bt-audio-output.patch)
@@ -2185,10 +2275,10 @@ from the Element Call patch registry of the aqua-meet repository, where it is ro
   obsolete. Check both at every `ELEMENT_WEB_TAG` bump (rule 4): if the new tag installs an
   Element Call newer than v0.26.1, the build fails until the stage is rebased, and the rebase
   is the moment to test whether the patch still applies and is still needed. When the
-  patch is dropped and entry 14 is gone too, delete the `element-call` stage, the `deps`
+  patch is dropped and entry 15 is gone too, delete the `element-call` stage, the `deps`
   replacement, `patches/element-call/`, the rows of `markers.tsv`, the grammar line for
   `widgets/element-call/assets/index-*.js` in the two marker scripts, and the entries'
-  README and NOTICE lines, and let Element Web's own `dist/` through again. While entry 14
+  README and NOTICE lines, and let Element Web's own `dist/` through again. While entry 15
   stays, only this patch's `COPY` and `git apply` lines, its file, its marker row and its
   README and NOTICE lines go.
 - **Coverage (rule 2):** none in this repository's CI beyond the marker, and plainly so. The
@@ -2208,12 +2298,12 @@ from the Element Call patch registry of the aqua-meet repository, where it is ro
   `dockerfiles/Dockerfile.element`, is the corresponding source of the modification; it is
   public.
 
-### 14. `0190-media-key-recovery.patch` - UPSTREAM DEFECT (element-hq/element-call#4127 open; fix upstream, carry until it ships)
+### 15. `0190-media-key-recovery.patch` - UPSTREAM DEFECT (element-hq/element-call#4127 open; fix upstream, carry until it ships)
 
 The second entry that is not a patch to Element Web: the file is
 [`patches/element-call/0190-media-key-recovery.patch`](../element-call/0190-media-key-recovery.patch)
 (a `git format-patch` of one commit) and it applies to **Element Call v0.26.1**
-(`9f7c35cd8f84b12f9395e6aac56fd396a3921482`) **with entry 13 applied first**: it is generated on
+(`9f7c35cd8f84b12f9395e6aac56fd396a3921482`) **with entry 14 applied first**: it is generated on
 top of the tree that 0180 produces. It changes no file that 0180 changes. The same file is carried
 by the Element Call build of the aqua-meet repository (row `0190` of its Element Call patch
 registry).
@@ -2255,10 +2345,10 @@ registry).
      (8; the real `RoomWidgetClient` with a mocked widget API and the real `MatrixRTCSession`),
      `room/useLoadGroupCall.test.tsx` (2) and added cases in `remoteMembers/Connection.test.ts` and
      `widget.test.ts`; the five files together are 110 tests, all passing on the patched tree
-     (v0.26.1, 13 and 14).
+     (v0.26.1, 14 and 15).
   The patch adds four files with the header "Copyright 2026 Aqua Meet contributors" and
   "SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial".
-- **How it reaches the image:** exactly like entry 13 (read "How it reaches the image" there). The
+- **How it reaches the image:** exactly like entry 14 (read "How it reaches the image" there). The
   `element-call` stage copies the patch and applies it with `git apply --verbose` right after 0180,
   with no `--3way`, so a patch that stops applying fails the image build; `VITE_APP_VERSION` names
   both patches (`embedded-v0.26.1-aqua.0180.0190`); stage `deps` replaces the installed package's
@@ -2288,11 +2378,11 @@ registry).
   (`ELEMENT_CALL_TAG`) and in the one Meet pins. Check at every `ELEMENT_WEB_TAG` bump (rule 4)
   and whenever #4127 closes. When dropping: delete the patch file, its `COPY` and `git apply`
   lines in the `element-call` stage, the row of `markers.tsv`, and this entry's README and NOTICE
-  lines; keep the stage while entry 13 is carried (entry 13 says what goes when both are gone).
+  lines; keep the stage while entry 14 is carried (entry 14 says what goes when both are gone).
 - **Coverage (rule 2):** none in this repository's CI beyond the marker, and plainly so, as for
-  entry 13. The tests belong to the patched Element Call tree, and the `Element patch unit tests`
+  entry 14. The tests belong to the patched Element Call tree, and the `Element patch unit tests`
   job runs Element Web's tree; they run in the aqua-meet repository against this same patch file
-  and were run for this entry on the tree of v0.26.1 with 13 and 14 applied. There is no leg in
+  and were run for this entry on the tree of v0.26.1 with 14 and 15 applied. There is no leg in
   the siwx-oidc Element suite (`e2e/element/`): the failure needs a lost to-device message, which
   the suite does not produce. What this repository proves is that the patch applied and its code
   reached the served bundle: the build fails on a missing marker (`[KeyRecovery]`, the log prefix of
@@ -2371,7 +2461,7 @@ stamp and marker loop.
 `v1.12.33`, `45671bc88f`, in Dockerfile order; no retirement condition is met, none of the
 patched behaviours is in the 1.12.33 release notes). Element Web 1.12.33 installs
 `@element-hq/element-call-embedded` 0.26.1, the release the `element-call` stage already
-builds, so `ELEMENT_CALL_STOCK_VERSION` moves to 0.26.1 and entries 13 and 14 are unchanged.
+builds, so `ELEMENT_CALL_STOCK_VERSION` moves to 0.26.1 and entries 14 and 15 (13 and 14 on that date) are unchanged.
 
 | # | Patch | Outcome at v1.12.33 |
 |---|---|---|
@@ -2387,8 +2477,8 @@ of the bump pull request.
 ## Marker discrimination record
 
 Numbers in this record are those of their date: until 2026-10-25 the Element Call
-patches were entries 12 and 13; since then they are 13 and 14, and entry 12 is
-`sw-idb-reconnect`.
+patches were entries 12 and 13; from then until 2026-11-18 they were 13 and 14 (entry 12 is
+`sw-idb-reconnect`); since 2026-11-18 they are 14 and 15, and entry 13 is `room-retention`.
 
 "Applies clean" proves a patch can be applied; it does not prove that its code reached the
 served app. [`markers.tsv`](markers.tsv) lists, per entry, the fixed strings that do (rule 2).
@@ -2503,6 +2593,13 @@ What the table does not say, and the choices behind it:
   `--absent 13`. (The stock measurement was made on the first version of 0190 and not repeated:
   the stock `dist/` is the same package; the candidate side was repeated on the reviewed version.) The image build's own marker loop (`podman build --target builder`)
   was not run for this entry: the image is built by CI.
+- **Entry 13 (2026-11-18), stock side measured, candidate side pending.** Its marker is the Off notice
+  `turned off disappearing messages.` in `i18n/en_EN.json` (served as the hashed file `languages.json` names; the same
+  kind of row as entries 1, 7 and 11, which hold on built images). **Stock:** the `apps/web/src/i18n/strings/en_EN.json`
+  of the v1.12.33 tag (commit 45671bc, `git archive` export): 0 occurrences of `disappearing` (case-insensitive) in the
+  file. **Candidate:** the patch adds the key `room_retention.notice_off` with that exact text to the same file
+  (applied to the export, the string occurs once); **no webapp was built for this entry**, so the proof on a built
+  image, which the Dockerfile's marker loop makes at the next image build, is still open.
 - **To re-prove after a tag bump or a new entry:** extract `/app` of the new build and of the stock
   image for the new tag, serve each from a loopback static server, and run
   `scripts/element-patch-markers.sh --absent <every entry> http://127.0.0.1:<port>` against stock
