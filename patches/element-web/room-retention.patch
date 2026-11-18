@@ -1,3 +1,335 @@
+diff --git a/apps/web/src/RoomNotifs.roomRetention.test.ts b/apps/web/src/RoomNotifs.roomRetention.test.ts
+new file mode 100644
+index 0000000..24c1dd8
+--- /dev/null
++++ b/apps/web/src/RoomNotifs.roomRetention.test.ts
+@@ -0,0 +1,251 @@
++/*
++Copyright 2026 inblock.io
++
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++// @vitest-environment happy-dom
++
++import { vi, describe, it, expect, beforeEach, afterEach, type Mocked } from "vitest";
++import {
++    EventType,
++    MatrixEvent,
++    NotificationCountType,
++    PendingEventOrdering,
++    ReceiptType,
++    Room,
++    type MatrixClient,
++} from "matrix-js-sdk/src/matrix";
++import { mkEvent, stubClient } from "test-utils";
++import { createMessageEventContent } from "test-utils/events";
++
++import { determineUnreadState } from "./RoomNotifs";
++import { NotificationLevel } from "./stores/notifications/NotificationLevel";
++import SdkConfig from "./SdkConfig";
++import { ROOM_RETENTION_CONFIG_KEY, ROOM_RETENTION_EVENT_TYPE } from "./utils/RoomRetention";
++
++/** The retention key is not in the typed config: put it in untyped, as the app reads it. */
++const putConfig = (config: object): void => SdkConfig.put(config as Parameters<typeof SdkConfig.put>[0]);
++
++const DAY = 86400000;
++const roomId = "!retention:example.com";
++const me = "@me:example.com";
++
++describe("determineUnreadState with room retention", () => {
++    let client: Mocked<MatrixClient>;
++    let room: Room;
++
++    const message = (id: string, ageMs: number, sender = "@other:example.com"): MatrixEvent =>
++        new MatrixEvent({
++            room_id: roomId,
++            event_id: id,
++            sender,
++            origin_server_ts: Date.now() - ageMs,
++            type: EventType.RoomMessage,
++            content: createMessageEventContent(`text ${id}`),
++        });
++
++    function setPolicy(content: object): void {
++        room.currentState.setStateEvents([
++            mkEvent({
++                event: true,
++                type: ROOM_RETENTION_EVENT_TYPE,
++                room: roomId,
++                user: "@admin:example.com",
++                skey: "",
++                content,
++            }),
++        ]);
++    }
++
++    /** The server's counts, as the SDK holds them after a /sync. */
++    function serverCounts(total: number, highlight = 0): void {
++        room.setUnreadNotificationCount(NotificationCountType.Total, total);
++        room.setUnreadNotificationCount(NotificationCountType.Highlight, highlight);
++    }
++
++    const readUpTo = (eventId: string): void => {
++        room.addReceipt(
++            new MatrixEvent({
++                type: EventType.Receipt,
++                content: { [eventId]: { [ReceiptType.Read]: { [me]: { ts: Date.now() } } } },
++            }),
++        );
++    };
++
++    beforeEach(() => {
++        client = stubClient() as Mocked<MatrixClient>;
++        room = new Room(roomId, client, me, { pendingEventOrdering: PendingEventOrdering.Detached });
++        client.getRoom.mockImplementation((id: string | undefined) => (id === roomId ? room : null));
++        putConfig({ [ROOM_RETENTION_CONFIG_KEY]: { choices: [] } });
++        setPolicy({ max_lifetime: DAY });
++    });
++
++    afterEach(() => {
++        SdkConfig.reset();
++        vi.restoreAllMocks();
++    });
++
++    describe("feature on, room with a policy", () => {
++        it("shows no count when every unread event has expired", async () => {
++            await room.addLiveEvents([message("$a", 3 * DAY), message("$b", 2 * DAY), message("$c", 2 * DAY)], {
++                addToState: false,
++            });
++            serverCounts(3);
++            const { level, count } = determineUnreadState(room);
++            expect(count).toBe(0);
++            expect(level).toBe(NotificationLevel.None);
++        });
++
++        it("shows no highlight either when the highlighted event has expired", async () => {
++            await room.addLiveEvents([message("$a", 3 * DAY), message("$b", 2 * DAY)], { addToState: false });
++            serverCounts(2, 1);
++            const { level, count } = determineUnreadState(room);
++            expect(count).toBe(0);
++            expect(level).toBe(NotificationLevel.None);
++        });
++
++        it("keeps the server count when one unread event is still alive", async () => {
++            await room.addLiveEvents([message("$a", 3 * DAY), message("$b", 2 * DAY), message("$c", 1000)], {
++                addToState: false,
++            });
++            serverCounts(3);
++            const { level, count } = determineUnreadState(room);
++            expect(count).toBe(3);
++            expect(level).toBe(NotificationLevel.Notification);
++        });
++
++        it("keeps the highlight when the highlighted event is still alive", async () => {
++            await room.addLiveEvents([message("$a", 3 * DAY), message("$b", 1000)], { addToState: false });
++            serverCounts(2, 1);
++            const { level } = determineUnreadState(room);
++            expect(level).toBe(NotificationLevel.Highlight);
++        });
++
++        it("keeps the server count when the loaded timeline is empty", () => {
++            serverCounts(3);
++            const { level, count } = determineUnreadState(room);
++            expect(count).toBe(3);
++            expect(level).toBe(NotificationLevel.Notification);
++        });
++
++        it("keeps the server count when nothing loaded has expired and nothing says what the count is made of", async () => {
++            // an alive event that never counts as unread: the unread ones may be older than what is loaded
++            const join = mkEvent({
++                event: true,
++                type: EventType.RoomMember,
++                room: roomId,
++                user: "@other:example.com",
++                skey: "@other:example.com",
++                content: { membership: "join" },
++            });
++            await room.addLiveEvents([join], { addToState: false });
++            serverCounts(3);
++            expect(determineUnreadState(room).count).toBe(3);
++        });
++
++        it("does not hide an unread event that is alive and newer than the read position", async () => {
++            await room.addLiveEvents([message("$a", 3 * DAY), message("$b", 2000), message("$c", 1000)], {
++                addToState: false,
++            });
++            readUpTo("$b");
++            serverCounts(1);
++            expect(determineUnreadState(room).count).toBe(1);
++        });
++
++        it("shows no count when the alive events are all read and the rest has expired", async () => {
++            // an expired event after the read position is what proves the count is made of expired events
++            await room.addLiveEvents(
++                [message("$a", 3 * DAY), message("$b", 2000), message("$c", 1000), message("$d", 2 * DAY)],
++                { addToState: false },
++            );
++            readUpTo("$c");
++            serverCounts(1);
++            expect(determineUnreadState(room).count).toBe(0);
++        });
++
++        it("ignores events of our own when looking for an alive unread event", async () => {
++            // an event of ours is the read position, and an expired event after it is what the count is made of
++            await room.addLiveEvents([message("$a", 3 * DAY), message("$b", 1000, me), message("$c", 2 * DAY)], {
++                addToState: false,
++            });
++            serverCounts(1);
++            expect(determineUnreadState(room).count).toBe(0);
++        });
++
++        it("keeps the server count when the newest event is our own and an older one from someone else is alive", async () => {
++            await room.addLiveEvents([message("$a", 2000), message("$b", 1000, me)], { addToState: false });
++            serverCounts(1);
++            expect(determineUnreadState(room).count).toBe(1);
++        });
++
++        it("keeps the server count when the newest event counts as read and nothing after it has expired", async () => {
++            await room.addLiveEvents([message("$a", 2000), message("$b", 1000)], { addToState: false });
++            vi.spyOn(room, "hasUserReadEvent").mockImplementation((_userId, eventId) => eventId === "$b");
++            serverCounts(1);
++            expect(determineUnreadState(room).count).toBe(1);
++        });
++
++        it("shows no count when three expired unread events lie after the read position", async () => {
++            await room.addLiveEvents(
++                [message("$a", 2000), message("$b", 3 * DAY), message("$c", 3 * DAY), message("$d", 2 * DAY)],
++                { addToState: false },
++            );
++            readUpTo("$a");
++            serverCounts(3);
++            expect(determineUnreadState(room).count).toBe(0);
++        });
++
++        it("shows no activity dot when the server count is 0 and everything unread has expired", async () => {
++            await room.addLiveEvents([message("$a", 3 * DAY), message("$b", 2 * DAY)], { addToState: false });
++            serverCounts(0);
++            expect(determineUnreadState(room).level).toBe(NotificationLevel.None);
++        });
++
++        it("keeps the activity dot when the server count is 0 and an unread event is still alive", async () => {
++            await room.addLiveEvents([message("$a", 3 * DAY), message("$b", 1000)], { addToState: false });
++            serverCounts(0);
++            expect(determineUnreadState(room).level).toBe(NotificationLevel.Activity);
++        });
++
++        it("leaves thread counts as they are", async () => {
++            await room.addLiveEvents([message("$a", 3 * DAY)], { addToState: false });
++            serverCounts(1);
++            room.setThreadUnreadNotificationCount("$thread", NotificationCountType.Total, 4);
++            expect(determineUnreadState(room, undefined, true).count).toBe(4);
++            expect(determineUnreadState(room, undefined, false).count).toBe(0);
++        });
++    });
++
++    it("keeps the server count when the key is absent", async () => {
++        SdkConfig.reset();
++        await room.addLiveEvents([message("$a", 3 * DAY), message("$b", 2 * DAY)], { addToState: false });
++        serverCounts(2, 1);
++        const { level, count } = determineUnreadState(room);
++        expect(count).toBe(2);
++        expect(level).toBe(NotificationLevel.Highlight);
++    });
++
++    it("keeps the activity dot when the key is absent", async () => {
++        SdkConfig.reset();
++        await room.addLiveEvents([message("$a", 3 * DAY), message("$b", 2 * DAY)], { addToState: false });
++        serverCounts(0);
++        expect(determineUnreadState(room).level).toBe(NotificationLevel.Activity);
++    });
++
++    it("keeps the server count in a room without a policy", async () => {
++        room.currentState.setStateEvents([]);
++        setPolicy({});
++        await room.addLiveEvents([message("$a", 30 * DAY), message("$b", 20 * DAY)], { addToState: false });
++        serverCounts(2);
++        expect(determineUnreadState(room).count).toBe(2);
++    });
++
++    it("keeps the server count when the policy is Off", async () => {
++        setPolicy({ min_lifetime: 0 });
++        await room.addLiveEvents([message("$a", 30 * DAY), message("$b", 20 * DAY)], { addToState: false });
++        serverCounts(2);
++        expect(determineUnreadState(room).count).toBe(2);
++    });
++});
+diff --git a/apps/web/src/RoomNotifs.ts b/apps/web/src/RoomNotifs.ts
+index 3dc0708..ada4bf5 100644
+--- a/apps/web/src/RoomNotifs.ts
++++ b/apps/web/src/RoomNotifs.ts
+@@ -19,10 +19,16 @@ import { KnownMembership } from "matrix-js-sdk/src/types";
+ 
+ import type { IPushRule, Room, MatrixClient, MatrixEvent } from "matrix-js-sdk/src/matrix";
+ import { NotificationLevel } from "./stores/notifications/NotificationLevel";
+-import { doesRoomHaveUnreadMessages, doesRoomOrThreadHaveUnreadMessages } from "./Unread";
++import {
++    doesRoomHaveUnreadMessages,
++    doesRoomHaveUnreadThreads,
++    doesRoomOrThreadHaveUnreadMessages,
++    eventTriggersUnreadCount,
++} from "./Unread";
+ import { EffectiveMembership, getEffectiveMembership, isKnockDenied } from "./utils/membership";
+ import SettingsStore from "./settings/SettingsStore";
+ import { getMarkedUnreadState } from "./utils/notifications";
++import { getRoomMaxLifetime, isEventExpired, isRetentionEnabled } from "./utils/RoomRetention";
+ 
+ /**
+  * Gets all pending events in a room that have a status of `EventStatus.NOT_SENT`
+@@ -96,6 +102,30 @@ export function setRoomNotifsState(client: MatrixClient, roomId: string, newStat
+     }
+ }
+ 
++/**
++ * Room retention: true when the server's count for the main timeline of this room can only be made of expired
++ * events. Synapse keeps counting them and refuses a read receipt for them, so the count would stick for good.
++ * Safe direction only: false when the feature is off, the room has no policy, the loaded timeline is empty, an
++ * unread event that is still alive is loaded, or nothing says the count is made of expired events. Reaching the read
++ * position proves it only when at least one expired event lies after it: with none, the unread events are alive or
++ * older than the read position, so the server's count stays.
++ */
++function isUnreadCountOnlyExpired(room: Room): boolean {
++    if (!isRetentionEnabled() || getRoomMaxLifetime(room) === null) return false;
++    const events = room.getLiveTimeline().getEvents();
++    let sawExpired = false;
++    // newest first, up to the read position
++    for (let i = events.length - 1; i >= 0; i--) {
++        const ev = events[i];
++        const id = ev.getId();
++        if (id && room.hasUserReadEvent(room.myUserId, id)) return sawExpired;
++        if (isEventExpired(ev)) sawExpired = true;
++        else if (eventTriggersUnreadCount(room.client, ev)) return false;
++    }
++    // Events that are not loaded are older than the oldest loaded one, so they are expired when that one is.
++    return sawExpired;
++}
++
+ export function getUnreadNotificationCount(
+     room: Room,
+     type: NotificationCountType,
+@@ -103,7 +133,10 @@ export function getUnreadNotificationCount(
+     threadId?: string,
+ ): number {
+     const getCountShownForRoom = (r: Room, type: NotificationCountType): number => {
+-        return includeThreads ? r.getUnreadNotificationCount(type) : r.getRoomUnreadNotificationCount(type);
++        const count = includeThreads ? r.getUnreadNotificationCount(type) : r.getRoomUnreadNotificationCount(type);
++        // Room retention: drop the main timeline's share when only expired events can be behind it; thread counts stay
++        const main = r.getRoomUnreadNotificationCount(type);
++        return main > 0 && r === room && isUnreadCountOnlyExpired(r) ? count - main : count;
+     };
+ 
+     let notificationCount = !!threadId
+@@ -318,6 +351,9 @@ export function determineUnreadState(
+             hasUnread = doesRoomOrThreadHaveUnreadMessages(thread);
+         }
+         // If the thread does not exist, assume it contains no unreads
++    } else if (isUnreadCountOnlyExpired(room)) {
++        // Room retention: only expired events are left unread in the main timeline
++        hasUnread = !!includeThreads && doesRoomHaveUnreadThreads(room);
+     } else {
+         hasUnread = doesRoomHaveUnreadMessages(room, includeThreads ?? false);
+     }
 diff --git a/apps/web/src/TextForEvent.roomRetention.test.ts b/apps/web/src/TextForEvent.roomRetention.test.ts
 new file mode 100644
 index 0000000..0a3cbf4
@@ -165,10 +497,10 @@ index 63896bb..cc6b369 100644
      "im.vector.modular.widgets": textForWidgetEvent,
 diff --git a/apps/web/src/components/structures/MessagePanel.roomRetention.test.tsx b/apps/web/src/components/structures/MessagePanel.roomRetention.test.tsx
 new file mode 100644
-index 0000000..327f272
+index 0000000..0c8577e
 --- /dev/null
 +++ b/apps/web/src/components/structures/MessagePanel.roomRetention.test.tsx
-@@ -0,0 +1,288 @@
+@@ -0,0 +1,366 @@
 +/*
 +Copyright 2026 inblock.io
 +
@@ -433,6 +765,71 @@ index 0000000..327f272
 +                expect(Math.max(...delays)).toBeLessThanOrEqual(2147483647);
 +                expect(delays).toContain(2147483647);
 +            });
++
++            describe("scroll position when the tile the view is pinned to expires", () => {
++                /** Renders a panel whose first tile expires in 5 s; the scroll panel's state is mocked. */
++                function renderPinned(state: object): { toBottom: ReturnType<typeof vi.fn>; container: HTMLElement } {
++                    const ref = React.createRef<MessagePanel>();
++                    const { container } = renderPanel([msg("pinned", DAY - 5000), msg("young", 1000)], undefined, {
++                        ref,
++                    });
++                    const sp = ref.current!.scrollPanel.current!;
++                    vi.spyOn(sp, "getScrollState").mockReturnValue(state);
++                    const toBottom = vi.spyOn(sp, "scrollToBottom").mockImplementation(() => {});
++                    act(() => {
++                        vi.advanceTimersByTime(5000 + SLACK_MS + 50);
++                    });
++                    return { toBottom, container };
++                }
++
++                it("goes to the bottom when the pinned tile is gone", () => {
++                    const gone = document.createElement("li"); // never attached: not connected
++                    const { toBottom, container } = renderPinned({
++                        stuckAtBottom: false,
++                        trackedNode: gone,
++                        trackedScrollToken: "$pinned",
++                    });
++                    expect(container.textContent).not.toContain("pinned");
++                    expect(toBottom).toHaveBeenCalledTimes(1);
++                });
++
++                it("goes to the bottom when the scroll panel has already dropped the pinned node", () => {
++                    const { toBottom } = renderPinned({ stuckAtBottom: false, trackedScrollToken: "$pinned" });
++                    expect(toBottom).toHaveBeenCalledTimes(1);
++                });
++
++                it("keeps the position when the pinned tile is still in the document", () => {
++                    const alive = document.createElement("li");
++                    document.body.appendChild(alive);
++                    const { toBottom } = renderPinned({
++                        stuckAtBottom: false,
++                        trackedNode: alive,
++                        trackedScrollToken: "$young",
++                    });
++                    alive.remove();
++                    expect(toBottom).not.toHaveBeenCalled();
++                });
++
++                it("does nothing when the panel is stuck at the bottom", () => {
++                    const { toBottom } = renderPinned({ stuckAtBottom: true });
++                    expect(toBottom).not.toHaveBeenCalled();
++                });
++
++                it("does nothing in a room without a policy", () => {
++                    setPolicy({ min_lifetime: 0 });
++                    const { toBottom } = renderPinned({
++                        stuckAtBottom: false,
++                        trackedNode: document.createElement("li"),
++                        trackedScrollToken: "$pinned",
++                    });
++                    expect(toBottom).not.toHaveBeenCalled();
++                });
++
++                it("does nothing when the view is not pinned to a tile at all", () => {
++                    const { toBottom } = renderPinned({ stuckAtBottom: false });
++                    expect(toBottom).not.toHaveBeenCalled();
++                });
++            });
 +        });
 +    });
 +
@@ -455,10 +852,23 @@ index 0000000..327f272
 +            renderPanel([msg("fresh one", 10)]);
 +            expect(retentionDelays(spy)).toEqual([]);
 +        });
++
++        it("does not move the scroll position when time passes", () => {
++            vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
++            const ref = React.createRef<MessagePanel>();
++            renderPanel([msg("one", 900)], undefined, { ref });
++            const sp = ref.current!.scrollPanel.current!;
++            vi.spyOn(sp, "getScrollState").mockReturnValue({ stuckAtBottom: false, trackedScrollToken: "$one" });
++            const toBottom = vi.spyOn(sp, "scrollToBottom").mockImplementation(() => {});
++            act(() => {
++                vi.advanceTimersByTime(5000);
++            });
++            expect(toBottom).not.toHaveBeenCalled();
++        });
 +    });
 +});
 diff --git a/apps/web/src/components/structures/MessagePanel.tsx b/apps/web/src/components/structures/MessagePanel.tsx
-index 179126a..3c96abe 100644
+index 179126a..941925c 100644
 --- a/apps/web/src/components/structures/MessagePanel.tsx
 +++ b/apps/web/src/components/structures/MessagePanel.tsx
 @@ -55,6 +55,7 @@ import { _t } from "../../languageHandler";
@@ -469,13 +879,13 @@ index 179126a..3c96abe 100644
  
  const CONTINUATION_MAX_INTERVAL = 5 * 60 * 1000; // 5 minutes
  const continuedTypes = [EventType.Sticker, EventType.RoomMessage];
-@@ -300,10 +301,31 @@ export default class MessagePanel extends React.Component<IProps, IState> {
+@@ -300,10 +301,42 @@ export default class MessagePanel extends React.Component<IProps, IState> {
          );
          this.calculateRoomMembersCount();
          this.props.room?.currentState.on(RoomStateEvent.Update, this.calculateRoomMembersCount);
 +        this.armRetentionTimer();
-+    }
-+
+     }
+ 
 +    private retentionTimer: ReturnType<typeof setTimeout> | undefined;
 +
 +    /** Room retention: one timer for the next event to expire; no timer when the feature is off or no policy. */
@@ -488,12 +898,23 @@ index 179126a..3c96abe 100644
 +        this.retentionTimer = setTimeout(
 +            () => {
 +                this.retentionTimer = undefined;
-+                if (!this.unmounted) this.forceUpdate();
++                if (!this.unmounted) this.forceUpdate(this.scrollToBottomIfPinnedTileGone);
 +            },
 +            Math.min(delay + 250, 2147483647),
 +        );
-     }
- 
++    }
++
++    /**
++     * Room retention: when the tile the view is pinned to has expired, ScrollPanel keeps its old list height and
++     * shows nothing, so go to the newest messages. Nothing to do when stuck at the bottom or not pinned.
++     */
++    private scrollToBottomIfPinnedTileGone = (): void => {
++        const scrollPanel = this.scrollPanel.current;
++        const state = scrollPanel?.getScrollState();
++        if (!scrollPanel || !state || state.stuckAtBottom || state.trackedScrollToken === undefined) return;
++        if (!state.trackedNode?.isConnected) scrollPanel.scrollToBottom();
++    };
++
      public componentWillUnmount(): void {
          this.unmounted = true;
 +        if (this.retentionTimer !== undefined) clearTimeout(this.retentionTimer);
@@ -501,7 +922,7 @@ index 179126a..3c96abe 100644
          this.props.room?.currentState.off(RoomStateEvent.Update, this.calculateRoomMembersCount);
          SettingsStore.unwatchSetting(this.showTypingNotificationsWatcherRef);
          this.readReceiptMap = {};
-@@ -311,6 +333,8 @@ export default class MessagePanel extends React.Component<IProps, IState> {
+@@ -311,6 +344,8 @@ export default class MessagePanel extends React.Component<IProps, IState> {
      }
  
      public componentDidUpdate(prevProps: IProps, prevState: IState): void {
@@ -510,7 +931,7 @@ index 179126a..3c96abe 100644
          if (prevProps.layout !== this.props.layout) {
              this.calculateRoomMembersCount();
          }
-@@ -483,6 +507,9 @@ export default class MessagePanel extends React.Component<IProps, IState> {
+@@ -483,6 +518,9 @@ export default class MessagePanel extends React.Component<IProps, IState> {
              return false; // ignored = no show (only happens if the ignore happens after an event was received)
          }
  
@@ -676,6 +1097,199 @@ index 7637560..7b8bb0b 100644
          if (scope === SearchScope.All) {
              if (roomId !== lastRoomId) {
                  ret.push(
+diff --git a/apps/web/src/components/structures/TimelinePanel.roomRetention.test.tsx b/apps/web/src/components/structures/TimelinePanel.roomRetention.test.tsx
+new file mode 100644
+index 0000000..16b937d
+--- /dev/null
++++ b/apps/web/src/components/structures/TimelinePanel.roomRetention.test.tsx
+@@ -0,0 +1,157 @@
++/*
++Copyright 2026 inblock.io
++
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++// @vitest-environment happy-dom
++
++import { vi, describe, it, expect, beforeEach, afterEach, type Mocked } from "vitest";
++import { render, waitFor, cleanup } from "test-utils-rtl";
++import {
++    EventTimelineSet,
++    EventType,
++    type MatrixClient,
++    MatrixEvent,
++    PendingEventOrdering,
++    ReceiptType,
++    Room,
++    RoomEvent,
++} from "matrix-js-sdk/src/matrix";
++import React from "react";
++import { clientAndSDKContextRenderOptions, flushPromises, mkEvent, stubClient } from "test-utils";
++import { createMessageEventContent } from "test-utils/events";
++
++import TimelinePanel from "./TimelinePanel";
++import SdkConfig from "../../SdkConfig";
++import SettingsStore from "../../settings/SettingsStore";
++import { SettingLevel } from "../../settings/SettingLevel";
++import { SDKContextClass } from "../../contexts/SDKContextClass";
++import { ROOM_RETENTION_CONFIG_KEY, ROOM_RETENTION_EVENT_TYPE } from "../../utils/RoomRetention";
++
++// ScrollPanel calls this, but happy-dom doesn't provide it
++HTMLDivElement.prototype.scrollBy = () => {};
++
++/** The retention key is not in the typed config: put it in untyped, as the app reads it. */
++const putConfig = (config: object): void => SdkConfig.put(config as Parameters<typeof SdkConfig.put>[0]);
++
++const DAY = 86400000;
++const roomId = "!retention:example.com";
++
++describe("TimelinePanel read receipts with room retention", () => {
++    let client: Mocked<MatrixClient>;
++    let sdkContext: SDKContextClass;
++    let room: Room;
++    let timelineSet: EventTimelineSet;
++    let timelinePanel: TimelinePanel | null = null;
++
++    const message = (id: string, ageMs: number): MatrixEvent =>
++        new MatrixEvent({
++            room_id: roomId,
++            event_id: id,
++            sender: "@u2:m.org",
++            origin_server_ts: Date.now() - ageMs,
++            type: EventType.RoomMessage,
++            content: createMessageEventContent(`hello ${id}`),
++        });
++
++    function setPolicy(content: object): void {
++        room.currentState.setStateEvents([
++            mkEvent({
++                event: true,
++                type: ROOM_RETENTION_EVENT_TYPE,
++                room: roomId,
++                user: "@admin:server",
++                skey: "",
++                content,
++            }),
++        ]);
++    }
++
++    /** Renders the panel with one live event and asks it to send its receipts and its fully read marker. */
++    const readTimeline = async (ev: MatrixEvent): Promise<void> => {
++        render(
++            <TimelinePanel
++                timelineSet={timelineSet}
++                manageReadMarkers={true}
++                manageReadReceipts={true}
++                ref={(ref) => {
++                    timelinePanel = ref;
++                }}
++            />,
++            clientAndSDKContextRenderOptions(client, sdkContext),
++        );
++        await flushPromises();
++        await waitFor(() => expect(timelinePanel).toBeTruthy());
++        timelineSet.addLiveEvent(ev, { addToState: true });
++        await flushPromises();
++        // the fully read marker sits on the event, as it does after the user has seen it
++        timelinePanel!.setState({ readMarkerEventId: ev.getId()! });
++        await flushPromises();
++        await timelinePanel!.sendReadReceipts();
++    };
++
++    beforeEach(() => {
++        client = vi.mocked(stubClient());
++        sdkContext = new SDKContextClass();
++        room = new Room(roomId, client, client.getSafeUserId(), {
++            pendingEventOrdering: PendingEventOrdering.Detached,
++        });
++        client.getRoom.mockImplementation((id: string | undefined) => (id === roomId ? room : null));
++        timelineSet = new EventTimelineSet(room, {}, client);
++        timelineSet.on(RoomEvent.Timeline, (...args) => client.emit(RoomEvent.Timeline, ...args));
++        putConfig({ [ROOM_RETENTION_CONFIG_KEY]: { choices: [] } });
++        setPolicy({ max_lifetime: DAY });
++    });
++
++    afterEach(() => {
++        TimelinePanel.roomReadMarkerTsMap = {};
++        cleanup();
++        SdkConfig.reset();
++    });
++
++    it("sends neither a receipt nor a fully read marker for an expired event", async () => {
++        await readTimeline(message("$expired", 3 * DAY));
++        expect(client.sendReadReceipt).not.toHaveBeenCalled();
++        expect(client.setRoomReadMarkers).not.toHaveBeenCalled();
++    });
++
++    it("sends no private receipt for an expired event either", async () => {
++        await SettingsStore.setValue("sendReadReceipts", null, SettingLevel.DEVICE, false);
++        client.doesServerSupportUnstableFeature.mockResolvedValue(true);
++        await readTimeline(message("$expired", 3 * DAY));
++        expect(client.sendReadReceipt).not.toHaveBeenCalled();
++        expect(client.setRoomReadMarkers).not.toHaveBeenCalled();
++    });
++
++    it("sends the receipt and the marker for an event that is still alive, as stock", async () => {
++        const ev = message("$alive", 1000);
++        await readTimeline(ev);
++        expect(client.sendReadReceipt).toHaveBeenCalledWith(ev, ReceiptType.Read);
++        expect(client.setRoomReadMarkers).toHaveBeenCalledWith(roomId, "$alive");
++    });
++
++    it("sends the receipt for an old event when the key is absent, as stock", async () => {
++        SdkConfig.reset();
++        const ev = message("$old", 3 * DAY);
++        await readTimeline(ev);
++        expect(client.sendReadReceipt).toHaveBeenCalledWith(ev, ReceiptType.Read);
++        expect(client.setRoomReadMarkers).toHaveBeenCalledWith(roomId, "$old");
++    });
++
++    it("sends the receipt for an old event in a room without a policy, as stock", async () => {
++        room.currentState.setStateEvents([]);
++        setPolicy({});
++        const ev = message("$old", 3 * DAY);
++        await readTimeline(ev);
++        expect(client.sendReadReceipt).toHaveBeenCalledWith(ev, ReceiptType.Read);
++    });
++
++    it("sends the receipt for an old event when the policy is Off, as stock", async () => {
++        setPolicy({ min_lifetime: 0 });
++        const ev = message("$old", 3 * DAY);
++        await readTimeline(ev);
++        expect(client.sendReadReceipt).toHaveBeenCalledWith(ev, ReceiptType.Read);
++    });
++});
+diff --git a/apps/web/src/components/structures/TimelinePanel.tsx b/apps/web/src/components/structures/TimelinePanel.tsx
+index 12c0412..38b5e79 100644
+--- a/apps/web/src/components/structures/TimelinePanel.tsx
++++ b/apps/web/src/components/structures/TimelinePanel.tsx
+@@ -45,6 +45,7 @@ import Modal from "../../Modal";
+ import dis from "../../dispatcher/dispatcher";
+ import { Action } from "../../dispatcher/actions";
+ import Timer from "../../utils/Timer";
++import { isEventExpired } from "../../utils/RoomRetention";
+ import shouldHideEvent from "../../shouldHideEvent";
+ import MessagePanel from "./MessagePanel";
+ import { type IScrollState } from "./ScrollPanel";
+@@ -1101,14 +1102,15 @@ class TimelinePanel extends React.Component<IProps, IState> {
+ 
+         const proms: Array<Promise<void>> = [];
+ 
+-        if (shouldSendReadReceipt) {
++        // Room retention: Synapse refuses (403) a receipt or a marker for an expired event, so send none
++        if (shouldSendReadReceipt && !isEventExpired(lastReadEvent)) {
+             proms.push(this.sendReadReceipt(client, lastReadEvent));
+         }
+ 
+         if (shouldSendFullyReadMarker) {
+             const readMarkerEvent = this.props.timelineSet.findEventById(fullyReadMarkerEventId);
+ 
+-            if (readMarkerEvent) {
++            if (readMarkerEvent && !isEventExpired(readMarkerEvent)) {
+                 // Empty room Id should not happen here.
+                 // Either way fall back to empty string and let further functions handle it.
+                 proms.push(this.sendFullyReadMarker(client, roomId ?? "", fullyReadMarkerEventId));
 diff --git a/apps/web/src/components/views/elements/ReplyChain.roomRetention.test.tsx b/apps/web/src/components/views/elements/ReplyChain.roomRetention.test.tsx
 new file mode 100644
 index 0000000..fb8e7c9
@@ -1977,6 +2591,227 @@ index fd12a09..8a2b1f4 100644
      }
  
      protected onLocalEchoUpdated = async (ev: MatrixEvent, room: Room): Promise<void> => {
+diff --git a/apps/web/src/stores/notifications/RoomNotificationState.roomRetention.test.ts b/apps/web/src/stores/notifications/RoomNotificationState.roomRetention.test.ts
+new file mode 100644
+index 0000000..60f4298
+--- /dev/null
++++ b/apps/web/src/stores/notifications/RoomNotificationState.roomRetention.test.ts
+@@ -0,0 +1,151 @@
++/*
++Copyright 2026 inblock.io
++
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++// @vitest-environment happy-dom
++
++import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
++import {
++    EventType,
++    MatrixEvent,
++    NotificationCountType,
++    PendingEventOrdering,
++    Room,
++    type MatrixClient,
++} from "matrix-js-sdk/src/matrix";
++import { mkEvent, stubClient } from "test-utils";
++import { createMessageEventContent } from "test-utils/events";
++
++import { RoomNotificationState } from "./RoomNotificationState";
++import { NotificationStateEvents } from "./NotificationState";
++import { NotificationLevel } from "./NotificationLevel";
++import SdkConfig from "../../SdkConfig";
++import { ROOM_RETENTION_CONFIG_KEY, ROOM_RETENTION_EVENT_TYPE } from "../../utils/RoomRetention";
++
++/** The retention key is not in the typed config: put it in untyped, as the app reads it. */
++const putConfig = (config: object): void => SdkConfig.put(config as Parameters<typeof SdkConfig.put>[0]);
++
++const DAY = 86400000;
++const SLACK_MS = 250;
++const roomId = "!retention:example.com";
++
++describe("RoomNotificationState with room retention", () => {
++    let client: MatrixClient;
++    let room: Room;
++    let state: RoomNotificationState | undefined;
++
++    const message = (id: string, ageMs: number): MatrixEvent =>
++        new MatrixEvent({
++            room_id: roomId,
++            event_id: id,
++            sender: "@other:example.com",
++            origin_server_ts: Date.now() - ageMs,
++            type: EventType.RoomMessage,
++            content: createMessageEventContent(`text ${id}`),
++        });
++
++    function setPolicy(content: object): void {
++        room.currentState.setStateEvents([
++            mkEvent({
++                event: true,
++                type: ROOM_RETENTION_EVENT_TYPE,
++                room: roomId,
++                user: "@admin:example.com",
++                skey: "",
++                content,
++            }),
++        ]);
++    }
++
++    /** Builds the state for a room whose events expire `inMs` after now (oldest first), with a server count of 2. */
++    async function createState(expireInMs: number[]): Promise<RoomNotificationState> {
++        const events = expireInMs.map((inMs, i) => message(`$e${i}`, DAY - inMs));
++        await room.addLiveEvents(events, { addToState: false });
++        room.setUnreadNotificationCount(NotificationCountType.Total, 2);
++        state = new RoomNotificationState(room, false);
++        return state;
++    }
++
++    beforeEach(() => {
++        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
++        client = stubClient();
++        room = new Room(roomId, client, "@me:example.com", { pendingEventOrdering: PendingEventOrdering.Detached });
++        vi.mocked(client.getRoom).mockImplementation((id: string | undefined) => (id === roomId ? room : null));
++        putConfig({ [ROOM_RETENTION_CONFIG_KEY]: { choices: [] } });
++        setPolicy({ max_lifetime: DAY });
++    });
++
++    afterEach(() => {
++        state?.destroy();
++        state = undefined;
++        vi.useRealTimers();
++        SdkConfig.reset();
++        vi.restoreAllMocks();
++    });
++
++    it("drops the count at the moment the last unread event expires, without any other event", async () => {
++        const s = await createState([5000, 20000]);
++        const listener = vi.fn();
++        s.addListener(NotificationStateEvents.Update, listener);
++        expect(s.count).toBe(2);
++        expect(s.level).toBe(NotificationLevel.Notification);
++
++        vi.advanceTimersByTime(5000 + SLACK_MS + 50); // the first event is gone, the second is still alive
++        expect(s.count).toBe(2);
++
++        vi.advanceTimersByTime(15000);
++        expect(s.count).toBe(0);
++        expect(s.level).toBe(NotificationLevel.None);
++        expect(listener).toHaveBeenCalled();
++    });
++
++    it("holds at most one timer, and none once the count is gone", async () => {
++        await createState([5000, 20000]);
++        expect(vi.getTimerCount()).toBe(1);
++        vi.advanceTimersByTime(5000 + SLACK_MS + 50);
++        expect(vi.getTimerCount()).toBe(1);
++        vi.advanceTimersByTime(15000);
++        expect(vi.getTimerCount()).toBe(0);
++    });
++
++    it("clears its timer when destroyed", async () => {
++        const s = await createState([5000]);
++        expect(vi.getTimerCount()).toBe(1);
++        s.destroy();
++        expect(vi.getTimerCount()).toBe(0);
++    });
++
++    it("arms no timer when there is nothing to drop", async () => {
++        await room.addLiveEvents([message("$e0", DAY - 5000)], { addToState: false });
++        state = new RoomNotificationState(room, false); // server count 0
++        expect(vi.getTimerCount()).toBe(0);
++    });
++
++    it("arms no timer when the key is absent, and keeps the count", async () => {
++        SdkConfig.reset();
++        const s = await createState([5000]);
++        expect(vi.getTimerCount()).toBe(0);
++        vi.advanceTimersByTime(DAY);
++        expect(s.count).toBe(2);
++    });
++
++    it("arms no timer in a room without a policy, and keeps the count", async () => {
++        room.currentState.setStateEvents([]);
++        setPolicy({});
++        const s = await createState([5000]);
++        expect(vi.getTimerCount()).toBe(0);
++        vi.advanceTimersByTime(DAY);
++        expect(s.count).toBe(2);
++    });
++
++    it("arms no timer when the policy is Off, and keeps the count", async () => {
++        setPolicy({ min_lifetime: 0 });
++        const s = await createState([5000]);
++        expect(vi.getTimerCount()).toBe(0);
++        vi.advanceTimersByTime(DAY);
++        expect(s.count).toBe(2);
++    });
++});
+diff --git a/apps/web/src/stores/notifications/RoomNotificationState.ts b/apps/web/src/stores/notifications/RoomNotificationState.ts
+index b02e8fe..c25615b 100644
+--- a/apps/web/src/stores/notifications/RoomNotificationState.ts
++++ b/apps/web/src/stores/notifications/RoomNotificationState.ts
+@@ -19,8 +19,16 @@ import SettingsStore from "../../settings/SettingsStore";
+ import { MARKED_UNREAD_TYPE_STABLE, MARKED_UNREAD_TYPE_UNSTABLE } from "../../utils/notifications";
+ import { NotificationLevel } from "./NotificationLevel";
+ import { DefaultTagID } from "../room-list-v3/skip-list/tag";
++import { nextExpiryDelay } from "../../utils/RoomRetention";
++
++// Longest delay setTimeout accepts, and the slack that makes the tick land after the expiry.
++const MAX_TIMEOUT_MS = 2147483647;
++const EXPIRY_SLACK_MS = 250;
+ 
+ export class RoomNotificationState extends NotificationState implements IDestroyable {
++    // Room retention: one timer, for the expiry of the newest event, when the count can drop
++    private retentionTimer: ReturnType<typeof setTimeout> | undefined;
++
+     public constructor(
+         public readonly room: Room,
+         private includeThreads: boolean,
+@@ -42,6 +50,7 @@ export class RoomNotificationState extends NotificationState implements IDestroy
+ 
+     public destroy(): void {
+         super.destroy();
++        this.clearRetentionTimer();
+         const cli = this.room.client;
+         this.room.removeListener(RoomEvent.Receipt, this.handleReadReceipt);
+         this.room.removeListener(RoomEvent.MyMembership, this.handleMembershipUpdate);
+@@ -171,5 +180,34 @@ export class RoomNotificationState extends NotificationState implements IDestroy
+ 
+         // finally, publish an update if needed
+         this.emitIfUpdated(snapshot);
++        this.armRetentionTimer();
++    }
++
++    private clearRetentionTimer(): void {
++        if (this.retentionTimer !== undefined) clearTimeout(this.retentionTimer);
++        this.retentionTimer = undefined;
++    }
++
++    /**
++     * Room retention: the server keeps counting expired events, so when the newest event of a room with a count
++     * expires, work the state out again. No timer when the feature is off, the room has no policy or no count.
++     */
++    private armRetentionTimer(): void {
++        this.clearRetentionTimer();
++        if (this._count === 0) return;
++        const events = this.room.getLiveTimeline().getEvents();
++        let newest: MatrixEvent | undefined;
++        for (let i = events.length - 1; i >= 0 && !newest; i--) {
++            if (!events[i].isState()) newest = events[i];
++        }
++        const delay = newest ? nextExpiryDelay([newest], this.room) : null;
++        if (delay === null) return;
++        this.retentionTimer = setTimeout(
++            () => {
++                this.retentionTimer = undefined;
++                this.updateNotificationState();
++            },
++            Math.min(delay + EXPIRY_SLACK_MS, MAX_TIMEOUT_MS),
++        );
+     }
+ }
 diff --git a/apps/web/src/utils/RoomRetention.test.ts b/apps/web/src/utils/RoomRetention.test.ts
 new file mode 100644
 index 0000000..74ac7d9
