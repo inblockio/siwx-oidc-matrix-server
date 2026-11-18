@@ -120,7 +120,11 @@ proxy is passing siwx-oidc's own CORS headers through next to its own: strip the
 to `entrypoints/matrix_server.sh` does nothing until the image is rebuilt and the
 container recreated. And the first-boot keys (server name, listener, retention, server
 notices) are only written when `/data/homeserver.yaml` does not exist yet; delegated
-auth, MatrixRTC and the DID-field denylist are rewritten on every boot.
+auth, MatrixRTC and the DID-field denylist are rewritten on every boot. Retention is the
+exception: if `/data/conf.d/retention.yaml` exists and is valid, ITS `retention` section wins
+and homeserver.yaml's is ignored entirely (shallow merge: no key of homeserver.yaml's
+`retention` survives). Look for `Retention: using` or `WARNING: retention: ... IGNORED: <reason>`
+in the Synapse container log; an ignored file means homeserver.yaml's retention applies.
 
 **Diagnose**:
 ```bash

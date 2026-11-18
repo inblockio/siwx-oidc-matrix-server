@@ -95,7 +95,7 @@ Non-secret settings. In store mode a compose file carries these as an explicit
 | `MATRIX_HOST` | `server_name`, the notices display name, the MatrixRTC service URL, admin lookup |
 | `MATRIX_BASE_URL`, `MATRIX_PORT` | `public_baseurl` and the listener port (first boot) |
 | `SIWEOIDC_BASE_URL`, `SIWEOIDC_INTERNAL_URL` | `matrix_authentication_service.endpoint` |
-| `MATRIX_RETENTION_ENABLED`, `MATRIX_RETENTION_MAX_LIFETIME`, `MATRIX_MESSAGE_LIFETIME` | retention (first boot) |
+| `MATRIX_RETENTION_ENABLED`, `MATRIX_RETENTION_MAX_LIFETIME`, `MATRIX_MESSAGE_LIFETIME` | retention (first boot); the optional `/data/conf.d/retention.yaml` (only key `retention`, replaces homeserver.yaml's whole `retention` section, loaded only when valid, see the log line) overrides it afterwards |
 | `MATRIX_ADMIN_DID`, `MATRIX_ADMIN_MXID` | admin promotion (every boot) |
 | `SIWX_DID_PROFILE_FIELD`, `SIWX_ALLOW_UNPROTECTED_DID_FIELD` | the DID profile field denylist and its escape hatch |
 | `GUEST_POLICY_ENABLED`, `GUEST_POLICY_MODULE_PATH`, `GUEST_POLICY_USER_TYPE`, `GUEST_POLICY_ROOM_STATE_TYPE`, `GUEST_POLICY_ALLOWED_EVENT_TYPES`, `GUEST_POLICY_KNOCK_CAP`, `GUEST_POLICY_KNOCK_WINDOW_SECS`, `GUEST_POLICY_NAME_SUFFIX` | the optional guest policy module (eight variables; `GUEST_POLICY_SRC` is the host path of the mount and is read by compose only) |

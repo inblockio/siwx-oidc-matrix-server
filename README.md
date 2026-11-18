@@ -443,6 +443,15 @@ retention policy may request (`retention.allowed_lifetime_max`). The setting tha
 purges messages is `MATRIX_RETENTION_MAX_LIFETIME`. All three are applied on the
 first boot of a fresh data volume only; see `entrypoints/matrix_server.sh`.
 
+To change retention later without editing `homeserver.yaml`, put it in the optional
+`/data/conf.d/retention.yaml` (in the data volume). Its only top-level key must be
+`retention`; that section **replaces** the whole `retention` section of
+`homeserver.yaml` (Synapse merges config files shallowly), so it must carry every
+retention key wanted. The entrypoint loads it only when it is valid (a readable
+YAML mapping, only `retention`, readable by the Synapse user) and logs `Retention:
+using ...` or `WARNING: retention: ... IGNORED: <reason>`. With the file absent
+nothing changes. Values are not checked: a bad value stops Synapse with a ConfigError.
+
 #### --MATRIX_REPORT_STATS
 
 A flag without a value: passing it turns Matrix server usage statistics reporting
