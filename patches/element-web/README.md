@@ -2255,9 +2255,9 @@ package's `dist/` after the patches. Entry 14 is gated by `client_views` and `fe
 - **Not in this entry:** the kit itself. It is built in the image's `rc-kit` stage and copied to `/app/kits/rocketchat/`, in a
   separate change; the shipped `config.json` writes exactly one descriptor (rocketchat). This entry is inert until a deployment's
   config sets both gates.
-- **Order:** after entry 13, last of the Element Web patches. Proved 2026-11-18 (re-proved after the test-line difference, development head 9e0746b): entries 1-14 apply in the Dockerfile's order with
+- **Order:** after entry 13, last of the Element Web patches. Proved 2026-11-18 (re-proved on the rebuilt entry 13 of PR 92, development head 7eaa916, branch `rret/face-carry-2` cut from entry 13's head 8d6a10d): entries 1-14 apply in the Dockerfile's order with
   `git apply --verbose` (no `--3way`) on a fresh export of `v1.12.33`, and the resulting tree hash equals the development branch's
-  (`5fe8561dc35c7d87699efa162466d5df8db79476`). The face and entries 1-13 share 4 files (`MatrixChat.tsx`, `MatrixChat.test.tsx`,
+  (`1ff2d0aa93207d99d4d92b59d9b5511739eaadd1`). The face and entries 1-13 share 4 files (`MatrixChat.tsx`, `MatrixChat.test.tsx`,
   `apps/web/src/i18n/strings/en_EN.json`, `settings/Settings.tsx`), merged by hunk separation; the reverse order (face first)
   applies clean too and gives the same tree. A later rebase of entry 13 or 14 must re-run the check.
 - **Upstream status:** FEATURE, local. Not proposed upstream; Element has no client-view mechanism.
