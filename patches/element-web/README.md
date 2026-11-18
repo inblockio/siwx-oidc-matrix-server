@@ -2119,6 +2119,13 @@ needs only a context port. Entry 13 is gated by the `config.json` key `io.inbloc
     `SearchResultTile`), pinned messages (`usePinnedEvents`), the reply quote (`ReplyChain`), the thread summary's last
     reply (`ThreadSummaryViewModel`), and the room list preview re-generates when its event expires
     (`MessagePreviewStore`, one timer per room with a policy).
+  - **Unread badge, receipts, scroll (2026-11-18, found by the first browser trial on dev):** all three only in a room with
+    a policy. (a) The room's unread count and activity dot are not shown when every unread event loaded after the read
+    position has expired (`RoomNotifs.ts`, `RoomNotificationState.ts`, one timer per room state so the badge clears when
+    the last such event expires). The server keeps counting expired events and refuses a read receipt for them; the count
+    is kept whenever this cannot be told (over-count in doubt). Thread counts, other devices' counts, push and e-mail counts
+    are unchanged. (b) No read receipt and no fully-read marker is sent for an expired event (`TimelinePanel.tsx`).
+    (c) When the tile the timeline was pinned to expires, the timeline goes to the newest messages (`MessagePanel.tsx`).
   - **The SDK's own retention is forced off while the key is set.** `utils/createMatrixClient.ts` passes
     `unstableMSC1763Retention: false` instead of the `feature_retention` labs value: that SDK path treats Off written as
     `{"min_lifetime": 0}` wrongly and turns expired events into "Message deleted" tiles. Key absent: the line behaves as
@@ -2128,8 +2135,8 @@ needs only a context port. Entry 13 is gated by the `config.json` key `io.inbloc
     2026-11-18): with a choice above the limit the purge job deletes messages at the clamp, earlier than the room's setting
     says. Keep the config's choices within the server's limits (the `retention` section, on our servers the file
     `/data/conf.d/retention.yaml` loaded by `entrypoints/matrix_server.sh`).
-  Ships 124 vitest tests in 13 test files (list under Coverage); 2 new source files (`utils/RoomRetention.ts`,
-  `RoomRetentionSection.tsx`), 13 stock files changed, 28 files in all. Marker in the built i18n file `en_EN.json`:
+  Ships 163 vitest tests in 16 test files (list under Coverage); 2 new source files (`utils/RoomRetention.ts`,
+  `RoomRetentionSection.tsx`), 16 stock files changed, 34 files in all. Marker in the built i18n file `en_EN.json`:
   `turned off disappearing messages.` (the Off notice).
 - **Limits (stated, not hidden):** *Not updated while open:* search results, pinned messages, a reply quote and the thread
   summary are evaluated when they render or load; a message that expires while one of them is open stays until it is
@@ -2157,7 +2164,7 @@ needs only a context port. Entry 13 is gated by the `config.json` key `io.inbloc
   `SecurityRoomSettingsTab.tsx`, `MessagePanel.tsx` or `shouldHideEvent.ts`, or becomes redundant: check), or the deployment
   drops the feature. Remove the patch, the `room_retention` strings, the `io.inblock.room_retention` key from the
   deployments' configs, the `markers.tsv` row and this entry.
-- **Coverage:** the 13 vitest files in the patch, 124 tests, run by the `patch-tests` stage on every pull request:
+- **Coverage:** the 16 vitest files in the patch, 163 tests, run by the `patch-tests` stage on every pull request:
   `utils/RoomRetention.test.ts`, `shouldHideEvent.roomRetention.test.ts`,
   `components/structures/MessagePanel.roomRetention.test.tsx`, `utils/createMatrixClient.roomRetention.test.ts`,
   `components/views/settings/tabs/room/SecurityRoomSettingsTab.roomRetention.test.tsx`,
@@ -2165,8 +2172,10 @@ needs only a context port. Entry 13 is gated by the `config.json` key `io.inbloc
   `stores/message-preview/MessagePreviewStore.roomRetention.test.ts`, `hooks/usePinnedEvents.roomRetention.test.tsx`,
   `components/views/elements/ReplyChain.roomRetention.test.tsx`,
   `components/views/rooms/SearchResultTile.roomRetention.test.tsx`,
-  `components/structures/RoomSearchView.roomRetention.test.tsx` and
-  `viewmodels/room/timeline/event-tile/ThreadSummaryViewModel.roomRetention.test.ts` (all under `apps/web/src/`; none edits a
+  `components/structures/RoomSearchView.roomRetention.test.tsx`,
+  `viewmodels/room/timeline/event-tile/ThreadSummaryViewModel.roomRetention.test.ts`,
+  `RoomNotifs.roomRetention.test.ts`, `components/structures/TimelinePanel.roomRetention.test.tsx` and
+  `stores/notifications/RoomNotificationState.roomRetention.test.ts` (all under `apps/web/src/`; none edits a
   stock test file). The key-absent cases (stock behaviour) are in every one of them. **Coverage (rule 2):** Playwright leg:
   siwx-oidc `e2e/element/ew-room-retention.spec.mjs`, lands with the dev deploy (track room_retention M6); until then there is
   no browser leg, and the look of the picker (spacing of its hint) has not been seen in a browser.
