@@ -431,7 +431,10 @@ RUN grep -rqF 'mxMatrixClientPeg' /src/apps/web/webapp/bundles/
 # ---------------------------------------------------------------------------
 FROM node:22.23.0-bookworm@sha256:e0d149b4727ac0c20d9774e801e423d7a946a0bffced886f42cfe9cd3c67820a AS rc-kit
 ARG RC_COMMIT=057a927d903c83b5d61cf236d650c4500ebb4b66
-ENV CI=1 YARN_ENABLE_TELEMETRY=0
+# YARN_CHECKSUM_BEHAVIOR=throw: Rocket.Chat's .yarnrc.yml sets `checksumBehavior: update`,
+# under which a fetched package that differs from the lockfile's checksum is
+# accepted; `--immutable` alone does not catch that. With throw the install fails.
+ENV CI=1 YARN_ENABLE_TELEMETRY=0 YARN_CHECKSUM_BEHAVIOR=throw
 WORKDIR /work/rocket.chat
 RUN git init -q \
     && git remote add origin https://github.com/RocketChat/Rocket.Chat.git \
