@@ -1,9 +1,9 @@
 diff --git a/apps/web/src/RoomNotifs.roomRetention.test.ts b/apps/web/src/RoomNotifs.roomRetention.test.ts
 new file mode 100644
-index 0000000..24c1dd8
+index 0000000..126abbb
 --- /dev/null
 +++ b/apps/web/src/RoomNotifs.roomRetention.test.ts
-@@ -0,0 +1,251 @@
+@@ -0,0 +1,339 @@
 +/*
 +Copyright 2026 inblock.io
 +
@@ -203,6 +203,94 @@ index 0000000..24c1dd8
 +            expect(determineUnreadState(room).count).toBe(0);
 +        });
 +
++        // I24: the notice for the policy itself is a state event, never expires and is drawn, but the server never counts it
++        it("shows no count when the only alive event after the read position is the retention notice", async () => {
++            const notice = mkEvent({
++                event: true,
++                type: ROOM_RETENTION_EVENT_TYPE,
++                room: roomId,
++                user: "@admin:example.com",
++                skey: "",
++                content: { max_lifetime: DAY },
++            });
++            await room.addLiveEvents(
++                [
++                    message("$a", 4 * DAY),
++                    notice,
++                    message("$b", 3 * DAY),
++                    message("$c", 2 * DAY),
++                    message("$d", 2 * DAY),
++                ],
++                { addToState: false },
++            );
++            readUpTo("$a");
++            serverCounts(3);
++            const { level, count } = determineUnreadState(room);
++            expect(count).toBe(0);
++            expect(level).toBe(NotificationLevel.None);
++        });
++
++        it("still keeps the server count when an alive message follows the retention notice", async () => {
++            const notice = mkEvent({
++                event: true,
++                type: ROOM_RETENTION_EVENT_TYPE,
++                room: roomId,
++                user: "@admin:example.com",
++                skey: "",
++                content: { max_lifetime: DAY },
++            });
++            await room.addLiveEvents([message("$a", 4 * DAY), notice, message("$b", 3 * DAY), message("$c", 1000)], {
++                addToState: false,
++            });
++            readUpTo("$a");
++            serverCounts(2);
++            expect(determineUnreadState(room).count).toBe(2);
++        });
++
++        // I10: an alive event with no renderer (or redacted) does not "trigger unread" for Element, yet the server may count it
++        it("keeps the server count when an alive event without a renderer follows expired ones", async () => {
++            const custom = new MatrixEvent({
++                room_id: roomId,
++                event_id: "$custom",
++                sender: "@other:example.com",
++                origin_server_ts: Date.now() - 1000,
++                type: "org.example.unrendered",
++                content: { body: "x" },
++            });
++            await room.addLiveEvents([message("$a", 3 * DAY), message("$b", 2 * DAY), custom], { addToState: false });
++            serverCounts(3);
++            expect(determineUnreadState(room).count).toBe(3);
++        });
++
++        it("shows no count when the only alive events after the expired ones are reactions", async () => {
++            const reaction = new MatrixEvent({
++                room_id: roomId,
++                event_id: "$react",
++                sender: "@other:example.com",
++                origin_server_ts: Date.now() - 1000,
++                type: EventType.Reaction,
++                content: { "m.relates_to": { rel_type: "m.annotation", event_id: "$b", key: "x" } },
++            });
++            await room.addLiveEvents([message("$a", 3 * DAY), message("$b", 2 * DAY), reaction], {
++                addToState: false,
++            });
++            serverCounts(2);
++            expect(determineUnreadState(room).count).toBe(0);
++        });
++
++        it("keeps the server count when an alive redacted message follows expired ones", async () => {
++            const redacted = message("$r", 1000);
++            redacted.makeRedacted(
++                new MatrixEvent({ type: EventType.RoomRedaction, sender: "@other:example.com", content: {} }),
++                room,
++            );
++            await room.addLiveEvents([message("$a", 3 * DAY), message("$b", 2 * DAY), redacted], {
++                addToState: false,
++            });
++            serverCounts(3);
++            expect(determineUnreadState(room).count).toBe(3);
++        });
++
 +        it("shows no activity dot when the server count is 0 and everything unread has expired", async () => {
 +            await room.addLiveEvents([message("$a", 3 * DAY), message("$b", 2 * DAY)], { addToState: false });
 +            serverCounts(0);
@@ -256,10 +344,17 @@ index 0000000..24c1dd8
 +    });
 +});
 diff --git a/apps/web/src/RoomNotifs.ts b/apps/web/src/RoomNotifs.ts
-index 3dc0708..ada4bf5 100644
+index 3dc0708..a38c588 100644
 --- a/apps/web/src/RoomNotifs.ts
 +++ b/apps/web/src/RoomNotifs.ts
-@@ -19,10 +19,16 @@ import { KnownMembership } from "matrix-js-sdk/src/types";
+@@ -14,15 +14,28 @@ import {
+     PushRuleKind,
+     TweakName,
+     EventStatus,
++    EventType,
++    RelationType,
+ } from "matrix-js-sdk/src/matrix";
+ import { KnownMembership } from "matrix-js-sdk/src/types";
  
  import type { IPushRule, Room, MatrixClient, MatrixEvent } from "matrix-js-sdk/src/matrix";
  import { NotificationLevel } from "./stores/notifications/NotificationLevel";
@@ -273,11 +368,16 @@ index 3dc0708..ada4bf5 100644
  import { EffectiveMembership, getEffectiveMembership, isKnockDenied } from "./utils/membership";
  import SettingsStore from "./settings/SettingsStore";
  import { getMarkedUnreadState } from "./utils/notifications";
-+import { getRoomMaxLifetime, isEventExpired, isRetentionEnabled } from "./utils/RoomRetention";
++import {
++    getRoomMaxLifetime,
++    isEventExpired,
++    isRetentionEnabled,
++    ROOM_RETENTION_EVENT_TYPE,
++} from "./utils/RoomRetention";
  
  /**
   * Gets all pending events in a room that have a status of `EventStatus.NOT_SENT`
-@@ -96,6 +102,30 @@ export function setRoomNotifsState(client: MatrixClient, roomId: string, newStat
+@@ -96,6 +109,41 @@ export function setRoomNotifsState(client: MatrixClient, roomId: string, newStat
      }
  }
  
@@ -287,8 +387,17 @@ index 3dc0708..ada4bf5 100644
 + * Safe direction only: false when the feature is off, the room has no policy, the loaded timeline is empty, an
 + * unread event that is still alive is loaded, or nothing says the count is made of expired events. Reaching the read
 + * position proves it only when at least one expired event lies after it: with none, the unread events are alive or
-+ * older than the read position, so the server's count stays.
++ * older than the read position, so the server's count stays. Any alive event of someone else that is not a state
++ * event blocks the suppression (the server may count it although Element draws nothing for it, for example a
++ * redacted message). The policy's own notice (a state event, never expires, drawn but never counted), reactions and
++ * edits do not.
 + */
++/** Alive events that the server's default push rules never count: the policy notice, reactions and edits. */
++function isNeverCounted(ev: MatrixEvent): boolean {
++    if (ev.isState()) return ev.getType() === ROOM_RETENTION_EVENT_TYPE;
++    return ev.getType() === EventType.Reaction || ev.isRelation(RelationType.Replace);
++}
++
 +function isUnreadCountOnlyExpired(room: Room): boolean {
 +    if (!isRetentionEnabled() || getRoomMaxLifetime(room) === null) return false;
 +    const events = room.getLiveTimeline().getEvents();
@@ -299,6 +408,8 @@ index 3dc0708..ada4bf5 100644
 +        const id = ev.getId();
 +        if (id && room.hasUserReadEvent(room.myUserId, id)) return sawExpired;
 +        if (isEventExpired(ev)) sawExpired = true;
++        else if (isNeverCounted(ev)) continue;
++        else if (!ev.isState() && ev.getSender() !== room.myUserId) return false; // the server may count it, even if Element draws nothing
 +        else if (eventTriggersUnreadCount(room.client, ev)) return false;
 +    }
 +    // Events that are not loaded are older than the oldest loaded one, so they are expired when that one is.
@@ -308,7 +419,7 @@ index 3dc0708..ada4bf5 100644
  export function getUnreadNotificationCount(
      room: Room,
      type: NotificationCountType,
-@@ -103,7 +133,10 @@ export function getUnreadNotificationCount(
+@@ -103,7 +151,10 @@ export function getUnreadNotificationCount(
      threadId?: string,
  ): number {
      const getCountShownForRoom = (r: Room, type: NotificationCountType): number => {
@@ -320,7 +431,7 @@ index 3dc0708..ada4bf5 100644
      };
  
      let notificationCount = !!threadId
-@@ -318,6 +351,9 @@ export function determineUnreadState(
+@@ -318,6 +369,9 @@ export function determineUnreadState(
              hasUnread = doesRoomOrThreadHaveUnreadMessages(thread);
          }
          // If the thread does not exist, assume it contains no unreads
@@ -497,10 +608,10 @@ index 63896bb..cc6b369 100644
      "im.vector.modular.widgets": textForWidgetEvent,
 diff --git a/apps/web/src/components/structures/MessagePanel.roomRetention.test.tsx b/apps/web/src/components/structures/MessagePanel.roomRetention.test.tsx
 new file mode 100644
-index 0000000..0c8577e
+index 0000000..11365b3
 --- /dev/null
 +++ b/apps/web/src/components/structures/MessagePanel.roomRetention.test.tsx
-@@ -0,0 +1,366 @@
+@@ -0,0 +1,382 @@
 +/*
 +Copyright 2026 inblock.io
 +
@@ -536,7 +647,7 @@ index 0000000..0c8577e
 +import type ResizeNotifier from "../../utils/ResizeNotifier";
 +import { MatrixClientPeg } from "../../MatrixClientPeg";
 +import { ScopedRoomContextProvider } from "../../contexts/ScopedRoomContext.tsx";
-+import { ROOM_RETENTION_CONFIG_KEY, ROOM_RETENTION_EVENT_TYPE } from "../../utils/RoomRetention";
++import { ROOM_RETENTION_CONFIG_KEY, ROOM_RETENTION_EVENT_TYPE, onRetentionTick } from "../../utils/RoomRetention";
 +
 +/** The retention key is not in the typed config: put it in untyped, as the app reads it. */
 +const putConfig = (config: object): void => SdkConfig.put(config as Parameters<typeof SdkConfig.put>[0]);
@@ -705,6 +816,22 @@ index 0000000..0c8577e
 +                expect(container.textContent).not.toContain("fresh at mount");
 +            });
 +
++            it("tells the retention tick subscribers (reply quotes) when it fires, once per tick", () => {
++                const events = [msg("fresh at mount", DAY - 10000), msg("young", 1000)];
++                renderPanel(events);
++                const listener = vi.fn();
++                const off = onRetentionTick(listener);
++                act(() => {
++                    vi.advanceTimersByTime(10000 + SLACK_MS + 50);
++                });
++                expect(listener).toHaveBeenCalledTimes(1);
++                off();
++                act(() => {
++                    vi.advanceTimersByTime(DAY);
++                });
++                expect(listener).toHaveBeenCalledTimes(1);
++            });
++
 +            it("arms one timer for the earliest expiry, re-arms it for the next, and stops when nothing is left", () => {
 +                const events = [msg("first", DAY - 5000), msg("second", DAY - 20000)];
 +                const spy = vi.spyOn(globalThis, "setTimeout");
@@ -868,18 +995,18 @@ index 0000000..0c8577e
 +    });
 +});
 diff --git a/apps/web/src/components/structures/MessagePanel.tsx b/apps/web/src/components/structures/MessagePanel.tsx
-index 179126a..941925c 100644
+index 179126a..f83ad98 100644
 --- a/apps/web/src/components/structures/MessagePanel.tsx
 +++ b/apps/web/src/components/structures/MessagePanel.tsx
 @@ -55,6 +55,7 @@ import { _t } from "../../languageHandler";
  import { getLateEventInfo } from "./grouper/LateEventGrouper";
  import { isEligibleForSpecialReceipt } from "../../viewmodels/room/timeline/event-tile/EventTileReceiptState";
  import { DateSeparatorWrapper } from "./DateSeparatorWrapper";
-+import { isEventExpired, nextExpiryDelay } from "../../utils/RoomRetention";
++import { emitRetentionTick, isEventExpired, nextExpiryDelay } from "../../utils/RoomRetention";
  
  const CONTINUATION_MAX_INTERVAL = 5 * 60 * 1000; // 5 minutes
  const continuedTypes = [EventType.Sticker, EventType.RoomMessage];
-@@ -300,10 +301,42 @@ export default class MessagePanel extends React.Component<IProps, IState> {
+@@ -300,10 +301,44 @@ export default class MessagePanel extends React.Component<IProps, IState> {
          );
          this.calculateRoomMembersCount();
          this.props.room?.currentState.on(RoomStateEvent.Update, this.calculateRoomMembersCount);
@@ -898,7 +1025,9 @@ index 179126a..941925c 100644
 +        this.retentionTimer = setTimeout(
 +            () => {
 +                this.retentionTimer = undefined;
-+                if (!this.unmounted) this.forceUpdate(this.scrollToBottomIfPinnedTileGone);
++                if (this.unmounted) return;
++                this.forceUpdate(this.scrollToBottomIfPinnedTileGone);
++                emitRetentionTick();
 +            },
 +            Math.min(delay + 250, 2147483647),
 +        );
@@ -922,7 +1051,7 @@ index 179126a..941925c 100644
          this.props.room?.currentState.off(RoomStateEvent.Update, this.calculateRoomMembersCount);
          SettingsStore.unwatchSetting(this.showTypingNotificationsWatcherRef);
          this.readReceiptMap = {};
-@@ -311,6 +344,8 @@ export default class MessagePanel extends React.Component<IProps, IState> {
+@@ -311,6 +346,8 @@ export default class MessagePanel extends React.Component<IProps, IState> {
      }
  
      public componentDidUpdate(prevProps: IProps, prevState: IState): void {
@@ -931,7 +1060,7 @@ index 179126a..941925c 100644
          if (prevProps.layout !== this.props.layout) {
              this.calculateRoomMembersCount();
          }
-@@ -483,6 +518,9 @@ export default class MessagePanel extends React.Component<IProps, IState> {
+@@ -483,6 +520,9 @@ export default class MessagePanel extends React.Component<IProps, IState> {
              return false; // ignored = no show (only happens if the ignore happens after an event was received)
          }
  
@@ -1292,10 +1421,10 @@ index 12c0412..38b5e79 100644
                  proms.push(this.sendFullyReadMarker(client, roomId ?? "", fullyReadMarkerEventId));
 diff --git a/apps/web/src/components/views/elements/ReplyChain.roomRetention.test.tsx b/apps/web/src/components/views/elements/ReplyChain.roomRetention.test.tsx
 new file mode 100644
-index 0000000..fb8e7c9
+index 0000000..9182e18
 --- /dev/null
 +++ b/apps/web/src/components/views/elements/ReplyChain.roomRetention.test.tsx
-@@ -0,0 +1,112 @@
+@@ -0,0 +1,172 @@
 +/*
 +Copyright 2026 inblock.io
 +
@@ -1306,14 +1435,14 @@ index 0000000..fb8e7c9
 +// @vitest-environment happy-dom
 +
 +import React from "react";
-+import { render, waitFor } from "test-utils-rtl";
++import { act, render, waitFor } from "test-utils-rtl";
 +import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 +import { type MatrixClient, type MatrixEvent, Room } from "matrix-js-sdk/src/matrix";
 +import { mkEvent, stubClient, withClientContextRenderOptions } from "test-utils";
 +
 +import ReplyChain from "./ReplyChain";
 +import SdkConfig from "../../../SdkConfig";
-+import { ROOM_RETENTION_CONFIG_KEY, ROOM_RETENTION_EVENT_TYPE } from "../../../utils/RoomRetention";
++import { ROOM_RETENTION_CONFIG_KEY, ROOM_RETENTION_EVENT_TYPE, emitRetentionTick } from "../../../utils/RoomRetention";
 +import { _t } from "../../../languageHandler";
 +
 +/** The retention key is not in the typed config: put it in untyped, as the app reads it. */
@@ -1393,6 +1522,51 @@ index 0000000..fb8e7c9
 +            expect(queryByText("The quoted secret")).not.toBeInTheDocument();
 +        });
 +
++        // I1: a quote that was alive when it loaded stops showing the body once the shared expiry tick finds it expired
++        describe("when the quoted event expires while the room is open", () => {
++            beforeEach(() => {
++                vi.useFakeTimers({ toFake: ["Date"] });
++            });
++            afterEach(() => {
++                vi.useRealTimers();
++            });
++
++            it("drops the quoted body on the next expiry tick and shows the could-not-load line", async () => {
++                const { container, queryByText, findByText } = renderChain(quoted(DAY - 10000));
++                await expect(findByText("The quoted secret")).resolves.toBeInTheDocument();
++
++                act(() => {
++                    vi.setSystemTime(Date.now() + 20000);
++                    emitRetentionTick();
++                });
++                expect(queryByText("The quoted secret")).not.toBeInTheDocument();
++                expect(container.querySelector(".mx_ReplyChain_error")).toBeInTheDocument();
++                expect(queryByText(_t("timeline|reply|error_loading"))).toBeInTheDocument();
++            });
++
++            it("keeps the quote on a tick that comes before the expiry", async () => {
++                const { queryByText, findByText } = renderChain(quoted(DAY - 100000));
++                await expect(findByText("The quoted secret")).resolves.toBeInTheDocument();
++                act(() => {
++                    vi.setSystemTime(Date.now() + 20000);
++                    emitRetentionTick();
++                });
++                expect(queryByText("The quoted secret")).toBeInTheDocument();
++            });
++
++            it("stops listening for the tick when it unmounts", async () => {
++                const { unmount, findByText } = renderChain(quoted(DAY - 10000));
++                await expect(findByText("The quoted secret")).resolves.toBeInTheDocument();
++                const spy = vi.spyOn(console, "error").mockImplementation(() => {});
++                unmount();
++                act(() => {
++                    vi.setSystemTime(Date.now() + 20000);
++                    emitRetentionTick();
++                });
++                expect(spy).not.toHaveBeenCalled();
++            });
++        });
++
 +        it("shows a quoted event that is still within max_lifetime", async () => {
 +            const { queryByText, findByText } = renderChain(quoted(DAY / 2));
 +            await expect(findByText("The quoted secret")).resolves.toBeInTheDocument();
@@ -1401,6 +1575,21 @@ index 0000000..fb8e7c9
 +    });
 +
 +    describe("key absent (stock behaviour)", () => {
++        it("keeps the quote after a tick, however old it is", async () => {
++            vi.useFakeTimers({ toFake: ["Date"] });
++            try {
++                const { queryByText, findByText } = renderChain(quoted(100 * DAY));
++                await expect(findByText("The quoted secret")).resolves.toBeInTheDocument();
++                act(() => {
++                    vi.setSystemTime(Date.now() + 20000);
++                    emitRetentionTick();
++                });
++                expect(queryByText("The quoted secret")).toBeInTheDocument();
++            } finally {
++                vi.useRealTimers();
++            }
++        });
++
 +        it("shows an old quoted event in a room carrying a short max_lifetime", async () => {
 +            const { queryByText, findByText } = renderChain(quoted(100 * DAY));
 +            await expect(findByText("The quoted secret")).resolves.toBeInTheDocument();
@@ -1409,18 +1598,26 @@ index 0000000..fb8e7c9
 +    });
 +});
 diff --git a/apps/web/src/components/views/elements/ReplyChain.tsx b/apps/web/src/components/views/elements/ReplyChain.tsx
-index a558e2e..430baff 100644
+index a558e2e..a2a6666 100644
 --- a/apps/web/src/components/views/elements/ReplyChain.tsx
 +++ b/apps/web/src/components/views/elements/ReplyChain.tsx
 @@ -29,6 +29,7 @@ import { useMatrixClientContext } from "../../../contexts/MatrixClientContext";
  import { type GetRelationsForEvent } from "../rooms/EventTile";
  import { ReplyTileViewModel } from "../../../viewmodels/room/timeline/event-tile/ReplyTileViewModel";
  import { useUserStatus } from "../../../hooks/useUserStatus";
-+import { isEventExpired } from "../../../utils/RoomRetention";
++import { isEventExpired, onRetentionTick } from "../../../utils/RoomRetention";
  
  /**
   * This number is based on the previous behavior - if we have message of height
-@@ -144,7 +145,8 @@ export default class ReplyChain extends React.Component<IProps, IState> {
+@@ -129,6 +130,7 @@ export default class ReplyChain extends React.Component<IProps, IState> {
+     declare public context: React.ContextType<typeof RoomContext>;
+ 
+     private unmounted = false;
++    private offRetentionTick: (() => void) | undefined;
+     private room: Room;
+     private blockquoteRef = React.createRef<HTMLQuoteElement>();
+ 
+@@ -144,7 +146,8 @@ export default class ReplyChain extends React.Component<IProps, IState> {
          if (props.compactPreview) {
              const parentEventId = getParentEventId(props.parentEv);
              const ev = parentEventId ? this.room?.findEventById(parentEventId) : undefined;
@@ -1430,7 +1627,27 @@ index a558e2e..430baff 100644
                  initialEvents = [ev];
                  loading = false;
              }
-@@ -245,7 +247,7 @@ export default class ReplyChain extends React.Component<IProps, IState> {
+@@ -164,6 +167,10 @@ export default class ReplyChain extends React.Component<IProps, IState> {
+ 
+     public componentDidMount(): void {
+         this.unmounted = false;
++        // Room retention: a loaded quote is looked at again when the panel's expiry tick fires
++        this.offRetentionTick = onRetentionTick(() => {
++            if (!this.unmounted) this.forceUpdate();
++        });
+         if (this.state.loading) {
+             void this.initialize();
+         } else if (this.state.events.length > 0) {
+@@ -191,6 +198,8 @@ export default class ReplyChain extends React.Component<IProps, IState> {
+ 
+     public componentWillUnmount(): void {
+         this.unmounted = true;
++        this.offRetentionTick?.();
++        this.offRetentionTick = undefined;
+     }
+ 
+     private trySetExpandableQuotes(): void {
+@@ -245,7 +254,7 @@ export default class ReplyChain extends React.Component<IProps, IState> {
      private async getEvent(eventId?: string): Promise<MatrixEvent | null> {
          if (!eventId) return null;
          const event = this.room.findEventById(eventId);
@@ -1439,7 +1656,7 @@ index a558e2e..430baff 100644
  
          try {
              // ask the client to fetch the event we want using the context API, only interface to do so is to ask
-@@ -256,7 +258,8 @@ export default class ReplyChain extends React.Component<IProps, IState> {
+@@ -256,7 +265,8 @@ export default class ReplyChain extends React.Component<IProps, IState> {
              // Return null as it is falsy and thus should be treated as an error (as the event cannot be resolved).
              return null;
          }
@@ -1449,6 +1666,37 @@ index a558e2e..430baff 100644
      }
  
      public canCollapse = (): boolean => {
+@@ -290,14 +300,18 @@ export default class ReplyChain extends React.Component<IProps, IState> {
+ 
+     public render(): React.ReactNode {
+         let header: JSX.Element | undefined;
+-        if (this.state.err) {
++        // Room retention: a quote that has expired since it loaded is shown like one that cannot be loaded
++        const events = this.state.events.filter((ev) => !isEventExpired(ev));
++        const loadedEv = this.state.loadedEv && !isEventExpired(this.state.loadedEv) ? this.state.loadedEv : null;
++        const quoteGone = this.state.events.length > 0 && events.length === 0;
++        if (this.state.err || quoteGone) {
+             header = (
+                 <blockquote className="mx_ReplyChain mx_ReplyChain_error">
+                     {_t("timeline|reply|error_loading")}
+                 </blockquote>
+             );
+-        } else if (this.state.loadedEv && shouldDisplayReply(this.state.events[0])) {
+-            const ev = this.state.loadedEv;
++        } else if (loadedEv && shouldDisplayReply(events[0])) {
++            const ev = loadedEv;
+             const room = this.matrixClient.getRoom(ev.getRoomId());
+             header = (
+                 <blockquote className={`mx_ReplyChain ${this.getReplyChainColorClass(ev)}`}>
+@@ -358,7 +372,7 @@ export default class ReplyChain extends React.Component<IProps, IState> {
+         }
+ 
+         const { isQuoteExpanded } = this.props;
+-        const evTiles = this.state.events.map((ev) => {
++        const evTiles = events.map((ev) => {
+             const classname = classNames({
+                 "mx_ReplyChain": true,
+                 [this.getReplyChainColorClass(ev)]: true,
 diff --git a/apps/web/src/components/views/rooms/SearchResultTile.roomRetention.test.tsx b/apps/web/src/components/views/rooms/SearchResultTile.roomRetention.test.tsx
 new file mode 100644
 index 0000000..15e7f62
@@ -2075,10 +2323,10 @@ index 78a4f62..1ef1f99 100644
  for (const evType of ElementCallEventType.names) {
 diff --git a/apps/web/src/hooks/usePinnedEvents.roomRetention.test.tsx b/apps/web/src/hooks/usePinnedEvents.roomRetention.test.tsx
 new file mode 100644
-index 0000000..14c4132
+index 0000000..29eaa80
 --- /dev/null
 +++ b/apps/web/src/hooks/usePinnedEvents.roomRetention.test.tsx
-@@ -0,0 +1,96 @@
+@@ -0,0 +1,142 @@
 +/*
 +Copyright 2026 inblock.io
 +
@@ -2090,7 +2338,7 @@ index 0000000..14c4132
 +
 +import React, { type PropsWithChildren } from "react";
 +import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-+import { renderHook, waitFor } from "test-utils-rtl";
++import { act, renderHook, waitFor } from "test-utils-rtl";
 +import { EventType, type MatrixClient, MatrixEvent, Room } from "matrix-js-sdk/src/matrix";
 +import { mkEvent, stubClient } from "test-utils";
 +
@@ -2115,6 +2363,7 @@ index 0000000..14c4132
 +
 +    let client: MatrixClient;
 +    let room: Room;
++    let fetched: Record<string, MatrixEvent>;
 +
 +    const makeEvent = (id: string, ageMs: number): MatrixEvent =>
 +        new MatrixEvent({
@@ -2147,7 +2396,7 @@ index 0000000..14c4132
 +                content: { max_lifetime: DAY },
 +            }),
 +        ]);
-+        const fetched: Record<string, MatrixEvent> = {
++        fetched = {
 +            [oldId]: makeEvent(oldId, 3 * DAY),
 +            [freshId]: makeEvent(freshId, DAY / 2),
 +        };
@@ -2174,28 +2423,81 @@ index 0000000..14c4132
 +        await waitFor(() => expect(result.current).toHaveLength(2));
 +        expect(ids(result.current)).toEqual([freshId, oldId]);
 +    });
++    // I2: the banner and the pinned messages card keep the room open across the expiry
++    describe("when a pinned event expires while the hook is mounted", () => {
++        const SLACK_MS = 250;
++        beforeEach(() => {
++            fetched[oldId] = makeEvent(oldId, DAY - 10000);
++            vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
++        });
++        afterEach(() => {
++            vi.useRealTimers();
++        });
++
++        it("drops the pinned event when its time passes, without a reload, and keeps the fresh one", async () => {
++            putConfig({ [ROOM_RETENTION_CONFIG_KEY]: { choices: [] } });
++            const { result } = renderHook(() => useFetchedPinnedEvents(room, pinnedIds), { wrapper });
++            await vi.waitFor(() => expect(result.current).toHaveLength(2));
++
++            await act(async () => {
++                await vi.advanceTimersByTimeAsync(10000 + SLACK_MS + 50);
++            });
++            expect(ids(result.current)).toEqual([freshId]);
++        });
++
++        it("arms one timer, and none once nothing is left to expire", async () => {
++            putConfig({ [ROOM_RETENTION_CONFIG_KEY]: { choices: [] } });
++            const { result, unmount } = renderHook(() => useFetchedPinnedEvents(room, pinnedIds), { wrapper });
++            await vi.waitFor(() => expect(result.current).toHaveLength(2));
++            expect(vi.getTimerCount()).toBe(1);
++            await act(async () => {
++                await vi.advanceTimersByTimeAsync(10000 + SLACK_MS + 50);
++            });
++            expect(vi.getTimerCount()).toBe(1); // re-armed for the fresh one
++            unmount();
++            expect(vi.getTimerCount()).toBe(0);
++        });
++
++        it("arms no timer and keeps the event when the config key is absent", async () => {
++            const { result } = renderHook(() => useFetchedPinnedEvents(room, pinnedIds), { wrapper });
++            await vi.waitFor(() => expect(result.current).toHaveLength(2));
++            expect(vi.getTimerCount()).toBe(0);
++            await act(async () => {
++                await vi.advanceTimersByTimeAsync(20000);
++            });
++            expect(ids(result.current)).toEqual([freshId, oldId]);
++        });
++    });
 +});
 diff --git a/apps/web/src/hooks/usePinnedEvents.ts b/apps/web/src/hooks/usePinnedEvents.ts
-index 1d86b7c..a547e8e 100644
+index 1d86b7c..de5daf3 100644
 --- a/apps/web/src/hooks/usePinnedEvents.ts
 +++ b/apps/web/src/hooks/usePinnedEvents.ts
 @@ -27,6 +27,7 @@ import { useAsyncMemo } from "./useAsyncMemo";
  import PinningUtils from "../utils/PinningUtils";
  import { batch } from "../utils/promise.ts";
  import { filterBoolean } from "../utils/arrays.ts";
-+import { isEventExpired } from "../utils/RoomRetention";
++import { isEventExpired, nextExpiryDelay } from "../utils/RoomRetention";
  
  /**
   * Get the pinned event IDs from a room.
-@@ -216,7 +217,10 @@ export function useFetchedPinnedEvents(room: Room, pinnedEventIds: string[]): Ar
+@@ -216,7 +217,18 @@ export function useFetchedPinnedEvents(room: Room, pinnedEventIds: string[]): Ar
          [cli, room, pinnedEventIds],
          [],
      );
 -    const events = useMemo(() => filterBoolean(fetchedEvents), [fetchedEvents]);
-+    const events = useMemo(
-+        () => filterBoolean(fetchedEvents).filter((event) => !isEventExpired(event)),
-+        [fetchedEvents],
-+    );
++    // Room retention: one timer for the next pinned event to expire, then the list is worked out again
++    const [expiryTick, setExpiryTick] = useState(0);
++    const events = useMemo(() => {
++        void expiryTick; // the timer's tick makes the expiry check run again
++        return filterBoolean(fetchedEvents).filter((event) => !isEventExpired(event));
++    }, [fetchedEvents, expiryTick]);
++    useEffect(() => {
++        const delay = nextExpiryDelay(events, room);
++        if (delay === null) return;
++        const timer = setTimeout(() => setExpiryTick((tick) => tick + 1), Math.min(delay + 250, 2147483647));
++        return () => clearTimeout(timer);
++    }, [events, room]);
  
      // Replacing an event notifies whatever is rendering it, which is what refreshes the banner and
      // the pinned messages card, so it has to happen after the render rather than during it.
@@ -3190,10 +3492,10 @@ index 0000000..74ac7d9
 +});
 diff --git a/apps/web/src/utils/RoomRetention.ts b/apps/web/src/utils/RoomRetention.ts
 new file mode 100644
-index 0000000..1a089be
+index 0000000..1ae2dde
 --- /dev/null
 +++ b/apps/web/src/utils/RoomRetention.ts
-@@ -0,0 +1,156 @@
+@@ -0,0 +1,181 @@
 +/*
 +Copyright 2026 inblock.io
 +
@@ -3348,6 +3650,31 @@ index 0000000..1a089be
 +        return next;
 +    } catch {
 +        return null;
++    }
++}
++
++const tickListeners = new Set<() => void>();
++
++/**
++ * Subscribes to the expiry tick: the one timer of a MessagePanel calls `emitRetentionTick` when an event of the
++ * panel expires, so a component that does not re-render with the panel (a reply quote) can look again without a
++ * timer of its own. Returns the unsubscribe function.
++ */
++export function onRetentionTick(listener: () => void): () => void {
++    tickListeners.add(listener);
++    return () => {
++        tickListeners.delete(listener);
++    };
++}
++
++/** Called by the expiry timer of a MessagePanel after it has re-rendered; every listener sees the new time. */
++export function emitRetentionTick(): void {
++    for (const listener of tickListeners) {
++        try {
++            listener();
++        } catch {
++            // one failing listener must not stop the others
++        }
 +    }
 +}
 diff --git a/apps/web/src/utils/createMatrixClient.roomRetention.test.ts b/apps/web/src/utils/createMatrixClient.roomRetention.test.ts
