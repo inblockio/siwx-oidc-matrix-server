@@ -3,7 +3,7 @@ repo:    inblockio/element-views-track (private), path kits/rocketchat
 commit:  8b1463e025dce6509c9440a5c4e6cad2ec16406f (main, 2026-11-08T06:59:45+01:00, "M14 close Trace");
          last commit touching the path: a38bd7dcb2954de9406ee08db1b30200c074ecfd (2026-11-08T03:08:07+01:00)
 vendored: 2026-11-18, by `git archive <commit> kits/rocketchat`, every tracked file, unmodified (125 files, 832743 bytes); the changes listed in the last section came after
-manifest: MANIFEST.sha256 (sha256 of each file, LC_ALL=C sorted path order; it lists the 125 vendored files and, since M4, the 2 files added then: 127 lines, the yarn lock and its NOTE are not in it); sha256 of MANIFEST.sha256 = d8320bb3d54b78d810980666d302b3a9950e2894d8123addbd30599fb1d17f72
+manifest: MANIFEST.sha256 (sha256 of each file, LC_ALL=C sorted path order; it lists the 125 vendored files and, since M4, the 2 files added then: 127 lines, the yarn lock and its NOTE are not in it); sha256 of MANIFEST.sha256 = 9668d2df73a31e219eb96bc4499cdc17edca2789b39353312717c45bc86c757a
 not vendored: the test kit kits/fixture-list (never part of the image)
 Why vendored: the source repo is private, a GitHub Actions build of this repo has no credentials for it.
 Refresh: see docs/element-web-source-build.md, section "Rocket.Chat kit stage".
@@ -22,4 +22,5 @@ changed  test/adapter.test.ts         cases for the retention line, the expired 
 added    test/retention-type.test.ts  the type registration
 changed  CAPABILITIES.md              Room Information line (Disappearing messages entry), rows retention-notice and retention-expired
 changed  PROVENANCE                   this section, the manifest line
+changed  NOTICE                       the kit's own files: Copyright 2026 inblock.io, AGPL-3.0-only (the owner's ruling of 2026-11-18; was "to be confirmed", "proposed")
 changed  MANIFEST.sha256              regenerated for the files above

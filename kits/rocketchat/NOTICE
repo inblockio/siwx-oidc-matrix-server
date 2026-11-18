@@ -17,9 +17,9 @@ This kit is shipped together with Element Web and runs inside it as a client vie
 
 2. The kit's own adapter code (kits/rocketchat/src):
 
-       Copyright 2026 inblock.io (copyright holder and licence to be confirmed by the owner)
+       Copyright 2026 inblock.io
 
-   proposed licence: AGPL-3.0-only OR GPL-3.0-only, as the track's Element-side files. Files in src/ that replace a
+   licensed AGPL-3.0-only. Files in src/ that replace a
    Rocket.Chat file (each says so in its first comment) are derived from MIT code and keep its notice above.
 
 3. Element Web, which hosts this kit:
