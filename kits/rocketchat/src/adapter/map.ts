@@ -514,6 +514,14 @@ export const encryptionLine = (e: ViewEncryption): Partial<IMessage> | undefined
 		: undefined;
 
 /**
+ * The system line of a change of the room's disappearing-messages setting (`ViewMessage.retention`): the type
+ * `room_retention_changed` (registered from `retention-type.ts`) draws "<sender> <text>". The text is the host's, preformatted
+ * and translated, and goes through as plain text: no Markdown pass, as `msg` of a system message is never formatted.
+ */
+export const retentionLine = (r: { text: string }): Partial<IMessage> =>
+	({ t: 'room_retention_changed', msg: r.text, groupable: false }) as unknown as Partial<IMessage>;
+
+/**
  * Rocket.Chat's `VideoConference` (the answer of `video-conference.info`) from the call the bridge handed over. The state
  * is Element's (the root tile view-model: ongoing or a tombstone); what no view-model carries is not invented: an ended
  * call has no member list and no end time of its own, so `endedAt` is the moment the caller observed the end (the call's
@@ -585,13 +593,14 @@ export const toMessage = (m: ViewMessage, room?: Pick<IRoom, '_id' | 't' | 'name
 		// Element's Copy Markdown rule (ViewMessage.canCopyMarkdown): the swapped WebDAV slot of the "More" menu carries the item.
 		kitCanCopyMarkdown: m.canCopyMarkdown === true,
 		pinned: m.pinned === true,
-		// The host has no report row for a call card or an encryption line (the press would end in unknown_event): the swapped report action reads this.
-		kitCanReport: !m.call && !m.encryption,
+		// The host has no report row for a call card, an encryption line or a retention line (the press would end in unknown_event): the swapped report action reads this.
+		kitCanReport: !m.call && !m.encryption && !m.retention,
 		// Element's permalink of the event (the swapped permalink action copies it); absent = no "Copy link".
 		...(m.permalink ? { kitPermalink: m.permalink } : {}),
 		...e2e,
 		...(m.call ? videoConfMessage(m.call) : {}),
 		...(m.encryption ? encryptionLine(m.encryption) : {}),
+		...(m.retention ? retentionLine(m.retention) : {}),
 	} as unknown as IMessage;
 };
 
@@ -615,5 +624,5 @@ export const initialAvatar = (label: string): string => {
 };
 
 /** The Rocket.Chat types the kit draws from events that are no Matrix `m.room.message`: Element's quick reaction skips them. */
-const NO_MESSAGE_EVENT_TYPES = new Set(['room_e2e_enabled', 'videoconf', 'e2e']);
+const NO_MESSAGE_EVENT_TYPES = new Set(['room_e2e_enabled', 'room_retention_changed', 'videoconf', 'e2e']);
 export const isNoMessageEvent = (m: IMessage): boolean => NO_MESSAGE_EVENT_TYPES.has(String((m as { t?: string }).t ?? ''));

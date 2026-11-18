@@ -105,6 +105,8 @@ describe('CAPABILITIES.md', () => {
 				['call-tile', 'hidden', 'hand-off (D26)'],
 				['call-start', 'hidden', 'hand-off (D26)'],
 				['encryption-event', 'shown', 'interim (D41)'],
+				['retention-notice', 'shown', 'wired'],
+				['retention-expired', 'shown', 'wired'],
 				['skip-to-main-content', 'shown', 'wired'],
 			],
 		);

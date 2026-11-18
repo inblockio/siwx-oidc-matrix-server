@@ -19,7 +19,7 @@ win.parent = win;
 Object.assign(globalThis, { window: win });
 
 const { BridgeSource, forwardFailure, CANNOT_FORWARD, threadFailure, CANNOT_THREAD, DIALOG_BUSY, isDialogBusy, moveFailure, CANNOT_MOVE, MOVE_NOT_SAVED } = await import('../src/adapter/source.ts');
-const { DISPLAY_NAME_SETTINGS, toVideoConference, parseQuotes, roomPath, messageLink, mediaAttachment, downloadHref, parseDownloadHref, e2eFields, isNoMessageEvent, urlsOf, idHash, loginToken, slug, slugs, setReactionName, setReactionUnicode, shortcodesToUnicode, reactionKeyFor, newOwnReactionNames, syncAnswer, threadFields, toMessage, encryptionLine, toSubscription, toUser, sidebarCategories, notificationLevelOf } = await import('../src/adapter/map.ts');
+const { DISPLAY_NAME_SETTINGS, toVideoConference, parseQuotes, roomPath, messageLink, mediaAttachment, downloadHref, parseDownloadHref, e2eFields, isNoMessageEvent, urlsOf, idHash, loginToken, slug, slugs, setReactionName, setReactionUnicode, shortcodesToUnicode, reactionKeyFor, newOwnReactionNames, syncAnswer, threadFields, toMessage, encryptionLine, retentionLine, toSubscription, toUser, sidebarCategories, notificationLevelOf } = await import('../src/adapter/map.ts');
 const { stubLog, answeredLog } = await import('../src/adapter/recorder.ts');
 const { findBridge, getSource, supportedBridgeVersion } = await import('../src/adapter/bridge.ts');
 const { sdk, setCachedIds, setJumpFailed, setRestoreComposer, setRoomOpener, routeShowsRoom, openPreview } = await import('../src/adapter/sdk.ts');
@@ -3339,6 +3339,81 @@ describe('encryption event line (M12 Z4, interim D41)', () => {
 		const doc = toMessage(view({ state: 'enabled_local' }, { id: localId }) as never) as unknown as { _id: string; t: string };
 		assert.equal(doc._id, localId);
 		assert.equal(doc.t, 'room_e2e_enabled');
+	});
+});
+
+describe('room retention (M4, decision D15): the notice line and the expired stub', () => {
+	const NOTICE = 'set messages in this room to disappear after 7 days.';
+	type Line = { _id: string; t?: string; msg: string; groupable?: boolean; kitCanReport: boolean };
+	const rows = (src: InstanceType<typeof BridgeSource>) => src.history(GENERAL) as unknown as Line[];
+
+	it('retentionLine is the system type room_retention_changed with the host text as msg, not grouped', () => {
+		assert.deepEqual(retentionLine({ text: NOTICE }), { t: 'room_retention_changed', msg: NOTICE, groupable: false });
+	});
+
+	it('a ViewMessage with `retention` maps to that line: t, the text verbatim (no markdown pass), not grouped, no Report, no quick reaction', () => {
+		const text = 'turned off *disappearing* <b>messages</b> & `more`.';
+		const doc = toMessage({ id: '$ret:1', roomId: GENERAL, senderId: '@alice:example.org', senderName: 'Alice', ts: 5000, body: '', kind: 'other', retention: { text } } as never) as unknown as Line;
+		assert.equal(doc.t, 'room_retention_changed');
+		assert.equal(doc.msg, text, 'plain text, byte for byte');
+		assert.equal(doc.groupable, false);
+		assert.equal(doc.kitCanReport, false);
+		assert.equal(isNoMessageEvent(doc as never), true, 'Element\'s quick reaction skips it');
+		assert.equal(isNoMessageEvent(toMessage(bridge.timeline(GENERAL)[0]) as never), false, 'an ordinary message still takes it');
+	});
+
+	it('the bridge helper puts the line into the history and announces it', () => {
+		const b = fixtureBridge();
+		const src = new BridgeSource(b);
+		src.history(GENERAL);
+		const seen: string[] = [];
+		src.onChange((c) => c.kind === 'message' && seen.push(`${c.op}:${(c.doc as { _id: string })._id}`));
+		b.retention(GENERAL, '$ret:1', NOTICE);
+		const line = rows(src).find((m) => m._id === '$ret:1');
+		assert.equal(line?.t, 'room_retention_changed');
+		assert.equal(line?.msg, NOTICE);
+		assert.ok(seen.includes('changed:$ret:1'), 'announced');
+	});
+
+	it('an `expired` stub for a known message removes it as a redaction does: op removed, not listed again, not readable', () => {
+		const b = fixtureBridge();
+		const src = new BridgeSource(b);
+		const id = bridge.timeline(GENERAL)[0].id;
+		assert.ok(rows(src).some((m) => m._id === id), 'known first');
+		const seen: string[] = [];
+		src.onChange((c) => c.kind === 'message' && seen.push(`${c.op}:${(c.doc as { _id: string })._id}`));
+		b.expire(GENERAL, id);
+		assert.deepEqual(seen, [`removed:${id}`]);
+		assert.ok(!rows(src).some((m) => m._id === id));
+		assert.equal(src.message(id), undefined);
+	});
+
+	it('an `expired` stub for an id the kit never knew emits nothing and stores nothing (a reload)', () => {
+		const b = fixtureBridge();
+		b.putMessage(GENERAL, { id: '$gone:1', roomId: GENERAL, senderId: '', senderName: '', ts: 10, body: '', kind: 'other', expired: true });
+		const src = new BridgeSource(b);
+		const seen: string[] = [];
+		src.onChange((c) => c.kind === 'message' && seen.push(`${c.op}:${(c.doc as { _id: string })._id}`));
+		const before = rows(src).length;
+		assert.ok(!rows(src).some((m) => m._id === '$gone:1'), 'no row');
+		assert.equal(src.message('$gone:1'), undefined);
+		b.emit({ kind: 'timeline', roomId: GENERAL });
+		assert.deepEqual(seen, []);
+		assert.equal(rows(src).length, before);
+		assert.equal(before, 2, 'the two ordinary messages stay');
+	});
+
+	it('a message merely absent from the snapshot (left the window) is kept, as before', () => {
+		const b = fixtureBridge();
+		const src = new BridgeSource(b);
+		const id = b.timeline(GENERAL)[0].id;
+		assert.ok(rows(src).some((m) => m._id === id));
+		const seen: string[] = [];
+		src.onChange((c) => c.kind === 'message' && seen.push(`${c.op}:${(c.doc as { _id: string })._id}`));
+		b.timeline(GENERAL).splice(0, 1);
+		b.emit({ kind: 'timeline', roomId: GENERAL });
+		assert.ok(!seen.some((s) => s.startsWith('removed')), 'no removal by absence');
+		assert.ok(rows(src).some((m) => m._id === id), 'still known');
 	});
 });
 

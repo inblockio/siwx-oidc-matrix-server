@@ -2,8 +2,24 @@ Rocket.Chat view kit (client view "rocketchat") vendored source.
 repo:    inblockio/element-views-track (private), path kits/rocketchat
 commit:  8b1463e025dce6509c9440a5c4e6cad2ec16406f (main, 2026-11-08T06:59:45+01:00, "M14 close Trace");
          last commit touching the path: a38bd7dcb2954de9406ee08db1b30200c074ecfd (2026-11-08T03:08:07+01:00)
-vendored: 2026-11-18, by `git archive <commit> kits/rocketchat`, every tracked file, unmodified (125 files, 832743 bytes)
-manifest: MANIFEST.sha256 (sha256 of each file, LC_ALL=C sorted path order); sha256 of MANIFEST.sha256 = ae1c7c3f548543a0a5a9b5e5abe345410dd7998158d1fa75225a5919611c9864
+vendored: 2026-11-18, by `git archive <commit> kits/rocketchat`, every tracked file, unmodified (125 files, 832743 bytes); the changes listed in the last section came after
+manifest: MANIFEST.sha256 (sha256 of each file, LC_ALL=C sorted path order; it lists the 125 vendored files and, since M4, the 2 files added then: 127 lines, the yarn lock and its NOTE are not in it); sha256 of MANIFEST.sha256 = d8320bb3d54b78d810980666d302b3a9950e2894d8123addbd30599fb1d17f72
 not vendored: the test kit kits/fixture-list (never part of the image)
 Why vendored: the source repo is private, a GitHub Actions build of this repo has no credentials for it.
 Refresh: see docs/element-web-source-build.md, section "Rocket.Chat kit stage".
+
+Changes on top of the provenance commit (room_retention M4, decision D14)
+The files below differ from, or were added to, commit 8b1463e0; every other file is as vendored. MANIFEST.sha256 holds the
+hashes of the changed state (the old hashes of the changed files are those of the commit).
+changed  src/bridge-types.ts          ViewMessage gains the optional `expired` and `retention` fields (kit copy of the host types)
+changed  src/adapter/map.ts           `retentionLine`, spread into the message, type in NO_MESSAGE_EVENT_TYPES, no Report for it
+changed  src/adapter/source.ts        a message with `expired` is removed like a redacted one; a stub for an unknown id is skipped
+changed  src/adapter/fixture-bridge.ts  test helpers `retention()` and `expire()` next to `encryption()`
+changed  src/entry.ts                 registers the retention system-message type on Rocket.Chat's MessageTypes
+added    src/retention-type.ts        the system-message type `room_retention_changed` (text = the host's preformatted notice)
+changed  test/capabilities.test.ts   the expected row list gains the two new CAPABILITIES rows
+changed  test/adapter.test.ts         cases for the retention line, the expired stub and absence-keeps
+added    test/retention-type.test.ts  the type registration
+changed  CAPABILITIES.md              Room Information line (Disappearing messages entry), rows retention-notice and retention-expired
+changed  PROVENANCE                   this section, the manifest line
+changed  MANIFEST.sha256              regenerated for the files above

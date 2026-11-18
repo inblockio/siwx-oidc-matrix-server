@@ -1,17 +1,17 @@
 58aea3d6b4b0f8799c1e00c3b023898516997f6369ee8e13d8d4b4215f70a62b  ./.gitignore
-324f0703559ca5633a991525d470bd7e159b9913f7213fdc59ede0f676fcaae1  ./CAPABILITIES.md
+4120f19e34d3c12af8a82de0d6176bbfe0a351c4358f7f53533d534d0fdd1496  ./CAPABILITIES.md
 e38f49d0a80c8bee6e90dd49e72e47b75e4466ade7a4b864e66e0c48a6f7f9e0  ./NOTICE
 bc0a6690e31d857054af51b45981906d157993e377eeab85d1d919f7735d87e0  ./build.sh
 0ccf345b6a53190cb607cd120ac03c4d71467b31281fd18fa13ee51b9367fc6b  ./serve.mjs
 6525e80040a3eea99facd534060424e074344f6478a32613469259363d92fcad  ./src/accessibility-shortcut.tsx
 c14bd268216c22478ab047bbc49ee6d602b289211c3b31a266ac6e2758452b83  ./src/adapter/bridge.ts
 cafde800772a8f96b38300a7834db6b62de4500219006c102338a5170bb501db  ./src/adapter/ddp-sdk.ts
-751c921f827aa69b698b48f677f2273c1a2d98218ea4c89354b4d0f2a3995a1d  ./src/adapter/fixture-bridge.ts
+e510462d8df54d78e646ece745dfdb174db2ee9a8223adc8f24d0381cb27e829  ./src/adapter/fixture-bridge.ts
 c7cbe99bd85f8b66e24ceb43a5386bf223082de45a5d5690ac1894d847f35e61  ./src/adapter/format.ts
-9650ebda4d91f35a87af6ba7602324935a322bf50e6a7b36a012b363687d09ba  ./src/adapter/map.ts
+48d29e03dbd761234f19b6de359b32f314da50e9ded4f9d384a4f68d4d34f532  ./src/adapter/map.ts
 1cd66932b9bf569f988c234079fdfc4798fa1b30dbda57cd069963e04c73aebe  ./src/adapter/recorder.ts
 9fcf820749f55f8832c4a30cdea5884c579b6711f4f8b60cd6f8933ba6838559  ./src/adapter/sdk.ts
-da3811210990374b3a63b3ec784587d595eecc5010a704bbe6e494d065da527f  ./src/adapter/source.ts
+e894f73b9d655429283b993e5c544c72c848791a9fe4fce542b482504c1ffa4d  ./src/adapter/source.ts
 1209e26a21fc7b5251cecbbb6bb1f1fdbd9e723e9b9ea16fd7d9f92a1f5999d3  ./src/adapter/wiring.ts
 a353b8e3ad4b8b866bd52fbfa8793818cebb96289b3e314baa544b4d10c1d2f5  ./src/admin-menu.ts
 61feb0448780aaf6a5bf1995912b97fea56929ff77e03fc248f00da27b57f81d  ./src/attachment-download.tsx
@@ -20,7 +20,7 @@ a353b8e3ad4b8b866bd52fbfa8793818cebb96289b3e314baa544b4d10c1d2f5  ./src/admin-me
 c41d33d104f31b51f3d48824bd084eb1f97e09b98aae22638d4ec686c98dec51  ./src/audio-recorder.ts
 88a4b2b932e908917acf382f0abe8aa4804960623c2bfd46b3df7e9a4b82e6f4  ./src/avatar-url-provider.tsx
 5cd88b3ae307bb3c2eabd8208c6d48f05b2c839a3184355029f948e1ecf93582  ./src/bootstrap.ts
-f546c890e841759db5885c1ba8a2ef2affca2e7e09c51908c95538cba066a515  ./src/bridge-types.ts
+d2d8ff5898abeacf0615830f54b3bbe08c97f9bd02a9b06cf8f1b86273d55087  ./src/bridge-types.ts
 864bc2aca1194740494af567568688d177307efbf4d5ca2c5d6c123c1a123a6d  ./src/call-off.ts
 073fe4301fe7a07224f5f93e13012e697f9582f94c5e565479d84752299d4dff  ./src/call-window-open.ts
 54feb919d99e0d311fa675a976146babe78e0cc786856e7672669e9e4f10db53  ./src/call-window.tsx
@@ -41,7 +41,7 @@ e8dbe7188efaeea76922a550ccdfe8d375d5c346ff472ccbf32b958baea7d2b0  ./src/ee-stub.
 93d97e84a0b1adba82708ba39db252e57ab5ce9a489ed06ee96d8323df748079  ./src/element-reaction-picker.ts
 8d7aed3febf0459bc3f6c8094a49684b0dbba341c2e5faaea7fc6563a8ddd547  ./src/emoji-picker-provider.tsx
 8e609bb71c20b858c77f0e9f90bb1319db8477b13f9f965f1a1e18524bf50881  ./src/empty.ts
-c4905dc5a0d42a0e2057a5bfbf7e03bd683c43945bd2b37754c1d727d059a82b  ./src/entry.ts
+b2e338dd2b393be48feac6173c33d576d47345b3b017fbaf9c973e97e11d740c  ./src/entry.ts
 44cdb9bffc1d222c430a8bdb98235d67d8f94cfc38a6cd3e75d5df49eb107334  ./src/file-upload-action.ts
 839abf16d09ea4b499aa2f42ecc1a83d84dd49078fe29e42d448348236b466a6  ./src/forward-message-action.tsx
 5181134b5950f49c7d4f3b4c5f9e0c74ecd0f79d0f0ce7b89ae5cc1b34e0390f  ./src/go-to-thread.ts
@@ -76,6 +76,7 @@ e0032cbc63fb46fa25885df9001b69eabbd6866f8b15961aa40a78db5a51d9b2  ./src/reply-di
 53acfddd9c90168a61e2eab5aa1fe1642d4ba3d8f56a47a28deac69c98770b76  ./src/reply-directly-flow.ts
 1b73b52e034e7d4d6f9a9c292cb94173832c25b4ad0e0fe0552334a38b2ea2f7  ./src/reply-in-thread-action.tsx
 fe897ed218d85d1b5b67de7cdd2a1f3aae3bf94b4b58b3bef2b56a20a2d3c79a  ./src/report-message-action.tsx
+60783724011949ad4d1ec21c5f8f081999999c99c08e7c6536fcf6d445cbf11c  ./src/retention-type.ts
 8eb96a1e6161e24bbc8b58183ed6f1d91c2733df9c93880863c60676e66f9ffd  ./src/room-menu-actions.ts
 8399854454c4d8585f91809ccc80f7b17ba68b1114f9af4c6831e35c53c68edb  ./src/room-opener.ts
 549f445f25bdf58d0ffc82af63de5ca70edc7d9108c0f6d0941c01cfe8d67dc2  ./src/runtime-config.ts
@@ -98,9 +99,9 @@ b27df251cdcc275f6a6e0d7307fc0ba02d0529346cea197e1d5888ff3c42676d  ./src/video-re
 5d41f96f1a876da31e3172e405ba67ffa41abe74baa81374da8d2df8476dad57  ./src/view-source-action.tsx
 1faabc59921f5a4daf0b9ee8fe947f707411c3a6a2210185d7dfcb285d6a4800  ./src/view-source-contexts.ts
 5912923d5821745ee658f58a8e6558d6520256e17049dfc587e2a840afa7c8a7  ./src/x2-filters.ts
-59459a953611bc5aee8f3ec0cd6678f54622f6ee43a223932bf2e7fb6381305d  ./test/adapter.test.ts
+1f2ff6b53ececa8cfed20f49f4603e1f2d5132fb56473f328c920246703f0bc7  ./test/adapter.test.ts
 3b5da620cced9b81d701b83d1a0988ecb24eb7708908ca7b433d119285bb6074  ./test/call-window.test.ts
-479e0a3db8f75076292e08cdf8b78ce43b87a8a0c10abfc73cff6568ab3fb8da  ./test/capabilities.test.ts
+66e837495f9e248fe688c5406687d4fc4070dd8c55f07b291db1bde21fd30e2b  ./test/capabilities.test.ts
 445cf49b3ae27de79cc20df80c7a1360011184b2b85548d626e332ff0e1f82da  ./test/carries-m3.test.ts
 c123be910d167668394c183362cd49de62de729eb7d85f43d3d0ccb572b938e3  ./test/directory-flow.test.ts
 35cf00c6de54bacf36b6af0ed90279ee6ad019491970b528b963bb97b0702791  ./test/format.test.ts
@@ -111,6 +112,7 @@ c123be910d167668394c183362cd49de62de729eb7d85f43d3d0ccb572b938e3  ./test/directo
 50e5b6e456511e61acdbfe406fd308f4f6fcbbdfd6ece485fa8f77a18ac02f78  ./test/recent-emoji-queue.test.ts
 fda47fd934ccece1ed1d33684710186931333243b126cf76d40f7d0022a6a9b2  ./test/recorders.test.ts
 38e380a2d346c9aa3a31da408c608b79eedc49dc7cd1d881da128fdfe13b77b3  ./test/reply-directly-flow.test.ts
+6ba04900246801890f4b23666d2d78261714b25a17d32ee92bb24a1b8ac860a0  ./test/retention-type.test.ts
 bcecb3882ee59f4d9297ad6d9761c79be1349f970255a99ded78fa97d0b79485  ./test/server-search.test.ts
 dac582747ef95d0191946f1e1580761786b1c260010d317f770cb8c1efbf6c30  ./test/thread-route.test.ts
 dc35e69088ba02f947363268a19a45d4e6bd2fa8a875ac9251ebe6ffbb409966  ./test/u2-reveal-video.test.ts

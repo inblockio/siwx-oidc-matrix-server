@@ -12,7 +12,10 @@ import { startOverlay } from './overlay.ts';
 import { startPanelEvents } from './panel-events.ts';
 import { watchThreadRoute } from './thread-route.ts';
 import { router } from 'rc/client/providers/RouterProvider';
+import { MessageTypes } from '@rocket.chat/message-types';
+import { registerRetentionType } from './retention-type.ts';
 
+registerRetentionType(MessageTypes);
 startOverlay();
 startCallOff();
 installDownloadLinks(document);

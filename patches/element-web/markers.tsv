@@ -15,7 +15,7 @@
 #                                    (i18n/en_EN.json is served as i18n/en_EN.<hash>.json)
 #   widgets/element-call/assets/index-*.js
 #                                    the entry chunk of the Element Call embedded build the
-#                                    image serves (entries 15 and 16); the `*` is the chunk hash, read
+#                                    image serves (entries 16 and 17); the `*` is the chunk hash, read
 #                                    from widgets/element-call/index.html
 #
 # Used by dockerfiles/Dockerfile.element (fails the build when a row is missing from the
@@ -51,5 +51,6 @@
 14	i18n/en_EN.json	another user interface for your chats
 14	bundles/*/init.js	feature_client_views
 14	bundles/*/element-web-app.js	mx_ClientViewFacelift_
-15	widgets/element-call/assets/index-*.js	[aqua-meet audio output]
-16	widgets/element-call/assets/index-*.js	[KeyRecovery]
+15	i18n/en_EN.json	face_notice_set
+16	widgets/element-call/assets/index-*.js	[aqua-meet audio output]
+17	widgets/element-call/assets/index-*.js	[KeyRecovery]
