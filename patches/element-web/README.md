@@ -2193,6 +2193,13 @@ package's `dist/` after the patches. Entry 14 is gated by `client_views` and `fe
   iframe and feeds it Element's own view models (rooms, timeline, composer, threads, search, pins, files, call hand-off). The
   user switches from the user menu ("Switch to Rocket.Chat", back through "Back to Element" or the URL parameter
   `?client_view=stock`); the choice is stored per device (setting `clientView`, default `stock`).
+- **Differences from the pinned commit:** one line of test code, nothing in the 41 source files. In
+  `apps/web/src/client-views/ViewModelBridge.test.ts`, the test "the hand-over after a power-levels event reads the new power
+  level" now moves `Date.now` forward 5 ms (`vi.spyOn(Date, "now")`, restored right after) before the power-levels change.
+  Why: matrix-js-sdk emits `RoomState.members` for a power-levels change only when `member.getLastModifiedTime()` (whole
+  milliseconds) changed; the test created the member and changed its level inside one millisecond, so on a fast machine no
+  event fired and the test failed (5 of 10 runs locally, all 3 attempts in the PR's CI). The host branch is read-only for us, so
+  the fix lives only in this patch.
 - **Left out, and why:** 3 files of the 78 in the pinned commit's diff. The 2 Playwright files
   (`apps/web/playwright/e2e/client-views/switch.spec.ts` and its `fixture-kit/index.html`): the `fixture-list` test kit never ships
   in an image, and Playwright specs are outside the patch-test selection. And
@@ -2234,12 +2241,14 @@ package's `dist/` after the patches. Entry 14 is gated by `client_views` and `fe
   `client_views` is operator-trusted configuration, like the homeserver URL: whoever can write `config.json` can frame any page
   with the user's origin privileges. Three characterisation tests in the parity file record this; no restriction is invented here.
   Hardening it (reject non-`/kits/` urls in `registry.ts`) would fork this patch from the pinned commit and is a separate decision.
+- **Known limit:** the same same-millisecond race can leave the face's pin offer (`canPin`) stale in production until the next
+  room-state emission (a create, a join and a power-levels change within one millisecond in one sync batch). Rare; not fixed here.
 - **Not in this entry:** the kit itself. It is built in the image's `rc-kit` stage and copied to `/app/kits/rocketchat/`, in a
   separate change; the shipped `config.json` writes exactly one descriptor (rocketchat). This entry is inert until a deployment's
   config sets both gates.
-- **Order:** after entry 13, last of the Element Web patches. Proved 2026-11-18: entries 1-14 apply in the Dockerfile's order with
+- **Order:** after entry 13, last of the Element Web patches. Proved 2026-11-18 (re-proved after the test-line difference, development head 9e0746b): entries 1-14 apply in the Dockerfile's order with
   `git apply --verbose` (no `--3way`) on a fresh export of `v1.12.33`, and the resulting tree hash equals the development branch's
-  (`37df8c25ccb6885cb4fcb0ecf10befb88d26f07d`). The face and entries 1-13 share 4 files (`MatrixChat.tsx`, `MatrixChat.test.tsx`,
+  (`5fe8561dc35c7d87699efa162466d5df8db79476`). The face and entries 1-13 share 4 files (`MatrixChat.tsx`, `MatrixChat.test.tsx`,
   `apps/web/src/i18n/strings/en_EN.json`, `settings/Settings.tsx`), merged by hunk separation; the reverse order (face first)
   applies clean too and gives the same tree. A later rebase of entry 13 or 14 must re-run the check.
 - **Upstream status:** FEATURE, local. Not proposed upstream; Element has no client-view mechanism.
@@ -2250,7 +2259,7 @@ package's `dist/` after the patches. Entry 14 is gated by `client_views` and `fe
   the Element Web tag in `ELEMENT_WEB_TAG`, else rebase it first), build the tree as entries 1-13 on that tag plus the branch
   diff, and re-cut the diff from the new pinned commit with the same exclude list (the 2 Playwright files and
   `UserMenuViews.test.tsx`, plus any new file outside `apps/web` or under `playwright/`), keeping our parity test. Then update the
-  commit, file counts and test counts in this entry, re-run the tree-hash proof, `scripts/check-patch-registry.sh`,
+  commit, file counts and test counts in this entry, drop the test-line difference above once the host branch carries the fix, re-run the tree-hash proof, `scripts/check-patch-registry.sh`,
   `scripts/check-patch-hunks.py` and the patch tests.
 - **Coverage:** 35 vitest files in the patch, 1047 tests (26 new files in `apps/web/src/client-views/` with 754 tests, our parity
   file with 18, and 8 files outside that folder with 275: `MatrixChat.test.tsx`, `PipContainer.test.tsx`, `SettingsStore.test.ts`,

@@ -11654,10 +11654,10 @@ index 0000000..38d5517
 +});
 diff --git a/apps/web/src/client-views/ViewModelBridge.test.ts b/apps/web/src/client-views/ViewModelBridge.test.ts
 new file mode 100644
-index 0000000..cc74612
+index 0000000..4185b65
 --- /dev/null
 +++ b/apps/web/src/client-views/ViewModelBridge.test.ts
-@@ -0,0 +1,3949 @@
+@@ -0,0 +1,3954 @@
 +/*
 + * Copyright 2026 inblock.io
 + *
@@ -12679,9 +12679,14 @@ index 0000000..cc74612
 +                bridge.onChange((e) => {
 +                    if (e.kind === "timeline") offered.push(state.maySendStateEvent(EventType.RoomPinnedEvents, me));
 +                });
++                // the SDK emits Members only if member.getLastModifiedTime() (whole ms) changed, so move the clock on
++                // differs from element-views/m1-host b06070189b: carried test fix, see patches/element-web/README.md entry 14
++                const realNow = Date.now();
++                const now = vi.spyOn(Date, "now").mockReturnValue(realNow + 5);
 +                state.setStateEvents([
 +                    ev(EventType.RoomPowerLevels, "", { users: { [me]: 50 }, events: { "m.room.pinned_events": 50 } }),
 +                ]);
++                now.mockRestore();
 +                expect(state.maySendStateEvent(EventType.RoomPinnedEvents, me)).toBe(true);
 +                expect(offered.length).toBeGreaterThan(0);
 +                expect(offered[offered.length - 1]).toBe(true);
