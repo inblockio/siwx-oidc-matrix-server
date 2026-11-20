@@ -1150,10 +1150,10 @@ index 0000000..e4ed66d
 +}
 diff --git a/apps/web/src/client-views/ClientViewGate.test.tsx b/apps/web/src/client-views/ClientViewGate.test.tsx
 new file mode 100644
-index 0000000..c47b875
+index 0000000..a70eb54
 --- /dev/null
 +++ b/apps/web/src/client-views/ClientViewGate.test.tsx
-@@ -0,0 +1,451 @@
+@@ -0,0 +1,460 @@
 +/*
 + * Copyright 2026 inblock.io
 + *
@@ -1290,7 +1290,16 @@ index 0000000..c47b875
 +                </ClientViewGate>
 +            </SDKContext.Provider>,
 +        );
-+    const loadKit = () => fireEvent.load(screen.getByTitle("Fixture"));
++    // happy-dom 21 gives an iframe a `contentWindow` only when it loads its page (`enableIframePageLoading`), and nothing
++    // is served under test; happy-dom 20 gave it a blank window. Stand one in, as the browser's reload keeps the same one.
++    const kitFrame = (): HTMLIFrameElement => {
++        const frame = screen.getByTitle("Fixture") as HTMLIFrameElement;
++        if (!frame.contentWindow) {
++            Object.defineProperty(frame, "contentWindow", { configurable: true, value: new EventTarget() });
++        }
++        return frame;
++    };
++    const loadKit = () => fireEvent.load(kitFrame());
 +
 +    beforeEach(() => {
 +        h.pickerMounts.length = 0;
@@ -1401,7 +1410,7 @@ index 0000000..c47b875
 +        expect(screen.queryByText("Fixture did not start.")).toBeNull();
 +
 +        // A reload inside the frame: the old document unloads, the new one never reads the bridge.
-+        const frame = screen.getByTitle("Fixture") as HTMLIFrameElement;
++        const frame = kitFrame();
 +        act(() => void frame.contentWindow!.dispatchEvent(new Event("pagehide")));
 +        loadKit();
 +        act(() => void vi.advanceTimersByTime(BOOT_TIMEOUT_MS));
@@ -1414,7 +1423,7 @@ index 0000000..c47b875
 +        loadKit();
 +        act(() => void vi.advanceTimersByTime(BOOT_TIMEOUT_MS - 5000));
 +
-+        const frame = screen.getByTitle("Fixture") as HTMLIFrameElement;
++        const frame = kitFrame();
 +        act(() => void frame.contentWindow!.dispatchEvent(new Event("pagehide")));
 +        act(() => void vi.advanceTimersByTime(5000));
 +        expect(screen.queryByText("Fixture did not start.")).toBeNull();
@@ -1428,7 +1437,7 @@ index 0000000..c47b875
 +        renderGate();
 +        h.used = true;
 +        loadKit();
-+        const frame = screen.getByTitle("Fixture") as HTMLIFrameElement;
++        const frame = kitFrame();
 +        act(() => void frame.contentWindow!.dispatchEvent(new Event("pagehide")));
 +        act(() => void vi.advanceTimersByTime(BOOT_TIMEOUT_MS));
 +        expect(screen.getByText("Fixture did not start.")).toBeTruthy();
@@ -22738,13 +22747,13 @@ index a9dbe53..0454f6d 100644
 +    });
  });
 diff --git a/apps/web/src/components/structures/PipContainer.tsx b/apps/web/src/components/structures/PipContainer.tsx
-index fc3d802..4e5a02b 100644
+index df84669..d12077a 100644
 --- a/apps/web/src/components/structures/PipContainer.tsx
 +++ b/apps/web/src/components/structures/PipContainer.tsx
-@@ -92,6 +92,8 @@ class PipContainerInner extends React.Component<IProps, IState> {
-         ActiveWidgetStore.instance.on(ActiveWidgetStoreEvent.Persistence, this.onWidgetPersistence);
+@@ -94,6 +94,8 @@ class PipContainerInner extends React.Component<IProps, IState> {
          ActiveWidgetStore.instance.on(ActiveWidgetStoreEvent.Dock, this.onWidgetDockChanges);
          ActiveWidgetStore.instance.on(ActiveWidgetStoreEvent.Undock, this.onWidgetDockChanges);
+         this.context.documentPipStore.on(DocumentPipStoreEvent.Update, this.onDocumentPipChanges);
 +        // A widget can already be persistent when this mounts (a remount while a call runs), with no event to come.
 +        this.updateShowWidgetInPip();
      }
@@ -23168,13 +23177,13 @@ index b34dd65..9c923ec 100644
              this.handler.watchers?.notifyUpdate(settingName, roomId, this.level, currentValue);
          } finally {
 diff --git a/apps/web/src/stores/LatestRtcNotificationEventStore.test.ts b/apps/web/src/stores/LatestRtcNotificationEventStore.test.ts
-index bf85206..57de8e6 100644
+index 2f0d22f..40ed9e9 100644
 --- a/apps/web/src/stores/LatestRtcNotificationEventStore.test.ts
 +++ b/apps/web/src/stores/LatestRtcNotificationEventStore.test.ts
 @@ -8,7 +8,14 @@
  // @vitest-environment happy-dom
  
- import { describe, it, expect, vi } from "vitest";
+ import { describe, it, expect, vi, onTestFinished } from "vitest";
 -import { type EventTimeline, EventType, RoomEvent } from "matrix-js-sdk/src/matrix";
 +import {
 +    type EventTimeline,
@@ -23196,7 +23205,7 @@ index bf85206..57de8e6 100644
  describe("LatestRtcNotificationEventStore", () => {
      it("should populate map from timeline on start", async () => {
          const cli = stubClient();
-@@ -162,4 +171,177 @@ describe("LatestRtcNotificationEventStore", () => {
+@@ -164,4 +173,177 @@ describe("LatestRtcNotificationEventStore", () => {
              expect(store.getLatestEventId("!my-room1:m.org")).toStrictEqual("event-2");
          });
      });
@@ -23850,7 +23859,7 @@ index 5390792..9a7ca0e 100644
          this.setOpen(false);
          clearAllUserStatus(this.client).catch((err) => {
 diff --git a/apps/web/src/viewmodels/room-list/RoomListViewModel.test.ts b/apps/web/src/viewmodels/room-list/RoomListViewModel.test.ts
-index a51bc49..f40c36c 100644
+index 9230e9c..ad6aec4 100644
 --- a/apps/web/src/viewmodels/room-list/RoomListViewModel.test.ts
 +++ b/apps/web/src/viewmodels/room-list/RoomListViewModel.test.ts
 @@ -21,6 +21,7 @@ import {
@@ -23858,10 +23867,10 @@ index a51bc49..f40c36c 100644
  import RoomListStoreV3, { RoomListStoreV3Event } from "../../stores/room-list-v3/RoomListStoreV3";
  import { FilterEnum } from "../../stores/room-list-v3/skip-list/filters";
 +import { SortingAlgorithm } from "../../stores/room-list-v3/skip-list/sorters";
+ import { type FilterId } from "@element-hq/web-shared-components";
  import dispatcher from "../../dispatcher/dispatcher";
  import { Action } from "../../dispatcher/actions";
- import { SDKContextClass } from "../../contexts/SDKContextClass";
-@@ -310,6 +311,19 @@ describe("RoomListViewModel", () => {
+@@ -320,6 +321,19 @@ describe("RoomListViewModel", () => {
              expect(viewModel.getSnapshot().roomListState.activeRoomIndex).toBe(1);
          });
  
@@ -23881,7 +23890,7 @@ index a51bc49..f40c36c 100644
          it("should return undefined active room index when no room is selected", async () => {
              viewModel = new RoomListViewModel({
                  client: matrixClient,
-@@ -374,6 +388,29 @@ describe("RoomListViewModel", () => {
+@@ -384,6 +398,29 @@ describe("RoomListViewModel", () => {
                  expect(viewModel.getSnapshot().roomListState.activeRoomIndex).toBe(1);
              });
  
@@ -23911,7 +23920,7 @@ index a51bc49..f40c36c 100644
              it("counts the preview item when scrolling to a room and to unread activity", async () => {
                  stubClient();
                  const leftRoom = mkStubRoom(previewRoomId, "Left room", matrixClient);
-@@ -506,6 +543,52 @@ describe("RoomListViewModel", () => {
+@@ -516,6 +553,52 @@ describe("RoomListViewModel", () => {
              expect(viewModel.getSnapshot().sections[0].roomIds[1]).toBe("!room2:server");
          });
  
@@ -23965,7 +23974,7 @@ index a51bc49..f40c36c 100644
              viewModel = new RoomListViewModel({
                  client: matrixClient,
 diff --git a/apps/web/src/viewmodels/room-list/RoomListViewModel.ts b/apps/web/src/viewmodels/room-list/RoomListViewModel.ts
-index 0240638..24b508d 100644
+index fa88233..df11e84 100644
 --- a/apps/web/src/viewmodels/room-list/RoomListViewModel.ts
 +++ b/apps/web/src/viewmodels/room-list/RoomListViewModel.ts
 @@ -29,6 +29,7 @@ import RoomListStoreV3, {
@@ -23976,7 +23985,7 @@ index 0240638..24b508d 100644
  import {
      RoomNotificationStateStore,
      UPDATE_STATUS_INDICATOR,
-@@ -208,6 +209,12 @@ export class RoomListViewModel
+@@ -233,6 +234,12 @@ export class RoomListViewModel
       */
      private previewRoom?: Room;
  
@@ -23989,15 +23998,15 @@ index 0240638..24b508d 100644
      public constructor(props: RoomListViewModelProps) {
          const activeSpace = props.spaceStore.activeSpaceRoom;
  
-@@ -241,6 +248,7 @@ export class RoomListViewModel
- 
+@@ -271,6 +278,7 @@ export class RoomListViewModel
+         this.activeFilter = activeFilter;
          this.roomsResult = roomsResult;
          this.sections = sections;
 +        this.lastSortAlgorithm = RoomListStoreV3.instance.activeSortAlgorithm;
  
          // Build initial roomsMap from roomsResult
          this.updateRoomsMap(roomsResult);
-@@ -305,8 +313,12 @@ export class RoomListViewModel
+@@ -335,8 +343,12 @@ export class RoomListViewModel
  
          this.disposables.track(() => clearTimeout(this.toastRef));
  
@@ -24012,7 +24021,7 @@ index 0240638..24b508d 100644
      }
  
      private readonly onRoomViewStoreUpdate = (): void => {
-@@ -838,6 +850,15 @@ export class RoomListViewModel
+@@ -870,6 +882,15 @@ export class RoomListViewModel
          this.roomsResult = RoomListStoreV3.instance.getSortedRoomsInActiveSpace(filterKeys);
          const newSpaceId = this.roomsResult.spaceId;
  
@@ -24028,7 +24037,7 @@ index 0240638..24b508d 100644
          // Detect space change
          if (oldSpaceId !== newSpaceId) {
              // Clear view models when the space changes
-@@ -864,7 +885,7 @@ export class RoomListViewModel
+@@ -896,7 +917,7 @@ export class RoomListViewModel
          this.updateRoomsMap(this.roomsResult);
  
          // Normal room list update (not a space change)

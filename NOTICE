@@ -18,7 +18,7 @@ adds is licensed as stated below. The registries patches/synapse/README.md,
 patches/element-web/README.md and patches/lk-jwt/README.md are this
 project's own documentation
 and fall under the Apache License. The upstream licenses below were read
-from Synapse v1.163.0, Element Web v1.12.29, Element Call v0.26.1 and
+from Synapse v1.163.0, Element Web v1.12.29, Element Call v0.28.2 and
 lk-jwt-service v0.9.0.
 
 patches/synapse/msc4133-profile-field-write-policy.patch
@@ -140,7 +140,7 @@ patches/element-call/0180-bt-audio-output.patch
 patches/element-call/0190-media-key-recovery.patch
     Modifies Element Call as well, in the same Element Call build stage and
     after 0180. The Element Call files it changes (src/room/useLoadGroupCall.ts,
-    src/state/CallViewModel/remoteMembers/Connection.ts, src/widget.ts and
+    sdk/src/media-backend/livekit/Connection.ts, src/widget.ts and
     the tests Connection.test.ts and widget.test.ts) carry
     "SPDX-License-Identifier: AGPL-3.0-only OR
     LicenseRef-Element-Commercial". The second option names Element's

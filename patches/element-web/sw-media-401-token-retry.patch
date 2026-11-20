@@ -1,31 +1,31 @@
 diff --git a/apps/web/src/serviceworker/index.ts b/apps/web/src/serviceworker/index.ts
-index a4853758ba..73ca654e18 100644
+index 3043743..d4bdeeb 100644
 --- a/apps/web/src/serviceworker/index.ts
 +++ b/apps/web/src/serviceworker/index.ts
-@@ -59,6 +59,7 @@ global.addEventListener("fetch", (event: FetchEvent) => {
+@@ -88,6 +88,7 @@ self.addEventListener("fetch", (event) => {
      event.respondWith(
          (async (): Promise<Response> => {
              let auth: { accessToken?: string; homeserver: string } | undefined;
-+            let client: unknown;
++            let client: Client | undefined;
              try {
                  // Figure out which homeserver we're communicating with
                  const csApi = url.origin;
-@@ -68,7 +69,7 @@ global.addEventListener("fetch", (event: FetchEvent) => {
+@@ -96,7 +97,7 @@ self.addEventListener("fetch", (event) => {
+                 await new Promise<void>((resolve) => setTimeout(() => resolve(), Math.random() * 10));
  
                  // Locate the access token and homeserver url
-                 // @ts-expect-error - service worker types are not available. See 'fetch' event handler.
--                const client = await global.clients.get(event.clientId);
-+                client = await global.clients.get(event.clientId);
-                 auth = await getAuthData(client);
- 
-                 // Is this request actually going to the homeserver?
-@@ -93,7 +94,19 @@ global.addEventListener("fetch", (event: FetchEvent) => {
+-                const client = await self.clients.get(event.clientId);
++                client = await self.clients.get(event.clientId);
+                 if (!client) {
+                     throw new Error("No client found for request");
+                 }
+@@ -124,7 +125,19 @@ self.addEventListener("fetch", (event) => {
              // Add authentication and send the request. We add authentication even if MSC3916 endpoints aren't
              // being used to ensure patches like this work:
              // https://github.com/matrix-org/synapse/commit/2390b66bf0ec3ff5ffb0c7333f3c9b239eeb92bb
 -            return fetch(url, fetchConfigForToken(auth?.accessToken));
 +            const response = await fetch(url, fetchConfigForToken(auth?.accessToken));
-+            if (response.status === 401 && auth?.accessToken) {
++            if (response.status === 401 && auth?.accessToken && client) {
 +                // The stored access token was rejected: typically it expired and the app has not refreshed it yet
 +                // (the app refreshes on its own next 401). Give the app a few seconds to store a new one and retry
 +                // once with it, instead of leaving this image or file broken until it is rendered again.
@@ -40,7 +40,7 @@ index a4853758ba..73ca654e18 100644
          })(),
      );
  });
-@@ -174,6 +187,71 @@ async function checkServerSupport(clientApiUrl: string, accessToken?: string): P
+@@ -205,6 +218,71 @@ async function checkServerSupport(clientApiUrl: string, accessToken?: string): P
      );
  }
  
@@ -56,7 +56,7 @@ index a4853758ba..73ca654e18 100644
 +
 +type AuthData = { accessToken: string; homeserver: string };
 +
-+function waitForRefreshedAuth(client: unknown, rejectedToken: string): Promise<AuthData | undefined> {
++function waitForRefreshedAuth(client: Client, rejectedToken: string): Promise<AuthData | undefined> {
 +    if (!refreshWaiters[rejectedToken]) {
 +        refreshWaiters[rejectedToken] = pollForRefreshedAuth(
 +            client,
@@ -73,7 +73,7 @@ index a4853758ba..73ca654e18 100644
 +// read is capped by the time left, so a tab that stops answering cannot stretch the wait. Returns undefined when no
 +// new token appears (for example the session really is gone): the caller then keeps the 401.
 +async function pollForRefreshedAuth(
-+    client: unknown,
++    client: Client,
 +    rejectedToken: string,
 +    deadline: number,
 +): Promise<AuthData | undefined> {
@@ -109,22 +109,9 @@ index a4853758ba..73ca654e18 100644
 +    }
 +}
 +
- // Ideally we'd use the `Client` interface for `client`, but since it's not available (see 'fetch' listener), we use
- // unknown for now and force-cast it to something close enough later.
- async function getAuthData(client: unknown): Promise<{ accessToken: string; homeserver: string }> {
-@@ -237,7 +315,11 @@ async function askClientForUserIdParams(
-         // than just reading IndexedDB ourselves.
- 
-         // Avoid stalling the tab in case something goes wrong.
--        const timeoutId = setTimeout(() => reject(new Error("timeout in postMessage")), 1000);
-+        // On timeout, also drop the listener: the retry above can call this repeatedly while the tab is busy.
-+        const timeoutId = setTimeout(() => {
-+            global.removeEventListener("message", listener);
-+            reject(new Error("timeout in postMessage"));
-+        }, 1000);
- 
-         // We don't need particularly good randomness here - we just use this to generate a request ID, so we know
-         // which postMessage reply is for our active request.
+ async function getAuthData(client: Client): Promise<{ accessToken: string; homeserver: string }> {
+     // Access tokens are encrypted at rest, so while we can grab the "access token", we'll need to do work to get the
+     // real thing.
 diff --git a/apps/web/src/serviceworker/mediaTokenRetry.test.ts b/apps/web/src/serviceworker/mediaTokenRetry.test.ts
 new file mode 100644
 index 0000000000..7edfa79ee7

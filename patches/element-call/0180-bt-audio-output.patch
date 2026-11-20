@@ -1,41 +1,130 @@
-diff --git a/src/state/CallViewModel/remoteMembers/ConnectionFactory.ts b/src/state/CallViewModel/remoteMembers/ConnectionFactory.ts
-index 30ff37f..00414ef 100644
---- a/src/state/CallViewModel/remoteMembers/ConnectionFactory.ts
-+++ b/src/state/CallViewModel/remoteMembers/ConnectionFactory.ts
-@@ -28,6 +28,7 @@ import type { MediaDevices } from "../../MediaDevices.ts";
- import type { Behavior } from "../../Behavior.ts";
- import type { ProcessorState } from "../../../livekit/TrackProcessorContext.tsx";
- import { getLiveKitOptions } from "../../../livekit/options.ts";
-+import { guardAudioOutput } from "../../audioOutputGuard.ts";
+diff --git a/sdk/src/media-backend/livekit/ConnectionFactory.test.ts b/sdk/src/media-backend/livekit/ConnectionFactory.test.ts
+index 182248a..af5ced1 100644
+--- a/sdk/src/media-backend/livekit/ConnectionFactory.test.ts
++++ b/sdk/src/media-backend/livekit/ConnectionFactory.test.ts
+@@ -7,11 +7,13 @@ Please see LICENSE in the repository root for full details.
+ 
  import {
-   advancedCamera,
-   cameraResolution,
-@@ -87,7 +88,11 @@ export class ECConnectionFactory implements ConnectionFactory {
-         controlledAudioDevices: this.controlledAudioDevices,
-       });
-       logger.info("[ECConnectionFactory] livekit room options: ", roomOptions);
--      return new LivekitRoom(roomOptions);
-+      const room = new LivekitRoom(roomOptions);
-+      // aqua-meet: keep the call audible while a Bluetooth headset changes mode (state/audioOutputGuard.ts)
-+      if (!this.controlledAudioDevices)
-+        guardAudioOutput(room, this.devices.audioOutput.selected$, logger);
-+      return room;
-     };
-     this.livekitRoomFactory = livekitRoomFactory ?? defaultFactory;
-   }
-diff --git a/src/state/CallViewModel/remoteMembers/ECConnectionFactory.test.ts b/src/state/CallViewModel/remoteMembers/ECConnectionFactory.test.ts
-index 411ae20..4b43e61 100644
---- a/src/state/CallViewModel/remoteMembers/ECConnectionFactory.test.ts
-+++ b/src/state/CallViewModel/remoteMembers/ECConnectionFactory.test.ts
-@@ -45,6 +45,8 @@ vi.mock("livekit-client", async (importOriginal) => {
-         emit: emitter.emit.bind(emitter),
-         disconnect: vi.fn(),
-         remoteParticipants: new Map(),
-+        // aqua-meet: the audio output guard listens to the local participant
-+        localParticipant: new EventEmitter(),
-       } as unknown as LivekitRoom;
-     }),
-   };
+   ConnectionState as LivekitConnectionState,
++  RoomEvent,
+   type RoomOptions,
+ } from "livekit-client";
+ import { logger } from "matrix-js-sdk/lib/logger";
+ import { type UnstableLivekitTransport } from "matrix-js-sdk/lib/matrixrtc";
+ import { describe, expect, it, vi } from "vitest";
++import { BehaviorSubject } from "rxjs";
+ 
+ import { type MediaQuality } from "../../config";
+ import { type PublishRequest } from "../../media-api";
+@@ -69,6 +71,52 @@ function create(
+ }
+ 
+ describe("LivekitConnectionFactory", () => {
++  // aqua-meet: the audio output guard (src/state/audioOutputGuard.ts) is on every room the factory builds, and it
++  // follows audioOutputDeviceId$ once the room has connected. The room and the guard are the real ones.
++  it("attaches the audio output guard to the room, following the output the host chose", () => {
++    const audioOutputDeviceId$ = new BehaviorSubject<string | undefined>(
++      "speaker-1",
++    );
++    const connection = new LivekitConnectionFactory(
++      client(),
++      "!room:example.org",
++      "m.call#ROOM",
++      [],
++      audioOutputDeviceId$,
++      undefined,
++      undefined,
++    ).createConnection(
++      testScope(),
++      "subscriber",
++      exampleTransport,
++      "example.org",
++      ownMemberMock,
++      logger,
++    ) as ResolvedConnection;
++    const room = connection.livekitRoom;
++    const switchActiveDevice = vi
++      .spyOn(room, "switchActiveDevice")
++      .mockResolvedValue(true);
++
++    // The guard follows the choice only while the room is connected
++    room.emit(RoomEvent.Connected);
++    expect(switchActiveDevice).toHaveBeenLastCalledWith(
++      "audiooutput",
++      "speaker-1",
++    );
++
++    audioOutputDeviceId$.next("speaker-2");
++    expect(switchActiveDevice).toHaveBeenLastCalledWith(
++      "audiooutput",
++      "speaker-2",
++    );
++
++    room.emit(RoomEvent.Disconnected);
++    switchActiveDevice.mockClear();
++    audioOutputDeviceId$.next("speaker-3");
++    expect(switchActiveDevice).not.toHaveBeenCalled();
++  });
++
+   it("builds the room on the defaults where nothing is requested", () => {
+     const { options } = create([]);
+ 
+diff --git a/sdk/src/media-backend/livekit/ConnectionFactory.ts b/sdk/src/media-backend/livekit/ConnectionFactory.ts
+index eb82300..dc53015 100644
+--- a/sdk/src/media-backend/livekit/ConnectionFactory.ts
++++ b/sdk/src/media-backend/livekit/ConnectionFactory.ts
+@@ -16,13 +16,16 @@ import E2EEWorker from "livekit-client/e2ee-worker?worker&inline";
+ import { type Logger } from "matrix-js-sdk/lib/logger";
+ import { type UnstableLivekitTransport } from "matrix-js-sdk/lib/matrixrtc";
+ import { type CallMembershipIdentityParts } from "matrix-js-sdk/lib/matrixrtc/EncryptionManager";
+-import { BehaviorSubject, combineLatest, map } from "rxjs";
++import { BehaviorSubject, combineLatest, distinctUntilChanged, map } from "rxjs";
+ 
+ import { type ResolvedTransport } from "../../api";
+ import { type MediaQuality } from "../../config";
+ import { type PublishRequest } from "../../media-api";
+ import { type Behavior } from "../../reactive/Behavior";
+ import { type ObservableScope } from "../../reactive/ObservableScope";
++// aqua-meet: the second place the SDK reaches into Element Call's src/ (see Connection.ts for the first and entry 16
++// of the registry for why): the guard lives in src/state/ next to the headset output rule of MediaDevices.ts.
++import { guardAudioOutput } from "../../../../src/state/audioOutputGuard.ts";
+ import {
+   type ClientGetTokenParts,
+   type ClientOpenIDParts,
+@@ -127,15 +130,30 @@ export class LivekitConnectionFactory implements ConnectionFactory {
+         serverName,
+         client: this.client,
+         scope,
+-        livekitRoomFactory: () =>
+-          new LivekitRoom(
++        livekitRoomFactory: () => {
++          const room = new LivekitRoom(
+             roomOptions(
+               this.publish,
+               this.audioOutputDeviceId$.value,
+               this.keyProvider,
+               this.mediaQuality,
+             ),
+-          ),
++          );
++          // aqua-meet: keep the call audible while a Bluetooth headset changes mode (state/audioOutputGuard.ts).
++          // The guard follows the output Element Call chose: this behavior is audioOutputDeviceId$, which
++          // CallViewModel only feeds when the host does not control the devices.
++          guardAudioOutput(
++            room,
++            scope.behavior(
++              this.audioOutputDeviceId$.pipe(
++                distinctUntilChanged(),
++                map((id) => (id === undefined ? undefined : { id })),
++              ),
++            ),
++            logger,
++          );
++          return room;
++        },
+         ownMembershipIdentity,
+       },
+       logger,
 diff --git a/src/state/MediaDevices.ts b/src/state/MediaDevices.ts
 index 8ab20ac..00db9cf 100644
 --- a/src/state/MediaDevices.ts
@@ -551,10 +640,10 @@ index 0000000..f5023ca
 +});
 diff --git a/src/state/audioOutputGuard.ts b/src/state/audioOutputGuard.ts
 new file mode 100644
-index 0000000..377091e
+index 0000000..a271138
 --- /dev/null
 +++ b/src/state/audioOutputGuard.ts
-@@ -0,0 +1,229 @@
+@@ -0,0 +1,230 @@
 +/*
 +Copyright 2026 Aqua Meet contributors
 +
@@ -620,7 +709,8 @@ index 0000000..377091e
 + */
 +export function guardAudioOutput(
 +  room: Room,
-+  selected$: Behavior<SelectedAudioOutputDevice | undefined>,
++  // only the id is read: the SDK connection factory passes the id it was given, nothing else
++  selected$: Behavior<Pick<SelectedAudioOutputDevice, "id"> | undefined>,
 +  logger: Logger,
 +): void {
 +  const log = logger.getChild("[aqua-meet audio output]");

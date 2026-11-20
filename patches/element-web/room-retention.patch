@@ -868,18 +868,18 @@ index 0000000..0c8577e
 +    });
 +});
 diff --git a/apps/web/src/components/structures/MessagePanel.tsx b/apps/web/src/components/structures/MessagePanel.tsx
-index 179126a..941925c 100644
+index 6bb828e..006e8f8 100644
 --- a/apps/web/src/components/structures/MessagePanel.tsx
 +++ b/apps/web/src/components/structures/MessagePanel.tsx
-@@ -55,6 +55,7 @@ import { _t } from "../../languageHandler";
- import { getLateEventInfo } from "./grouper/LateEventGrouper";
- import { isEligibleForSpecialReceipt } from "../../viewmodels/room/timeline/event-tile/EventTileReceiptState";
+@@ -48,6 +48,7 @@ import { getLateEventInfo } from "./grouper/LateEventGrouper";
+ import { findLastSuccessfulWeSent } from "../../viewmodels/room/timeline/event-tile/EventTileReceiptState";
+ import { getReadReceiptsByShownEvent, getReadReceiptsForEvent, type ShownReadReceipt } from "../../utils/read-receipts";
  import { DateSeparatorWrapper } from "./DateSeparatorWrapper";
 +import { isEventExpired, nextExpiryDelay } from "../../utils/RoomRetention";
  
  const CONTINUATION_MAX_INTERVAL = 5 * 60 * 1000; // 5 minutes
  const continuedTypes = [EventType.Sticker, EventType.RoomMessage];
-@@ -300,10 +301,42 @@ export default class MessagePanel extends React.Component<IProps, IState> {
+@@ -288,10 +289,42 @@ export default class MessagePanel extends React.Component<IProps, IState> {
          );
          this.calculateRoomMembersCount();
          this.props.room?.currentState.on(RoomStateEvent.Update, this.calculateRoomMembersCount);
@@ -922,7 +922,7 @@ index 179126a..941925c 100644
          this.props.room?.currentState.off(RoomStateEvent.Update, this.calculateRoomMembersCount);
          SettingsStore.unwatchSetting(this.showTypingNotificationsWatcherRef);
          this.readReceiptMap = {};
-@@ -311,6 +344,8 @@ export default class MessagePanel extends React.Component<IProps, IState> {
+@@ -299,6 +332,8 @@ export default class MessagePanel extends React.Component<IProps, IState> {
      }
  
      public componentDidUpdate(prevProps: IProps, prevState: IState): void {
@@ -931,7 +931,7 @@ index 179126a..941925c 100644
          if (prevProps.layout !== this.props.layout) {
              this.calculateRoomMembersCount();
          }
-@@ -483,6 +518,9 @@ export default class MessagePanel extends React.Component<IProps, IState> {
+@@ -471,6 +506,9 @@ export default class MessagePanel extends React.Component<IProps, IState> {
              return false; // ignored = no show (only happens if the ignore happens after an event was received)
          }
  

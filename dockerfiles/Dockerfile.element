@@ -16,16 +16,18 @@
 # patches/element-call/0190-media-key-recovery.patch, registry entry 17, both in
 # patches/element-web/README.md).
 #
-# Why: Element Web v1.12.33 does not build Element Call. apps/web/webpack.config.ts
-# copies dist/** of the npm package @element-hq/element-call-embedded (0.26.1,
+# Why: Element Web v1.12.35 does not build Element Call. apps/web/webpack.config.ts
+# copies dist/** of the npm package @element-hq/element-call-embedded (0.28.2,
 # pinned in apps/web/package.json) into webapp/widgets/element-call/, so a patch
 # to Element Web's source cannot reach it. Patch 0180 keeps calls audible with
 # Bluetooth headsets (a Windows hands-free output rule, an audio-output guard,
 # autoplay-block reporting); entry 16 has the evidence. Patch 0190 makes a call
 # recover when a media key is lost (call key to-device sends retried and sent again,
 # a watchdog that re-sends our own membership when a remote stays undecryptable);
-# entry 17 has the evidence. Stage `deps` replaces the installed package's dist/
-# with the dist/ built here.
+# entry 17 has the evidence. Both attach in Element Call's sdk/ layer since 0.28
+# (the LiveKit connection and its factory live there); each reaches back into src/
+# at exactly one import, which entries 16 and 17 record. Stage `deps` replaces the
+# installed package's dist/ with the dist/ built here.
 #
 # What: shallow clone of the pinned tag, the patches applied in order (0180, then
 # 0190, which is generated on top of 0180), then the build
@@ -42,14 +44,14 @@
 # ---------------------------------------------------------------------------
 # The Element Web pin (see the `deps` stage below for the rule). Declared before the
 # first FROM so the final stage can stamp the tag as org.opencontainers.image.base.version.
-ARG ELEMENT_WEB_TAG=v1.12.33
-ARG ELEMENT_WEB_COMMIT=45671bc88ffe82658619bc523458f3ae3a43bff0
+ARG ELEMENT_WEB_TAG=v1.12.35
+ARG ELEMENT_WEB_COMMIT=7001d81efc9ff634e29494d714a986cd514aff74
 
 FROM node:24.20.0-bullseye@sha256:25f3016fcdae6b5d65bd9bcb4064b7e4198ec8d49493fa40d73f9b463d04fb15 AS element-call
 
-ARG ELEMENT_CALL_TAG=v0.26.1
-ARG ELEMENT_CALL_COMMIT=9f7c35cd8f84b12f9395e6aac56fd396a3921482
-ARG ELEMENT_CALL_VERSION=embedded-v0.26.1-aqua.0180.0190
+ARG ELEMENT_CALL_TAG=v0.28.2
+ARG ELEMENT_CALL_COMMIT=b4dd44bd78c1296fb8c28519bfc41cb488d636fd
+ARG ELEMENT_CALL_VERSION=embedded-v0.28.2-aqua.0180.0190
 
 WORKDIR /src
 
@@ -73,12 +75,14 @@ RUN git apply --verbose /tmp/ec-media-key-recovery.patch
 
 # Install exactly what the lockfile pins, as upstream's CI does. VITE_APP_VERSION
 # names the build in Element Call's own version string. The build script sets its
-# own NODE_OPTIONS heap limit; the one given here is upstream CI's. The test -s
-# lines make an empty or missing dist/ fail here, not in the copy below.
+# own NODE_OPTIONS heap limit; the one given here is upstream CI's. The test lines
+# make an empty or missing dist/ fail here, not in the copy below. Since 0.28 the
+# embedded dist/ has no config.json (vite-embedded.config.ts turns publicDir off, and
+# the npm package's dist/ has none either), so it is not asked for.
 RUN corepack enable && pnpm install --frozen-lockfile --ignore-pnpmfile
 RUN VITE_APP_VERSION="${ELEMENT_CALL_VERSION}" NODE_OPTIONS=--max-old-space-size=4096 \
       pnpm run build:embedded:production \
-    && test -s dist/index.html && test -s dist/config.json && test -d dist/assets
+    && test -s dist/index.html && test -d dist/assets
 
 # ---------------------------------------------------------------------------
 # Deps, then (patch-tests | builder): clone element-web at the pinned tag, apply
@@ -134,7 +138,8 @@ RUN git clone --depth 1 --branch "${ELEMENT_WEB_TAG}" \
 # places (entries 1, 3-8 and 11), entry 8 builds on 7 and entry 10 on 9. Applied in
 # this order every hunk lands (verified against a pristine v1.12.26 tree,
 # 2026-08-30, a pristine v1.12.29 tree, 2026-10-02, a pristine v1.12.32
-# tree, 2026-10-18, and a pristine v1.12.33 tree, 2026-10-30).
+# tree, 2026-10-18, a pristine v1.12.33 tree, 2026-10-30, and a pristine v1.12.35
+# tree, 2026-11-20).
 # Registry with why/evidence/retirement per patch:
 # patches/element-web/README.md — no patch ships without an entry there.
 COPY patches/element-web/force-first-device-recovery.patch /tmp/ew.patch
@@ -308,7 +313,7 @@ RUN corepack enable && pnpm install --frozen-lockfile
 # change the store's copy too. Fails the build when the installed package is not the
 # version this replaces (Element Web moved to another Element Call: rebase the
 # `element-call` stage first, entries 16 and 17), or has no dist/.
-ARG ELEMENT_CALL_STOCK_VERSION=0.26.1
+ARG ELEMENT_CALL_STOCK_VERSION=0.28.2
 COPY --from=element-call /src/dist /tmp/element-call-dist
 RUN set -e; \
     pkgjson="$(cd apps/web && node -p "require.resolve('@element-hq/element-call-embedded/package.json')")"; \

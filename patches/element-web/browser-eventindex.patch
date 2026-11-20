@@ -17418,10 +17418,10 @@ index 0000000..b38aa1e
 +    });
 +}
 diff --git a/apps/web/src/vector/platform/WebPlatform.test.ts b/apps/web/src/vector/platform/WebPlatform.test.ts
-index 02fa172..7a81a52 100644
+index 2b13afa..54504e1 100644
 --- a/apps/web/src/vector/platform/WebPlatform.test.ts
 +++ b/apps/web/src/vector/platform/WebPlatform.test.ts
-@@ -8,14 +8,16 @@ Please see LICENSE files in the repository root for full details.
+@@ -8,7 +8,7 @@ Please see LICENSE files in the repository root for full details.
  
  // @vitest-environment happy-dom
  
@@ -17429,7 +17429,8 @@ index 02fa172..7a81a52 100644
 +import { vi, describe, it, expect, afterAll, afterEach, beforeEach } from "vitest";
  import fetchMock from "@fetch-mock/vitest";
  import { emitPromise } from "test-utils/utilities";
- import "vitest-canvas-mock";
+ import { tearDownAfterTest } from "test-utils";
+@@ -16,7 +16,9 @@ import "vitest-canvas-mock";
  
  import { UpdateCheckStatus } from "../../BasePlatform";
  import { MatrixClientPeg } from "../../MatrixClientPeg";
@@ -17439,7 +17440,7 @@ index 02fa172..7a81a52 100644
  import ToastStore from "../../stores/ToastStore.ts";
  import defaultDispatcher from "../../dispatcher/dispatcher.ts";
  import { Action } from "../../dispatcher/actions.ts";
-@@ -284,4 +286,109 @@ describe("WebPlatform", () => {
+@@ -342,4 +344,109 @@ describe("WebPlatform", () => {
              expect(url.searchParams.get("no_universal_links")).toEqual("true");
          });
      });
@@ -17453,19 +17454,19 @@ index 02fa172..7a81a52 100644
 +        it("returns null while the labs flag is off", () => {
 +            vi.stubGlobal("indexedDB", {});
 +            vi.spyOn(SettingsStore, "getValue").mockReturnValue(false);
-+            expect(new WebPlatform().getEventIndexingManager()).toBeNull();
++            expect(tearDownAfterTest(new WebPlatform()).getEventIndexingManager()).toBeNull();
 +        });
 +
 +        it("returns null when the browser cannot back an index", () => {
 +            vi.stubGlobal("indexedDB", undefined);
 +            vi.spyOn(SettingsStore, "getValue").mockReturnValue(true);
-+            expect(new WebPlatform().getEventIndexingManager()).toBeNull();
++            expect(tearDownAfterTest(new WebPlatform()).getEventIndexingManager()).toBeNull();
 +        });
 +
 +        it("returns the same manager on every call once enabled", () => {
 +            vi.stubGlobal("indexedDB", {});
 +            vi.spyOn(SettingsStore, "getValue").mockReturnValue(true);
-+            const platform = new WebPlatform();
++            const platform = tearDownAfterTest(new WebPlatform());
 +            const manager = platform.getEventIndexingManager();
 +            expect(manager).toBeInstanceOf(BrowserEventIndexManager);
 +            expect(platform.getEventIndexingManager()).toBe(manager);
@@ -17474,7 +17475,7 @@ index 02fa172..7a81a52 100644
 +        it("keeps returning an existing manager once the setting is gone, so logout can delete the index", () => {
 +            vi.stubGlobal("indexedDB", {});
 +            const getValue = vi.spyOn(SettingsStore, "getValue").mockReturnValue(true);
-+            const platform = new WebPlatform();
++            const platform = tearDownAfterTest(new WebPlatform());
 +            const manager = platform.getEventIndexingManager();
 +            expect(manager).toBeInstanceOf(BrowserEventIndexManager);
 +
@@ -17490,7 +17491,7 @@ index 02fa172..7a81a52 100644
 +        it("never constructs a manager while the flag is off, and still gates on the live setting", async () => {
 +            vi.stubGlobal("indexedDB", {});
 +            const getValue = vi.spyOn(SettingsStore, "getValue").mockReturnValue(false);
-+            const platform = new WebPlatform();
++            const platform = tearDownAfterTest(new WebPlatform());
 +            expect(platform.getEventIndexingManager()).toBeNull();
 +            expect(platform.getEventIndexingManager()).toBeNull();
 +
@@ -17507,7 +17508,7 @@ index 02fa172..7a81a52 100644
 +            const open = vi.fn();
 +            vi.stubGlobal("indexedDB", { open });
 +            const getValue = vi.spyOn(SettingsStore, "getValue").mockReturnValue(true);
-+            const platform = new WebPlatform();
++            const platform = tearDownAfterTest(new WebPlatform());
 +            const manager = platform.getEventIndexingManager()!;
 +
 +            // The flag goes off mid-session. EventIndexPeg cached supportsEventIndexing() at
@@ -17531,7 +17532,7 @@ index 02fa172..7a81a52 100644
 +            vi.stubGlobal("indexedDB", { deleteDatabase });
 +            vi.spyOn(SettingsStore, "getValue").mockReturnValue(false);
 +
-+            const platform = new WebPlatform();
++            const platform = tearDownAfterTest(new WebPlatform());
 +            expect(platform.getEventIndexingManager()).toBeNull();
 +            expect(deleteDatabase).toHaveBeenCalledWith("element-eventindex");
 +            expect(platform.getEventIndexingManager()).toBeNull();
@@ -17544,13 +17545,13 @@ index 02fa172..7a81a52 100644
 +            vi.spyOn(SettingsStore, "getValue").mockImplementation(() => {
 +                throw new Error("settings not ready");
 +            });
-+            expect(new WebPlatform().getEventIndexingManager()).toBeNull();
++            expect(tearDownAfterTest(new WebPlatform()).getEventIndexingManager()).toBeNull();
 +            expect(deleteDatabase).not.toHaveBeenCalled();
 +        });
 +    });
  });
 diff --git a/apps/web/src/vector/platform/WebPlatform.ts b/apps/web/src/vector/platform/WebPlatform.ts
-index 1f271e6..ea60c5e 100644
+index f1bea8d..f8384d8 100644
 --- a/apps/web/src/vector/platform/WebPlatform.ts
 +++ b/apps/web/src/vector/platform/WebPlatform.ts
 @@ -12,6 +12,12 @@ import { logger } from "matrix-js-sdk/src/logger";
@@ -17566,10 +17567,10 @@ index 1f271e6..ea60c5e 100644
  import dis from "../../dispatcher/dispatcher";
  import { hideToast as hideUpdateToast, showToast as showUpdateToast } from "../../toasts/UpdateToast";
  import { Action } from "../../dispatcher/actions";
-@@ -38,6 +44,13 @@ export default class WebPlatform extends BasePlatform {
-     // oxlint-disable-next-line node/no-process-env
+@@ -39,6 +45,13 @@ export default class WebPlatform extends BasePlatform {
      private static readonly VERSION = process.env.VERSION!; // baked in by Webpack
      private readonly registerServiceWorkerPromise: Promise<void>;
+     private updateCheckInterval?: number;
 +    /**
 +     * The browser event index, created on first use and only while the labs gate is on. Held for
 +     * the life of the platform once created; see {@link getEventIndexingManager}.
@@ -17580,7 +17581,7 @@ index 1f271e6..ea60c5e 100644
  
      public constructor() {
          super();
-@@ -269,6 +282,48 @@ export default class WebPlatform extends BasePlatform {
+@@ -287,6 +300,48 @@ export default class WebPlatform extends BasePlatform {
          window.location.reload();
      }
  

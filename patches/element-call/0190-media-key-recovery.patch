@@ -1,6 +1,6 @@
-From bcdadcda3d7dbc274de8286b64cd8ca4813d4785 Mon Sep 17 00:00:00 2001
+From b9e2eecea915468ffa5a060f31c6de5a35217816 Mon Sep 17 00:00:00 2001
 From: Tim Bansemer <tim.bansemer@inblock.io>
-Date: Sat, 24 Oct 2026 18:11:31 +0200
+Date: Fri, 20 Nov 2026 19:49:27 +0100
 Subject: [PATCH] Recover automatically when a call's media key is lost
 
 A member's media key is sent once to each new joiner. In a 1:1 call a key
@@ -46,26 +46,213 @@ Add src/e2ee/keyRecovery.ts, inside Element Call only:
 
 Wired in widget.ts (once per client), useLoadGroupCall.ts (the call's
 session: join state and received keys) and Connection.ts (encryption
-errors, participant gone, connection closed). Tests include the real
-RoomWidgetClient with a mocked widget API and the real MatrixRTCSession.
+errors, participant gone, connection closed). Since Element Call 0.28 that
+connection lives in the SDK (sdk/src/media-backend/livekit/Connection.ts),
+which imports the watchdog from src/e2ee/keyRecovery.ts: the one place the
+SDK reaches into src/. Tests include the real RoomWidgetClient with a
+mocked widget API and the real MatrixRTCSession.
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 ---
+ .../media-backend/livekit/Connection.test.ts  |   97 +
+ sdk/src/media-backend/livekit/Connection.ts   |   24 +-
  src/e2ee/keyRecovery.test.ts                  | 1569 +++++++++++++++++
  src/e2ee/keyRecovery.ts                       |  729 ++++++++
- src/e2ee/keyRecoveryWiring.test.ts            |  428 +++++
+ src/e2ee/keyRecoveryWiring.test.ts            |  429 +++++
  src/room/useLoadGroupCall.test.tsx            |   87 +
  src/room/useLoadGroupCall.ts                  |    4 +
- .../remoteMembers/Connection.test.ts          |  107 ++
- .../CallViewModel/remoteMembers/Connection.ts |   21 +-
  src/widget.test.ts                            |   33 +-
  src/widget.ts                                 |    2 +
- 9 files changed, 2974 insertions(+), 6 deletions(-)
+ 9 files changed, 2968 insertions(+), 6 deletions(-)
  create mode 100644 src/e2ee/keyRecovery.test.ts
  create mode 100644 src/e2ee/keyRecovery.ts
  create mode 100644 src/e2ee/keyRecoveryWiring.test.ts
  create mode 100644 src/room/useLoadGroupCall.test.tsx
 
+diff --git a/sdk/src/media-backend/livekit/Connection.test.ts b/sdk/src/media-backend/livekit/Connection.test.ts
+index 7224cf7..8757db0 100644
+--- a/sdk/src/media-backend/livekit/Connection.test.ts
++++ b/sdk/src/media-backend/livekit/Connection.test.ts
+@@ -45,6 +45,11 @@ import { MatrixRTCError } from "../../errors";
+ import { testJWTToken } from "../../utils/test-fixtures";
+ import { ownMemberMock } from "../../utils/test";
+ import { mockRemoteParticipant } from "./test";
++import {
++  getKeyRecoveryWatchdog,
++  installKeyRecovery,
++  uninstallKeyRecovery,
++} from "../../../../src/e2ee/keyRecovery.ts";
+ 
+ let testScope: ObservableScope;
+ 
+@@ -602,6 +607,98 @@ describe("remote track logging", () => {
+   });
+ });
+ 
++describe("key recovery", () => {
++  function watchdogSpies(): {
++    onEncryptionError: ReturnType<typeof vi.fn>;
++    onParticipantGone: ReturnType<typeof vi.fn>;
++    onConnectionClosed: ReturnType<typeof vi.fn>;
++  } {
++    setupTest();
++    installKeyRecovery(
++      {
++        encryptAndSendToDevice: vi.fn(),
++        getRoom: vi.fn(),
++        getUserId: vi.fn(),
++        getDeviceId: vi.fn(),
++        sendStateEvent: vi.fn(),
++      },
++      ROOM_ID,
++    );
++    const watchdog = getKeyRecoveryWatchdog()!;
++    new Connection(connectionOpts(), logger);
++    return {
++      onEncryptionError: vi
++        .spyOn(watchdog, "onEncryptionError")
++        .mockImplementation(() => {}),
++      onParticipantGone: vi
++        .spyOn(watchdog, "onParticipantGone")
++        .mockImplementation(() => {}),
++      onConnectionClosed: vi
++        .spyOn(watchdog, "onConnectionClosed")
++        .mockImplementation(() => {}),
++    };
++  }
++
++  afterEach(() => {
++    uninstallKeyRecovery();
++  });
++
++  it("reports a decryption error of a remote participant with the room it came from", () => {
++    const { onEncryptionError } = watchdogSpies();
++    const bob = mockRemoteParticipant({ identity: "@bob:example.org:DEV111" });
++
++    fakeLivekitRoom.emit(RoomEvent.EncryptionError, new Error("no key"), bob);
++
++    expect(onEncryptionError).toHaveBeenCalledExactlyOnceWith(
++      "@bob:example.org:DEV111",
++      fakeLivekitRoom,
++    );
++  });
++
++  it("ignores encryption errors of our own participant or of nobody", () => {
++    const { onEncryptionError } = watchdogSpies();
++
++    fakeLivekitRoom.emit(RoomEvent.EncryptionError, new Error("no key"), {
++      ...fakeLocalParticipant,
++      isLocal: true,
++    } as unknown as LocalParticipant);
++    fakeLivekitRoom.emit(RoomEvent.EncryptionError, new Error("no key"));
++
++    expect(onEncryptionError).not.toHaveBeenCalled();
++  });
++
++  it("reports a remote participant that left", () => {
++    const { onParticipantGone } = watchdogSpies();
++    const bob = mockRemoteParticipant({ identity: "@bob:example.org:DEV111" });
++
++    fakeLivekitRoom.emit(RoomEvent.ParticipantDisconnected, bob);
++
++    expect(onParticipantGone).toHaveBeenCalledExactlyOnceWith(
++      "@bob:example.org:DEV111",
++    );
++  });
++
++  it("reports the room as closed when LiveKit disconnects it (no ParticipantDisconnected comes then)", () => {
++    const { onConnectionClosed, onParticipantGone } = watchdogSpies();
++
++    fakeLivekitRoom.emit(RoomEvent.Disconnected);
++
++    expect(onConnectionClosed).toHaveBeenCalledExactlyOnceWith(fakeLivekitRoom);
++    expect(onParticipantGone).not.toHaveBeenCalled();
++  });
++
++  it("reports the room as closed when the connection's scope ends", () => {
++    const { onConnectionClosed } = watchdogSpies();
++
++    testScope.end();
++
++    expect(onConnectionClosed).toHaveBeenCalledExactlyOnceWith(fakeLivekitRoom);
++    // and the connection listens no more
++    fakeLivekitRoom.emit(RoomEvent.Disconnected);
++    expect(onConnectionClosed).toHaveBeenCalledOnce();
++  });
++});
++
+ //
+ // NOT USED ANYMORE ?
+ //
+diff --git a/sdk/src/media-backend/livekit/Connection.ts b/sdk/src/media-backend/livekit/Connection.ts
+index 1af4427..f50e5cd 100644
+--- a/sdk/src/media-backend/livekit/Connection.ts
++++ b/sdk/src/media-backend/livekit/Connection.ts
+@@ -28,6 +28,10 @@ import { BehaviorSubject } from "rxjs";
+ import { type Logger } from "matrix-js-sdk/lib/logger";
+ import { type CallMembershipIdentityParts } from "matrix-js-sdk/lib/matrixrtc/EncryptionManager";
+ 
++// aqua-meet: the one place the SDK reaches into Element Call's src/ (the dependency otherwise runs src -> sdk,
++// see sdk/SdkArchitecture.md). Entry 17 of the registry records why: the key recovery watchdog lives next to the
++// widget client wrapper in src/e2ee/, and this connection is where the room events it needs are seen.
++import { getKeyRecoveryWatchdog } from "../../../../src/e2ee/keyRecovery.ts";
+ import {
+   type ClientGetTokenParts,
+   type ClientOpenIDParts,
+@@ -189,8 +193,10 @@ export class Connection {
+ 
+     const onParticipantConnected = (p: RemoteParticipant): void =>
+       log.info(`Participant connected: ${p.identity} (${p.sid})`);
+-    const onParticipantDisconnected = (p: RemoteParticipant): void =>
++    const onParticipantDisconnected = (p: RemoteParticipant): void => {
+       log.info(`Participant disconnected: ${p.identity} (${p.sid})`);
++      getKeyRecoveryWatchdog()?.onParticipantGone(p.identity);
++    };
+     const onTrackPublished = (
+       pub: RemoteTrackPublication,
+       p: RemoteParticipant,
+@@ -239,11 +245,18 @@ export class Connection {
+       );
+     // livekit-client throttles these per cryptor; they indicate frames being
+     // dropped (missing/invalid key).
+-    const onEncryptionError = (error: Error, p?: Participant): void =>
++    const onEncryptionError = (error: Error, p?: Participant): void => {
+       log.warn(
+         `Encryption error for ${p?.identity ?? "unknown participant"}:`,
+         error,
+       );
++      if (p !== undefined && !p.isLocal)
++        getKeyRecoveryWatchdog()?.onEncryptionError(p.identity, room);
++    };
++    // Room.disconnect() clears the remote participants without a
++    // ParticipantDisconnected for each, so their recovery episodes end here.
++    const onDisconnected = (): void =>
++      getKeyRecoveryWatchdog()?.onConnectionClosed(room);
+ 
+     room
+       .on(RoomEvent.ParticipantConnected, onParticipantConnected)
+@@ -260,8 +273,10 @@ export class Connection {
+         RoomEvent.ParticipantEncryptionStatusChanged,
+         onEncryptionStatusChanged,
+       )
+-      .on(RoomEvent.EncryptionError, onEncryptionError);
++      .on(RoomEvent.EncryptionError, onEncryptionError)
++      .on(RoomEvent.Disconnected, onDisconnected);
+     this.scope.onEnd(() => {
++      onDisconnected();
+       room
+         .off(RoomEvent.ParticipantConnected, onParticipantConnected)
+         .off(RoomEvent.ParticipantDisconnected, onParticipantDisconnected)
+@@ -277,7 +292,8 @@ export class Connection {
+           RoomEvent.ParticipantEncryptionStatusChanged,
+           onEncryptionStatusChanged,
+         )
+-        .off(RoomEvent.EncryptionError, onEncryptionError);
++        .off(RoomEvent.EncryptionError, onEncryptionError)
++        .off(RoomEvent.Disconnected, onDisconnected);
+     });
+   }
+ 
 diff --git a/src/e2ee/keyRecovery.test.ts b/src/e2ee/keyRecovery.test.ts
 new file mode 100644
 index 0000000..899e994
@@ -2378,10 +2565,10 @@ index 0000000..83f8d39
 +}
 diff --git a/src/e2ee/keyRecoveryWiring.test.ts b/src/e2ee/keyRecoveryWiring.test.ts
 new file mode 100644
-index 0000000..164247c
+index 0000000..fb23487
 --- /dev/null
 +++ b/src/e2ee/keyRecoveryWiring.test.ts
-@@ -0,0 +1,428 @@
+@@ -0,0 +1,429 @@
 +/*
 +Copyright 2026 Aqua Meet contributors
 +
@@ -2558,7 +2745,7 @@ index 0000000..164247c
 +});
 +
 +afterEach(async () => {
-+  await session.leaveRoomSession(1).catch(() => {});
++  await session.leave(1).catch(() => {});
 +  uninstallKeyRecovery();
 +  vi.useRealTimers();
 +  vi.restoreAllMocks();
@@ -2566,16 +2753,17 @@ index 0000000..164247c
 +});
 +
 +async function join(): Promise<void> {
-+  session.joinRTCSession(
++  session.join(
 +    { ...ALICE, memberId: `${ALICE.userId}:${ALICE.deviceId}` },
-+    [],
-+    {
-+      type: "livekit",
-+      livekit_service_url: "https://sfu.example.org",
-+    },
++    [
++      {
++        type: "livekit",
++        livekit_service_url: "https://sfu.example.org",
++      },
++    ],
 +    {
 +      manageMediaKeys: true,
-+      makeKeyDelay: KEY_DELAY_MS,
++      useKeyDelay: KEY_DELAY_MS,
 +      delayedLeaveEventDelayMs: 8_000,
 +      delayedLeaveEventRestartMs: 4_000,
 +    },
@@ -2606,7 +2794,7 @@ index 0000000..164247c
 +      },
 +    }),
 +  ]);
-+  await session._onRTCSessionMemberUpdate();
++  await session.ensureRecalculateSessionMembers();
 +  await vi.advanceTimersByTimeAsync(0);
 +}
 +
@@ -2719,7 +2907,7 @@ index 0000000..164247c
 +
 +    getKeyRecoveryWatchdog()?.onEncryptionError("bob");
 +    await vi.advanceTimersByTimeAsync(3_000);
-+    await session.leaveRoomSession(1_000);
++    await session.leave(1_000);
 +    await vi.advanceTimersByTimeAsync(120_000);
 +
 +    expect(membershipWrites()).toHaveLength(writes);
@@ -2734,7 +2922,7 @@ index 0000000..164247c
 +    const [oldKey] = sentKeys();
 +
 +    await vi.advanceTimersByTimeAsync(2_000);
-+    await session.leaveRoomSession(1_000);
++    await session.leave(1_000);
 +    await join();
 +    // the old copies (5 s and 15 s after the first send) are due now, while
 +    // the new join has not sent a key yet
@@ -2756,7 +2944,7 @@ index 0000000..164247c
 +    /**
 +     * The next restart of the delayed leave event fails in a way that is not
 +     * retried: the MembershipManager stops and the session reports its join state
-+     * while that is still true (MatrixRTCSession.joinRTCSession), so no leave
++     * while that is still true (MatrixRTCSession.join), so no leave
 +     * is ever reported.
 +     */
 +    async function failMembership(): Promise<void> {
@@ -2925,199 +3113,8 @@ index 42464bb..6345483 100644
        return rtcSession;
      };
  
-diff --git a/src/state/CallViewModel/remoteMembers/Connection.test.ts b/src/state/CallViewModel/remoteMembers/Connection.test.ts
-index f226b77..e6c5932 100644
---- a/src/state/CallViewModel/remoteMembers/Connection.test.ts
-+++ b/src/state/CallViewModel/remoteMembers/Connection.test.ts
-@@ -45,6 +45,11 @@ import {
- } from "../../../utils/errors.ts";
- import { testJWTToken } from "../../../utils/test-fixtures.ts";
- import { mockRemoteParticipant, ownMemberMock } from "../../../utils/test.ts";
-+import {
-+  getKeyRecoveryWatchdog,
-+  installKeyRecovery,
-+  uninstallKeyRecovery,
-+} from "../../../e2ee/keyRecovery.ts";
- 
- let testScope: ObservableScope;
- 
-@@ -631,6 +636,108 @@ describe("remote track logging", () => {
-   });
- });
- 
-+describe("key recovery", () => {
-+  function watchdogSpies(): {
-+    onEncryptionError: ReturnType<typeof vi.fn>;
-+    onParticipantGone: ReturnType<typeof vi.fn>;
-+    onConnectionClosed: ReturnType<typeof vi.fn>;
-+  } {
-+    setupTest();
-+    installKeyRecovery(
-+      {
-+        encryptAndSendToDevice: vi.fn(),
-+        getRoom: vi.fn(),
-+        getUserId: vi.fn(),
-+        getDeviceId: vi.fn(),
-+        sendStateEvent: vi.fn(),
-+      },
-+      ROOM_ID,
-+    );
-+    const watchdog = getKeyRecoveryWatchdog()!;
-+    new Connection(
-+      {
-+        client,
-+        roomId: ROOM_ID,
-+        transport: livekitFocus,
-+        scope: testScope,
-+        ownMembershipIdentity: ownMemberMock,
-+        livekitRoomFactory: () => fakeLivekitRoom,
-+      },
-+      logger,
-+    );
-+    return {
-+      onEncryptionError: vi
-+        .spyOn(watchdog, "onEncryptionError")
-+        .mockImplementation(() => {}),
-+      onParticipantGone: vi
-+        .spyOn(watchdog, "onParticipantGone")
-+        .mockImplementation(() => {}),
-+      onConnectionClosed: vi
-+        .spyOn(watchdog, "onConnectionClosed")
-+        .mockImplementation(() => {}),
-+    };
-+  }
-+
-+  afterEach(() => {
-+    uninstallKeyRecovery();
-+  });
-+
-+  it("reports a decryption error of a remote participant with the room it came from", () => {
-+    const { onEncryptionError } = watchdogSpies();
-+    const bob = mockRemoteParticipant({ identity: "@bob:example.org:DEV111" });
-+
-+    fakeLivekitRoom.emit(RoomEvent.EncryptionError, new Error("no key"), bob);
-+
-+    expect(onEncryptionError).toHaveBeenCalledExactlyOnceWith(
-+      "@bob:example.org:DEV111",
-+      fakeLivekitRoom,
-+    );
-+  });
-+
-+  it("ignores encryption errors of our own participant or of nobody", () => {
-+    const { onEncryptionError } = watchdogSpies();
-+
-+    fakeLivekitRoom.emit(RoomEvent.EncryptionError, new Error("no key"), {
-+      ...fakeLocalParticipant,
-+      isLocal: true,
-+    } as unknown as LocalParticipant);
-+    fakeLivekitRoom.emit(RoomEvent.EncryptionError, new Error("no key"));
-+
-+    expect(onEncryptionError).not.toHaveBeenCalled();
-+  });
-+
-+  it("reports a remote participant that left", () => {
-+    const { onParticipantGone } = watchdogSpies();
-+    const bob = mockRemoteParticipant({ identity: "@bob:example.org:DEV111" });
-+
-+    fakeLivekitRoom.emit(RoomEvent.ParticipantDisconnected, bob);
-+
-+    expect(onParticipantGone).toHaveBeenCalledExactlyOnceWith(
-+      "@bob:example.org:DEV111",
-+    );
-+  });
-+
-+  it("reports the room as closed when LiveKit disconnects it (no ParticipantDisconnected comes then)", () => {
-+    const { onConnectionClosed, onParticipantGone } = watchdogSpies();
-+
-+    fakeLivekitRoom.emit(RoomEvent.Disconnected);
-+
-+    expect(onConnectionClosed).toHaveBeenCalledExactlyOnceWith(fakeLivekitRoom);
-+    expect(onParticipantGone).not.toHaveBeenCalled();
-+  });
-+
-+  it("reports the room as closed when the connection's scope ends", () => {
-+    const { onConnectionClosed } = watchdogSpies();
-+
-+    testScope.end();
-+
-+    expect(onConnectionClosed).toHaveBeenCalledExactlyOnceWith(fakeLivekitRoom);
-+    // and the connection listens no more
-+    fakeLivekitRoom.emit(RoomEvent.Disconnected);
-+    expect(onConnectionClosed).toHaveBeenCalledOnce();
-+  });
-+});
-+
- //
- // NOT USED ANYMORE ?
- //
-diff --git a/src/state/CallViewModel/remoteMembers/Connection.ts b/src/state/CallViewModel/remoteMembers/Connection.ts
-index 7889f90..aabfe69 100644
---- a/src/state/CallViewModel/remoteMembers/Connection.ts
-+++ b/src/state/CallViewModel/remoteMembers/Connection.ts
-@@ -27,6 +27,7 @@ import { BehaviorSubject, map } from "rxjs";
- import { type Logger } from "matrix-js-sdk/lib/logger";
- import { type CallMembershipIdentityParts } from "matrix-js-sdk/lib/matrixrtc/EncryptionManager";
- 
-+import { getKeyRecoveryWatchdog } from "../../../e2ee/keyRecovery.ts";
- import {
-   getSFUConfigWithOpenID,
-   type OpenIDClientParts,
-@@ -194,8 +195,10 @@ export class Connection {
- 
-     const onParticipantConnected = (p: RemoteParticipant): void =>
-       log.info(`Participant connected: ${p.identity} (${p.sid})`);
--    const onParticipantDisconnected = (p: RemoteParticipant): void =>
-+    const onParticipantDisconnected = (p: RemoteParticipant): void => {
-       log.info(`Participant disconnected: ${p.identity} (${p.sid})`);
-+      getKeyRecoveryWatchdog()?.onParticipantGone(p.identity);
-+    };
-     const onTrackPublished = (
-       pub: RemoteTrackPublication,
-       p: RemoteParticipant,
-@@ -244,11 +247,18 @@ export class Connection {
-       );
-     // livekit-client throttles these per cryptor; they indicate frames being
-     // dropped (missing/invalid key).
--    const onEncryptionError = (error: Error, p?: Participant): void =>
-+    const onEncryptionError = (error: Error, p?: Participant): void => {
-       log.warn(
-         `Encryption error for ${p?.identity ?? "unknown participant"}:`,
-         error,
-       );
-+      if (p !== undefined && !p.isLocal)
-+        getKeyRecoveryWatchdog()?.onEncryptionError(p.identity, room);
-+    };
-+    // Room.disconnect() clears the remote participants without a
-+    // ParticipantDisconnected for each, so their recovery episodes end here.
-+    const onDisconnected = (): void =>
-+      getKeyRecoveryWatchdog()?.onConnectionClosed(room);
- 
-     room
-       .on(RoomEvent.ParticipantConnected, onParticipantConnected)
-@@ -265,8 +275,10 @@ export class Connection {
-         RoomEvent.ParticipantEncryptionStatusChanged,
-         onEncryptionStatusChanged,
-       )
--      .on(RoomEvent.EncryptionError, onEncryptionError);
-+      .on(RoomEvent.EncryptionError, onEncryptionError)
-+      .on(RoomEvent.Disconnected, onDisconnected);
-     this.scope.onEnd(() => {
-+      onDisconnected();
-       room
-         .off(RoomEvent.ParticipantConnected, onParticipantConnected)
-         .off(RoomEvent.ParticipantDisconnected, onParticipantDisconnected)
-@@ -282,7 +294,8 @@ export class Connection {
-           RoomEvent.ParticipantEncryptionStatusChanged,
-           onEncryptionStatusChanged,
-         )
--        .off(RoomEvent.EncryptionError, onEncryptionError);
-+        .off(RoomEvent.EncryptionError, onEncryptionError)
-+        .off(RoomEvent.Disconnected, onDisconnected);
-     });
-   }
- 
 diff --git a/src/widget.test.ts b/src/widget.test.ts
-index c645c3b..098063c 100644
+index 9081591..c4416e9 100644
 --- a/src/widget.test.ts
 +++ b/src/widget.test.ts
 @@ -5,13 +5,21 @@ SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
@@ -3156,7 +3153,7 @@ index c645c3b..098063c 100644
  describe("widget", () => {
    it("should create an embedded client with the correct params", () => {
      const widget = initializeWidget("ANYRTCAPP");
-@@ -133,6 +146,22 @@ describe("widget", () => {
+@@ -135,6 +148,22 @@ describe("widget", () => {
      expect(createRoomWidgetClientSpy.mock.calls[0][4]).toStrictEqual(false);
    });
  
@@ -3180,7 +3177,7 @@ index c645c3b..098063c 100644
      initializeWidget("ANYRTCAPP", true);
      expect(createRoomWidgetClientSpy).toHaveBeenLastCalledWith(
 diff --git a/src/widget.ts b/src/widget.ts
-index b35e335..fabacc7 100644
+index f184700..3a39a1c 100644
 --- a/src/widget.ts
 +++ b/src/widget.ts
 @@ -19,6 +19,7 @@ import {
@@ -3191,7 +3188,7 @@ index b35e335..fabacc7 100644
  import { getUrlParams } from "./UrlParams";
  import { Config } from "./config/Config";
  import { seedSettingsFromConfig } from "./settings/settings";
-@@ -192,6 +193,7 @@ export const initializeWidget = (
+@@ -194,6 +195,7 @@ export const initializeWidget = (
          // ContentLoaded event will be sent as soon as the theme is set (see useTheme.ts)
          false,
        );

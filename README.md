@@ -50,7 +50,7 @@ The Synapse and Element Web images built here are **not stock**: see
   its [Matrix integration guide](https://github.com/inblockio/siwx-oidc/blob/main/docs/matrix-integration.md).
 - **Clients must implement the Matrix OAuth 2.0 authentication API.** Clients that only
   know password login cannot sign in.
-- **Element Web is built from source** at `v1.12.33` with 11 vendored patches and a runtime
+- **Element Web is built from source** at `v1.12.35` with 15 vendored patches and a runtime
   overlay (configuration, theme, branding, a service-worker boot shim).
 - **Element X is used unmodified**, as distributed through the app stores. This repository
   does not patch it.
@@ -169,10 +169,10 @@ deployment is known to run a different version.
 |---|---|---|---|
 | Synapse | `v1.165.0` (`matrixdotorg/synapse:v1.165.0@sha256:673b4223c81a…`, index digest) | `dockerfiles/Dockerfile` (`FROM`) | **Patched**: 1 source patch, plus config written by `entrypoints/matrix_server.sh`. Built by CI as `ghcr.io/inblockio/siwx-oidc-matrix-server/synapse` |
 | Synapse image the stack runs | default `…/synapse:sha-70b897e@sha256:986294c6147b…` (CI build of main at 70b897e, v1.162.0) | `docker-compose.yml` (`SYNAPSE_IMAGE_REF`); `real-stack/Dockerfile.synapse` (`ARG SYNAPSE_IMAGE`, same default, for the local real stack) | Built here |
-| Element Web | `v1.12.33` (git tag of element-hq/element-web; the build fails unless it resolves to commit `45671bc88ffe…`) | `dockerfiles/Dockerfile.element` (`ARG ELEMENT_WEB_TAG`, `ARG ELEMENT_WEB_COMMIT`) | **Built from source and patched**: 11 source patches, plus a runtime overlay |
+| Element Web | `v1.12.35` (git tag of element-hq/element-web; the build fails unless it resolves to commit `7001d81efc9f…`) | `dockerfiles/Dockerfile.element` (`ARG ELEMENT_WEB_TAG`, `ARG ELEMENT_WEB_COMMIT`) | **Built from source and patched**: 15 source patches, plus a runtime overlay |
 | Element Web image the stack runs | default `…/element-web:sha-33a0c95@sha256:1761832069bd…` (CI build of main at 33a0c95) | `docker-compose.yml` (`ELEMENT_IMAGE_REF`) | Built here |
-| Element Call | `v0.26.1` (git tag of element-hq/element-call; the build fails unless it resolves to commit `9f7c35cd8f84…`), built from source for the embedded widget; Element Web `v1.12.33` itself installs `0.26.1` (`@element-hq/element-call-embedded`), the same release | `dockerfiles/Dockerfile.element` (stage `element-call`: `ARG ELEMENT_CALL_TAG`, `ARG ELEMENT_CALL_COMMIT`; `ARG ELEMENT_CALL_STOCK_VERSION` in `deps` is the installed package it replaces) | **Built from source and patched**: 2 source patches (`0180-bt-audio-output`, `0190-media-key-recovery`), whose `dist/` replaces the installed package's in the Element Web bundle (`element_call.use_exclusively` in `config/element-config.json`). The build fails when Element Web's tag installs another Element Call than `ELEMENT_CALL_STOCK_VERSION`, so a bump rebases the stage. Since `v1.12.31` the bundle also carries `@element-hq/element-call-component` (element-call commit `9b3c3569`, pinned by the lockfile) for the labs flag `feature_element_call_react`, which `config/element-config.json` does not set |
-| matrix-js-sdk | `45.0.0` | Not pinned here: same, via the Element Web tag | Stock, bundled |
+| Element Call | `v0.28.2` (git tag of element-hq/element-call; the build fails unless it resolves to commit `b4dd44bd78c1…`), built from source for the embedded widget; Element Web `v1.12.35` itself installs `0.28.2` (`@element-hq/element-call-embedded`), the same release | `dockerfiles/Dockerfile.element` (stage `element-call`: `ARG ELEMENT_CALL_TAG`, `ARG ELEMENT_CALL_COMMIT`; `ARG ELEMENT_CALL_STOCK_VERSION` in `deps` is the installed package it replaces) | **Built from source and patched**: 2 source patches (`0180-bt-audio-output`, `0190-media-key-recovery`), whose `dist/` replaces the installed package's in the Element Web bundle (`element_call.use_exclusively` in `config/element-config.json`). The build fails when Element Web's tag installs another Element Call than `ELEMENT_CALL_STOCK_VERSION`, so a bump rebases the stage. Since `v1.12.31` the bundle also carries `@element-hq/element-call-component` (`0.28.1` from npm, pinned by the lockfile) for the labs flag `feature_element_call_react`, which `config/element-config.json` does not set |
+| matrix-js-sdk | `45.1.0` | Not pinned here: same, via the Element Web tag | Stock, bundled |
 | Element Web build toolchain | `node:24.20.0-bullseye@sha256:25f3016fcdae…`; pnpm `12.11.2` (upstream `devEngines`, via corepack); `pnpm install --frozen-lockfile` | `dockerfiles/Dockerfile.element` (builder `FROM`, `corepack enable` step) | Stock |
 | Element Web serving base | `nginx/nginx-unprivileged:1.31.9-alpine-slim@sha256:75e85a09b0f2…` | `dockerfiles/Dockerfile.element` (runtime `FROM`) | Stock, with our `config/element-nginx.conf` and security headers |
 | siwx-oidc | default `ghcr.io/inblockio/siwx-oidc:sha-40efae9@sha256:54739f4813bf…` (CI build of siwx-oidc main at 40efae9) | `docker-compose.yml` (`SIWX_OIDC_IMAGE_REF`) | First-party, built in [inblockio/siwx-oidc](https://github.com/inblockio/siwx-oidc) |
@@ -309,7 +309,7 @@ load-bearing, and 13, 14 and 15 are applied after 12. Registry (all seventeen en
     `io.inblock.room_retention` key (entry 13) and the two gates of entry 14. FEATURE, local,
     not proposed upstream.
 16. [`0180-bt-audio-output.patch`](patches/element-call/0180-bt-audio-output.patch):
-    a patch to **Element Call v0.26.1**, not to Element Web. The image builds Element
+    a patch to **Element Call v0.28.2**, not to Element Web. The image builds Element
     Call's embedded widget from source with it (stage `element-call`) and serves that
     build instead of the npm package Element Web installs. Calls stay audible with
     Bluetooth headsets: a Windows hands-free output rule, a guard that holds the call's
@@ -317,7 +317,7 @@ load-bearing, and 13, 14 and 15 are applied after 12. Registry (all seventeen en
     reporting. Element Call is AGPL-3.0-only OR LicenseRef-Element-Commercial; this file
     is the source offer for the modification. UPSTREAM DEFECT, deliberately not filed.
 17. [`0190-media-key-recovery.patch`](patches/element-call/0190-media-key-recovery.patch):
-    a second patch to **Element Call v0.26.1**, applied in the same `element-call` stage
+    a second patch to **Element Call v0.28.2**, applied in the same `element-call` stage
     after 16. A call recovers when a media E2EE key is lost: the widget client's call-key
     to-device sends are retried and sent again, and a watchdog re-sends our own call
     membership with a fresh `created_ts` when a remote stays undecryptable without a key.
