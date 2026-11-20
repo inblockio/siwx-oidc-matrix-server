@@ -470,7 +470,7 @@ RUN KIT_OUT=/out/rocketchat KIT_PUBLIC_PATH=/kits/rocketchat/ RC_ROOT=/work/rock
 
 # ---------------------------------------------------------------------------
 # License texts for the Alpine packages of the nginx-unprivileged base below
-# (Alpine 3.24.2), busybox's GPL-2.0-only among them. Canonical texts from SPDX
+# (Alpine 3.24.4), busybox's GPL-2.0-only among them. Canonical texts from SPDX
 # license-list-data v3.29.0, each checked against its SHA-256 as it is
 # downloaded. The set is not chosen here: dockerfiles/check-alpine-licenses.sh,
 # run at the end of the final stage, fails the build when an installed package
@@ -498,9 +498,17 @@ ADD --chmod=0644 --checksum=sha256:bfb1112d49db5b1daecdfef24bd7e2f3ea0bafb33aa67
 # the inblock.io overlay applied exactly as the previous config-only image did.
 # nginx-unprivileged serves on 8080 as the `nginx` user. Pinned like the
 # builder (version tag plus index digest; was the moving `alpine-slim`, which
-# resolved to this same 1.31.6 mainline build when it was pinned).
+# resolved to the 1.31.6 mainline build when it was first pinned).
+# 1.31.9 (Alpine 3.24.4) fixes CVE-2026-123007 and CVE-2026-123633 in nginx
+# 1.31.6. The image moved registries: the nginx project now publishes it as
+# nginx/nginx-unprivileged (same image on ghcr.io/nginx/nginx-unprivileged),
+# and Docker Hub's nginxinc/nginx-unprivileged stops at 1.31.7, so a patched
+# build is only reachable under the new name. The index digest below is the
+# same on Docker Hub and GHCR. Same package set and license set as 1.31.6, so
+# the alpine_licenses texts are unchanged; only the Alpine release in NOTICE
+# moved (3.24.2 to 3.24.4, enforced by check-alpine-licenses.sh).
 # ---------------------------------------------------------------------------
-FROM nginxinc/nginx-unprivileged:1.31.6-alpine-slim@sha256:c81a27f28bc2d9c2da8998444e653c7b85b9bbbaa92e44ef18d8920784e06507
+FROM nginx/nginx-unprivileged:1.31.9-alpine-slim@sha256:75e85a09b0f25bd46d49a9fd85589ffa70b0459c8ed5ee0dc6596fd642e1f829
 
 USER root
 

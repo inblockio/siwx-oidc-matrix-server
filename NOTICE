@@ -195,7 +195,7 @@ config/element-nginx.conf
     The skeleton of the server block (the listen, server_name,
     "location /", error_page and "location = /50x.html" directives and
     the comment above error_page) is taken from nginx's stock
-    default.conf, which the nginxinc/nginx-unprivileged base image ships.
+    default.conf, which the nginx/nginx-unprivileged base image ships.
     Its source is alpine/alpine/nginx.default.conf in
     https://github.com/nginx/pkg-oss, used under the following license:
 
@@ -313,14 +313,14 @@ org.opencontainers.image.revision label names:
 https://github.com/inblockio/siwx-oidc-matrix-server/tree/<revision>.
 
 Alpine packages. The element-web image is built on
-nginxinc/nginx-unprivileged:1.31.6-alpine-slim, which is Alpine Linux
-3.24.2, and the caddy-l4 image on caddy:2.11.7, which is Alpine Linux
+nginx/nginx-unprivileged:1.31.9-alpine-slim, which is Alpine Linux
+3.24.4, and the caddy-l4 image on caddy:2.11.7, which is Alpine Linux
 3.23.6. Their Alpine packages, BusyBox (GPL-2.0-only) among them, are
 built from the aports repository; the release tags and source archives
 are:
 
-    Alpine Linux 3.24.2
-        https://gitlab.alpinelinux.org/alpine/aports/-/tree/v3.24.2
+    Alpine Linux 3.24.4
+        https://gitlab.alpinelinux.org/alpine/aports/-/tree/v3.24.4
         https://distfiles.alpinelinux.org/distfiles/v3.24/
     Alpine Linux 3.23.6
         https://gitlab.alpinelinux.org/alpine/aports/-/tree/v3.23.6
