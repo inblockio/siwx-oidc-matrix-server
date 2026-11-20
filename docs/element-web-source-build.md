@@ -84,7 +84,7 @@ DevTools → Application → Service Workers → inspect.
    version is the release alone.
 5. The build fails if the built `sw.js` lacks the markers of patches 9 and 10, or the
    bundle no longer exposes `window.mxMatrixClientPeg`.
-6. Runtime stage: `nginxinc/nginx-unprivileged:1.31.6-alpine-slim`, pinned by digest
+6. Runtime stage: `nginx/nginx-unprivileged:1.31.9-alpine-slim`, pinned by digest
    (same base family as the old prebuilt image, serves on 8080 as the `nginx` user).
    The bundle is copied to `/app`, `/usr/share/nginx/html` is symlinked to `/app`, our
    overlay files are copied in, `sw.js` gets a per-build stamp, and
