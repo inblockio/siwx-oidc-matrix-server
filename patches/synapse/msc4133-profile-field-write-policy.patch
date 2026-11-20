@@ -18,6 +18,12 @@ re-anchored by hand because upstream changed the surrounding code:
     ownership check where our guard sits.
 The guard's code and its two refusal messages are byte-identical to the PR.
 
+Re-anchored from v1.164.1 to v1.165.0 on 2026-11-20. One hunk moved: hunk 2 of
+config/experimental.py, whose three trailing context lines changed because upstream
+rewrote the comment block above self.msc4143_enabled (the MSC4143 stabilisation in
+1.165.0). The added lines are unchanged. The other four hunks apply as before (the three
+handlers/profile.py hunks at an offset of +27 lines).
+
 POLICY DECISION, 403 vs upstream's new 403/404 (2026-09-25):
   1. ORDER: our guard runs BEFORE upstream's #20172 existence lookup. For a
      non-admin, a listed field is refused 403 M_FORBIDDEN whatever the store
@@ -54,7 +60,7 @@ index 1c2f02132..6a2d6d748 100644
  
  import attr
  
-@@ -247,6 +247,34 @@ class ExperimentalConfig(Config):
+@@ -253,6 +253,34 @@ class ExperimentalConfig(Config):
          # MSC4133: Custom profile fields
          self.msc4133_enabled: bool = experimental.get("msc4133_enabled", False)
  
@@ -86,9 +92,9 @@ index 1c2f02132..6a2d6d748 100644
 +                    ("experimental", "msc4133_key_denylist"),
 +                )
 +
-         # MSC4143: Matrix RTC Transport using Livekit Backend
-         self.msc4143_enabled: bool = experimental.get("msc4143_enabled", False)
- 
+         # MSC4143: MatrixRTC – Real-time communication over Matrix
+         #
+         # Note that MSC4143 covers only the core of MatrixRTC. For servers, this
 diff --git a/synapse/handlers/profile.py b/synapse/handlers/profile.py
 index 112ac4c8c..596bfc5dd 100644
 --- a/synapse/handlers/profile.py

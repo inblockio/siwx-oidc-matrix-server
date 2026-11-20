@@ -53,15 +53,28 @@
 # schema-compatible: SCHEMA_VERSION 94 -> 95, SCHEMA_COMPAT_VERSION stays 84. See
 # patches/synapse/README.md "Rollback".
 #
+# Bumped to v1.165.0 (2026-11-20; released 2026-11-10). 1.165 drops Python 3.10
+# (the base image runs 3.13.18, unchanged from 1.164.1), stabilises MSC4143
+# (/_matrix/client/v1/rtc/transports is always served; the unstable twin and the
+# `livekit` transport type with `livekit_service_url` stay, so the entrypoint's
+# matrix_rtc block and experimental_features.msc4143_enabled are unchanged), and
+# carries 1.164.2's restored /auth_metadata endpoint. The MSC4133 patch needed ONE
+# re-anchor: hunk 2 of config/experimental.py, whose trailing context moved when
+# upstream rewrote the MSC4143 comment (patches/synapse/README.md, "Bump to
+# v1.165.0"). Rollback to v1.164.1 is schema-compatible (SCHEMA_VERSION 95 and
+# SCHEMA_COMPAT_VERSION 84 at both tags) with one condition: 1.165 queues the
+# background update users_lower_name, which 1.164.1 has no handler for, so it must
+# have finished before a rollback. See patches/synapse/README.md "Rollback".
+#
 # Pinned by tag AND by the multi-arch index digest: the tag says which release,
 # the digest fixes the bytes (a re-pushed tag cannot change what we build on),
 # and it also fixes the Debian release the apt step below resolves against. A
 # bump changes both; resolve the digest with
 #   skopeo inspect --raw docker://docker.io/matrixdotorg/synapse:vX.Y.Z | sha256sum
 # and run the bump procedure in patches/synapse/README.md first.
-FROM matrixdotorg/synapse:v1.164.1@sha256:fa4aa980f279bcf26d4e7ecc2a2c9a701c73f2ebe8841da9bdcf3b2fdf693d75
+FROM matrixdotorg/synapse:v1.165.0@sha256:673b4223c81a7634fd07d832b939a58f97081cfdaae7cdd2d1664cdcf7611b62
 # The release of the FROM line above; change both together.
-LABEL org.opencontainers.image.base.version="v1.164.1"
+LABEL org.opencontainers.image.base.version="v1.165.0"
 # yq, pinned by version and SHA-256 (was `.../releases/latest/download/...`,
 # which re-resolved to whatever was newest on every rebuild). Bump deliberately:
 # the version, the binary's checksum and the LICENSE's (below) change together.

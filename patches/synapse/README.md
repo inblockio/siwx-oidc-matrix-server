@@ -27,7 +27,7 @@ The rules are the same as `patches/element-web/README.md`, and for the same reas
 
    ```bash
    # Fetch the two files at the new tag and dry-run every patch against them.
-   TAG=v1.164.1
+   TAG=v1.165.0
    d=$(mktemp -d); mkdir -p "$d/synapse/config" "$d/synapse/handlers"
    for f in config/experimental handlers/profile; do
      curl -sSf "https://raw.githubusercontent.com/element-hq/synapse/$TAG/synapse/$f.py" \
@@ -329,6 +329,35 @@ bundle builds v0.9.0 and requires them); profile fields reject `null` values (#2
 unstable MSC2965 auth metadata endpoint and well-known key are removed (the stable
 `/_matrix/client/v1/auth_metadata` stays).
 
+**Bump to v1.165.0 (2026-11-20).** Reason: routine upstream bump (1.165.0 is dated 2026-11-10 and
+includes 1.164.2). Upstream lists no security advisory for it; its fixes are the TLS listener
+key-exchange groups (#20374), event signature checks after a notary returns a sooner-expiring
+key (#20406), a third-party invite error that became a 500 (#20401), an initial-sync membership
+race (#20433) and 1.164.2's restored unstable `/auth_metadata` endpoint (#20460). The image's
+installed packages differ from 1.164.1's in Authlib 1.6.12 -> 1.9.1 (joserfc added), pydantic
+2.12.5 -> 2.14.1, tornado 6.5.9 -> 6.6, rpds-py 0.30.0 -> 2026.9.1 and typing_extensions; Python
+is 3.13.18 at both tags (1.165 requires 3.11+, so the removal of 3.10 does not touch the image).
+**The patch needed one re-anchor.** Hunk 2 of `config/experimental.py` stopped applying: upstream
+rewrote the comment block above `msc4143_enabled` (MSC4143 stabilisation, #20425), and the hunk's
+three trailing context lines were that block. Its start line (now -253) and those three context
+lines were updated; the added lines are unchanged, so the behaviour is the same. The other four
+hunks apply as before (`handlers/profile.py` at +27 lines). Upstream PR #19980 is still open at
+head `d4758f2d2` (checked 2026-11-20), so the retirement condition is not met. Evidence: the
+patch applies with the Dockerfile's own command (`patch -p1 --forward --batch --fuzz=0`) in a
+throwaway container of the upstream image `matrixdotorg/synapse:v1.165.0@sha256:673b4223c81a…`;
+on an upstream v1.165.0 checkout carrying the patch this entry's seven tests pass and fail
+(3 failures) on the stock tag, and upstream's profile suites (`tests.rest.client.test_profile`,
+`tests.handlers.test_profile`, `tests.storage.test_profile`, `tests.config.test_experimental`,
+`tests.rest.synapse.mas`) run 212 tests with 0 failures (99 skipped); the `inblock_directory`
+tests (`synapse-modules/run-tests.sh`) pass at v1.165.0: 41 tests. What 1.165 changes for this
+bundle: nothing in `entrypoints/matrix_server.sh`. `GET /_matrix/client/v1/rtc/transports` is now
+always served; `experimental_features.msc4143_enabled` (written every boot) still gates only the
+unstable twin, and a `livekit` transport with `livekit_service_url` (what `apply_matrixrtc_config`
+writes) is still valid. The new stable `m.livekit` transport type requires `url`, which this
+bundle deliberately does not write (see the entrypoint comment on the application-service
+registration), so it is not adopted here. The experimental server announcement rooms
+(`synapse/config/server_announcements.py`) default to an empty list and are unset here.
+
 **Rollback (1.161.0 to 1.159.0).** Schema-compatible: `SCHEMA_VERSION` 94 and
 `SCHEMA_COMPAT_VERSION` 84 at both tags. But 1.161 queues three background updates
 that 1.159 has no handler for (`device_lists_changes_in_room_unconverted_idx`,
@@ -355,6 +384,18 @@ otherwise it is a no-op. Check before the bump with
 `SELECT update_name FROM background_updates WHERE update_name='event_edges_drop_invalid_rows';`.
 1.164 stops using `delayed_events_stream_pos`, so after a rollback 1.163 resumes delayed-event
 handling from a stale position (low impact). 1.164 queues no background update 1.163 lacks.
+
+**Rollback (1.165.0 to 1.164.1).** Schema-compatible: `SCHEMA_VERSION` 95 and
+`SCHEMA_COMPAT_VERSION` 84 at both tags, so 1.164.1 starts on a database that 1.165.0 has
+migrated. 1.165 adds two deltas, both under `95/`. `02_server_announcements.sql` creates the table
+`server_announcement_rooms`, which 1.164.1 ignores and which stays empty here (the feature is
+experimental and unset). `02_users_lower_name_index.sql` queues the background update
+`users_lower_name` (an index on `lower(name)` of `users`), and **1.164.1 has no handler for it**:
+while it is still pending, 1.164.1 logs `Error doing update` five times and stops running
+background updates altogether (the server keeps serving; checked in 1.164.1's
+`background_updates.py`, where an unknown update name is a `KeyError`). Check before rolling back
+that `SELECT update_name FROM background_updates WHERE update_name='users_lower_name';` returns no
+row; do not assume it has finished, it runs in the background after the first 1.165 start.
 
 **Retirement condition.** #19980 (or a successor implementing issue #18525) merges
 and ships in a Synapse release we have adopted, with the guard still exempting
