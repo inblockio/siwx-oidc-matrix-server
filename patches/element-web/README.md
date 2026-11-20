@@ -1372,6 +1372,13 @@ It is gated by `io.inblock.room_retention` and by the two gates of entry 14.
   stays upstream's `true` (same as Desktop).
 
 ---
+- **Ported to v1.12.35 (2026-11-20).** `WebPlatform.ts` and `WebPlatform.test.ts`, no behaviour change. Upstream added
+  `private updateCheckInterval?: number` right under `registerServiceWorkerPromise`, so the field hunk that added
+  `eventIndexManager` and `disabledEventIndexCleanedUp` now follows that line; the import hunk and the
+  `getEventIndexingManager` hunk are unchanged. The test file now wraps every `new WebPlatform()` in
+  `tearDownAfterTest(...)` (upstream's lint rule `require-test-teardown` covers `*Platform` classes), and the
+  eight platforms the added tests create follow that convention. Every other added/removed line is identical.
+
 
 ### 7. `show-attested-did.patch` — POLICY (permanent, deployment-specific)
 
@@ -1907,6 +1914,18 @@ It is gated by `io.inblock.room_retention` and by the two gates of entry 14.
   request answered 401 is retried once the app has refreshed its token; on `main`; serial
   mode skips it when SW-1 fails), plus the vitest file in the patch (`mediaTokenRetry.test.ts`)
   and the harness `live` mode.
+- **Ported to v1.12.35 (2026-11-20).** `apps/web/src/serviceworker/index.ts`: upstream changed `global.` to `self.` and
+  replaced the `@ts-expect-error` on `clients.get` with a typed lookup followed by `if (!client) throw`, so the hunk that
+  turned `const client` into an outer `let client` now reads `let client: Client | undefined` (was `unknown`; `getAuthData` takes a
+  `Client` since this release) and the helpers `waitForRefreshedAuth` and `pollForRefreshedAuth` take a `Client` too. The retry
+  condition gained `&& client`: `auth` is only set after the client was found, so it changes nothing and only narrows the type.
+  **One hunk dropped, because upstream now does what it did:** the patch made `askClientForUserIdParams` remove its message
+  listener when the 1 s wait times out; upstream replaced the per-request listener by one `message` listener plus a
+  `pendingUserInfoRequests` map and deletes the entry on timeout itself (checked in `index.ts` at v1.12.35), so there is no
+  listener left to remove. The `index` line of the `index.ts` section is the v1.12.35 blob of entry 9's result; entry 9's own
+  `index` line (v1.12.33 blobs) is unchanged, so the two no longer chain by blob id, which `git apply` does not read.
+  `mediaTokenRetry.test.ts` is unchanged and 6/6 green.
+
 
 ### 11. `copy-markdown.patch` - FEATURE, upstreamable (not filed; carry until upstream ships an equivalent)
 
@@ -2196,6 +2215,10 @@ It is gated by `io.inblock.room_retention` and by the two gates of entry 14.
   stock test file). The key-absent cases (stock behaviour) are in every one of them. **Coverage (rule 2):** Playwright leg:
   siwx-oidc `e2e/element/ew-room-retention.spec.mjs`, lands with the dev deploy (track room_retention M6); until then there is
   no browser leg, and the look of the picker (spacing of its hint) has not been seen in a browser.
+- **Ported to v1.12.35 (2026-11-20).** `MessagePanel.tsx`: upstream replaced two imports near the one this patch adds, so the
+  `isEventExpired, nextExpiryDelay` import hunk now follows `DateSeparatorWrapper`. Context only, every added/removed line is
+  identical.
+
 
 ### 14. `client-views-host.patch` - FEATURE, local (carried from our fork branch; carry until upstream ships an equivalent)
 
@@ -2285,6 +2308,19 @@ It is gated by `io.inblock.room_retention` and by the two gates of entry 14.
   entry changes (`UserMenu.tsx`), so the stage builds that package after the patches apply. **Coverage (rule 2):** no Playwright leg
   (the one carried upstream-side is the fixture-kit spec, left out); a browser leg that switches to the kit lands with the dev deploy
   (track room_retention). Until then no browser has seen the face in this image.
+- **Ported to v1.12.35 (2026-11-20).** Four context ports, no behaviour change. `PipContainer.tsx`: upstream added the
+  `documentPipStore` listener at the end of `componentDidMount` (Document Picture-in-Picture), so the patch's
+  `this.updateShowWidgetInPip()` call is the last statement after it, as before, and now also sees the document-PiP state.
+  `RoomListViewModel.ts`: upstream added `this.activeFilter = activeFilter;` above `this.roomsResult = roomsResult;`, so the
+  `lastSortAlgorithm` initialisation follows `this.sections = sections;`. `LatestRtcNotificationEventStore.test.ts` and
+  `RoomListViewModel.test.ts`: import context only (the former gained `onTestFinished`).
+  **Test harness fix:** `ClientViewGate.test.tsx` (3 of its 22 tests failed on the new tag). Upstream moved to happy-dom 21,
+  which gives an iframe a `contentWindow` only when it loads its page (`enableIframePageLoading`), and nothing is served under
+  test; happy-dom 20 gave it a blank window. The test now stands in an `EventTarget` as `contentWindow` before the first
+  `load` (`kitFrame()`), as a browser keeps the same window across a reload. Component code unchanged; the three tests
+  (G4 reload check, dropped deadline, way back after a failed reload) pass again, 22/22. Not listed in
+  `patch-tests-known-red.txt`.
+
 
 ### 15. `client-views-room-retention.patch` - FEATURE, local (our own feature, not an upstream defect; carry until upstream ships an equivalent)
 
@@ -2342,9 +2378,13 @@ It is gated by `io.inblock.room_retention` and by the two gates of entry 14.
 
 This is the only entry that is not a patch to Element Web: the file is
 [`patches/element-call/0180-bt-audio-output.patch`](../element-call/0180-bt-audio-output.patch)
-and it applies to **Element Call v0.26.1**
-(`9f7c35cd8f84b12f9395e6aac56fd396a3921482`, `element-hq/element-call`), copied byte for byte
-from the Element Call patch registry of the aqua-meet repository, where it is row `0180`.
+and it applies to **Element Call v0.28.2**
+(`b4dd44bd78c1296fb8c28519bfc41cb488d636fd`, `element-hq/element-call`). Up to v0.26.1 it was copied byte for
+byte from the Element Call patch registry of the aqua-meet repository, where it is row `0180`.
+At v0.28.2 (2026-11-20) it differs from that row in two places, both ours: the factory hook moved into the SDK
+(below), and `src/state/audioOutputGuard.ts` takes `Pick<SelectedAudioOutputDevice, "id">` instead of the whole
+device type (the guard only ever read the id). Its other files are aqua-meet's byte for byte (`MediaDevices.ts`
+with line offsets only). aqua-meet's own copy stays at v0.26.1 until it moves its tag.
 
 - **What:** Calls stay audible with Bluetooth headsets. Opening a headset's microphone
   switches it from stereo to hands-free mode, which can retire the output the call plays on.
@@ -2355,8 +2395,9 @@ from the Element Call patch registry of the aqua-meet repository, where it is ro
      there). No change when the default already plays there (Windows 11), for a built-in or
      USB microphone, or off Windows; an explicit choice wins. Upstream's `selectDevice$` is
      untouched.
-  2. New `state/audioOutputGuard.ts`, attached in `ConnectionFactory.ts` to every LiveKit room
-     (not when the host controls the devices): it holds the remote audio on Element Call's
+  2. New `state/audioOutputGuard.ts`, attached in `sdk/src/media-backend/livekit/ConnectionFactory.ts`
+     (`LivekitConnectionFactory`, where Element Call builds its LiveKit rooms since 0.28) to every room it
+     builds, **unconditionally** (see "Attachment since v0.28.2" below): it holds the remote audio on Element Call's
      chosen output; tries a failed switch once more after 1.5 s while the output is listed,
      then falls back to the browser default, as it does when the output is no longer listed;
      follows the choice only while the room is connected; 1.5 s after a device change, a
@@ -2368,39 +2409,60 @@ from the Element Call patch registry of the aqua-meet repository, where it is ro
      carried here, so in this image the state is reported and nothing displays it.
   3. Tests the patch adds or changes: `audioOutputGuard.test.ts` (11 tests, including a real
      LiveKit `Room` under a Firefox user agent: pinned without the guard, held with it),
-     `headsetOutput.test.ts` (7), and a `localParticipant` on the mock room of
-     `ECConnectionFactory.test.ts`.
+     `headsetOutput.test.ts` (7), and, at v0.28.2, one case in the SDK's `ConnectionFactory.test.ts` (a real room and
+     the real guard: the guard follows `audioOutputDeviceId$` once the room has connected and stops following it after
+     a disconnect). Up to v0.26.1 the third item was a `localParticipant` on the mock room of
+     `ECConnectionFactory.test.ts`; the SDK's factory test builds real rooms and needs no stub.
   The patch adds three files with the header "Copyright 2026 Aqua Meet contributors" and
   "SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial".
-- **How it reaches the image:** Element Web v1.12.33 does not build Element Call.
+- **Attachment since v0.28.2 (orchestrator ruling, 2026-11-20, recorded in STATE; the owner can overturn it).** Up to
+  v0.26.1 the guard was attached "not when the host controls the devices", read from `controlledAudioDevices`. Element
+  Call 0.28 moved the connection factory into the SDK (`sdk/`), which has no such flag: `CallViewModel` feeds the chosen
+  output to the client with `setAudioOutputDeviceId` only `if (!options.controlledAudioDevices)`, and the factory receives
+  it as `audioOutputDeviceId$`. The patch therefore attaches the guard to every room the factory builds, handing it that
+  behavior (mapped to `{ id }`, deduplicated), and keeps the gate by what the behavior carries. **Why that is equivalent for
+  the hosts that run this code:** in our image the Element Call widget is hosted by Element Web only, and Element Web never
+  sets `controlledAudioDevices` (no occurrence in its source at v1.12.35); native hosts (Element X) do not load this image's
+  `widgets/element-call/`. **One caveat, measured in the code, not an equivalence:** Element Call's own default is
+  `controlledAudioDevices = true` for a widget on a non-desktop user agent (`UrlConfiguration.ts`,
+  `configurationForIntent`), unless the URL says otherwise, so a phone browser that opens Element Web's call takes the
+  controlled path too. There the id is never fed, `held` stays undefined, and the guard never switches an output (`hold()`
+  returns at once); what still runs is its replay of the remote audio elements 1.5 s after a device change, a microphone
+  change or the microphone opening, and its autoplay-block reporting. Before the SDK these hosts had no guard at all.
+  **Layering exception:** the factory imports the guard from `src/state/audioOutputGuard.ts`
+  (`../../../../src/state/audioOutputGuard.ts`), the second place the SDK reaches into `src/` (upstream's direction is
+  `src` to `sdk`, `sdk/SdkArchitecture.md`; entry 17 has the first). Moving the guard into `sdk/` would drop the exception
+  but also move a file aqua-meet's row `0181` imports from `src/state/`; revisit when aqua-meet moves its tag.
+- **How it reaches the image:** Element Web v1.12.35 does not build Element Call.
   `apps/web/webpack.config.ts` (line 719) copies `dist/**` of the installed npm package
-  `@element-hq/element-call-embedded` (0.26.1 since v1.12.33, `apps/web/package.json` line 126) into
+  `@element-hq/element-call-embedded` (0.28.2 since v1.12.34, `apps/web/package.json` line 126) into
   `apps/web/webapp/widgets/element-call/`, so a patch to Element Web's source cannot reach
   it. `dockerfiles/Dockerfile.element` therefore has a stage `element-call` (on the base image
   of `deps`, by digest) that shallow-clones Element Call at `ELEMENT_CALL_TAG`
   (fails unless HEAD is `ELEMENT_CALL_COMMIT`), applies the patch with `git apply --verbose`
   and builds the way upstream's CI builds the embedded package (`corepack enable`, the
   `packageManager` its `package.json` pins (pnpm 11.21.0), `pnpm install --frozen-lockfile
-  --ignore-pnpmfile`, `VITE_APP_VERSION=embedded-v0.26.1-aqua.0180.0190 pnpm run
+  --ignore-pnpmfile`, `VITE_APP_VERSION=embedded-v0.28.2-aqua.0180.0190 pnpm run
   build:embedded:production`). Stage `deps` copies that `dist/` in and replaces the package's
   `dist/` with it, in the real directory of the package as resolved from `apps/web`, which is
   how `getPackageRoot` in the webpack config finds it (pnpm's store layout, resolved, not
   hard-coded); the directory is removed and recreated, never
   overwritten in place, because pnpm hard-links package files from its store. The webpack
   step is not edited: it copies what it finds, as before. The replacement fails the build
-  when the installed package's version is not `ELEMENT_CALL_STOCK_VERSION` (0.26.1).
-  **We serve v0.26.1 plus the patches where Element Web ships stock 0.26.1** (since v1.12.33;
-  up to v1.12.32 it shipped 0.26.0, an earlier Element Call release): the patches are
-  generated against the v0.26.1 tag.
-- **Base delta (v0.26.0 to v0.26.1, upstream's own changes, not ours):** `git diff v0.26.0
-  v0.26.1` in element-hq/element-call is six files. `src/state/MediaDevices.ts` puts the
-  virtual default output first (element-call#4244, which the patch's Firefox case builds on),
-  `src/state/CallViewModel/CallViewModel.ts` stamps `${userId}:${deviceId}` instead of a
-  uuid as the member id outside Matrix 2.0 mode (element-call#4266), `package.json` and `pnpm-lock.yaml` move
-  `@vector-im/compound-design-tokens` from 10.2.4 to 11.0.0 (#4270), and the rest is a test
-  and a compose file. Serving this image therefore also serves those changes. Rule 4 treats a bump
-  of the embedded Element Call as a normal part of an Element Web bump; a deploy of this
-  entry needs the real-browser user check of a call like any other build.
+  when the installed package's version is not `ELEMENT_CALL_STOCK_VERSION` (0.28.2).
+  **We serve v0.28.2 plus the patches where Element Web ships stock 0.28.2** (since v1.12.34;
+  v1.12.33 shipped 0.26.1, v1.12.32 and earlier 0.26.0): the patches are generated against the v0.28.2 tag.
+  The embedded `dist/` of 0.28 has no `config.json` (the embedded vite config turns `publicDir` off, and the npm package's
+  `dist/` has none either), so the stage's `test` lines no longer ask for one.
+- **Base delta (v0.26.1 to v0.28.2, upstream's own changes, not ours):** two minor releases. The large one is the SDK
+  extraction: Element Call's `src/state/CallViewModel/remoteMembers/` (connection, factory, manager), the publisher, the
+  local member and the key provider moved into `sdk/` (`@element-hq/matrixrtc-sdk`, aliased to `./sdk/index.ts` by the
+  build; `sdk/SdkMigration.md` in the tag lists what went where), and the app became a consumer of it. It also moves
+  matrix-js-sdk to 44.0.0 (`3f05dc4d104a`), whose `MatrixRTCSession` renamed `joinRTCSession` to `join` and
+  `leaveRoomSession` to `leave` (relevant to entry 17's tests). v0.28.2's own release note is one fix (an uncaught
+  exception in `downloadConfig`, element-call#4419). Serving this image therefore also serves those changes. Rule 4
+  treats a bump of the embedded Element Call as a normal part of an Element Web bump; a deploy of this entry needs the
+  real-browser user check of a call like any other build.
 - **Registry placement (rule 5 asks where a delta that is not a source patch goes):** this
   is a `.patch` file with a build stage that applies it, so it is a numbered entry here
   (rule 1) and `scripts/check-patch-registry.sh` requires the file, this entry, the
@@ -2440,7 +2502,7 @@ from the Element Call patch registry of the aqua-meet repository, where it is ro
   output on a device change and routes a Windows headset's call audio to its hands-free
   output, or Element Web moves to an embedded Element Call whose own release makes the patch
   obsolete. Check both at every `ELEMENT_WEB_TAG` bump (rule 4): if the new tag installs an
-  Element Call newer than v0.26.1, the build fails until the stage is rebased, and the rebase
+  Element Call newer than v0.28.2, the build fails until the stage is rebased, and the rebase
   is the moment to test whether the patch still applies and is still needed. When the
   patch is dropped and entry 17 is gone too, delete the `element-call` stage, the `deps`
   replacement, `patches/element-call/`, the rows of `markers.tsv`, the grammar line for
@@ -2449,9 +2511,12 @@ from the Element Call patch registry of the aqua-meet repository, where it is ro
   stays, only this patch's `COPY` and `git apply` lines, its file, its marker row and its
   README and NOTICE lines go.
 - **Coverage (rule 2):** none in this repository's CI beyond the marker, and plainly so. The
-  18 unit tests belong to the patched Element Call tree, and the `Element patch unit tests`
+  unit tests belong to the patched Element Call tree, and the `Element patch unit tests`
   job runs Element Web's tree, not Element Call's; they run in the aqua-meet repository
-  against this same patch file. There is no leg in the siwx-oidc Element suite
+  against the v0.26.1 form of this patch file. On the v0.28.2 form they were run once locally on 2026-11-20
+  (a clone of the tag with both patches applied, `pnpm exec vitest run --project unit`): `audioOutputGuard.test.ts` 11,
+  `headsetOutput.test.ts` 7 and the SDK `ConnectionFactory.test.ts` 7 (6 upstream, 1 ours), all green, together with
+  entry 17's files (136 tests in the eight files, 0 failed), and `tsc --noEmit` of that tree. There is no leg in the siwx-oidc Element suite
   (`e2e/element/`) either. What this repository proves is that the patch applied and its
   code reached the served bundle: the build fails on a missing marker
   (`[aqua-meet audio output]`, the guard's logger name, a row of `markers.tsv` in
@@ -2469,11 +2534,12 @@ from the Element Call patch registry of the aqua-meet repository, where it is ro
 
 The second entry that is not a patch to Element Web: the file is
 [`patches/element-call/0190-media-key-recovery.patch`](../element-call/0190-media-key-recovery.patch)
-(a `git format-patch` of one commit) and it applies to **Element Call v0.26.1**
-(`9f7c35cd8f84b12f9395e6aac56fd396a3921482`) **with entry 16 applied first**: it is generated on
-top of the tree that 0180 produces. It changes no file that 0180 changes. The same file is carried
+(a `git format-patch` of one commit) and it applies to **Element Call v0.28.2**
+(`b4dd44bd78c1296fb8c28519bfc41cb488d636fd`) **with entry 16 applied first**: it is generated on
+top of the tree that 0180 produces. It changes no file that 0180 changes. Up to v0.26.1 the same file was carried
 by the Element Call build of the aqua-meet repository (row `0190` of its Element Call patch
-registry).
+registry); the v0.28.2 form differs from that row in the places named under "Ported to v0.28.2" below, and
+aqua-meet's own copy stays at v0.26.1 until it moves its tag.
 
 - **What:** A call recovers when a media E2EE key is lost. Inside Element Call only; nothing in
   matrix-js-sdk or LiveKit changes. Nothing in `src/e2ee/matrixKeyProvider.ts` changes either.
@@ -2507,18 +2573,39 @@ registry).
   4. Wiring: `installKeyRecovery(client, roomId)` in `widget.ts` (once per client),
      `bindKeyRecoverySession` in `room/useLoadGroupCall.ts` (the call's session: join state and
      received keys), and the encryption error, participant-gone and connection-closed events in
-     `remoteMembers/Connection.ts`.
+     the LiveKit connection: `remoteMembers/Connection.ts` up to v0.26.1, `sdk/src/media-backend/livekit/Connection.ts`
+     since 0.28 (see "Ported to v0.28.2" below).
   5. Tests the patch adds or changes: `keyRecovery.test.ts` (81 tests) and `keyRecoveryWiring.test.ts`
      (8; the real `RoomWidgetClient` with a mocked widget API and the real `MatrixRTCSession`),
-     `room/useLoadGroupCall.test.tsx` (2) and added cases in `remoteMembers/Connection.test.ts` and
-     `widget.test.ts`; the five files together are 110 tests, all passing on the patched tree
-     (v0.26.1, 16 and 17).
+     `room/useLoadGroupCall.test.tsx` (2) and added cases in the connection's `Connection.test.ts` and
+     `widget.test.ts`; the five files together were 110 tests, all passing on the patched tree
+     (v0.26.1, 16 and 17). On v0.28.2 the same five files (SDK `Connection.test.ts` is 16 tests with the five added
+     cases, `widget.test.ts` 4) are green with 16 and 17 applied.
   The patch adds four files with the header "Copyright 2026 Aqua Meet contributors" and
   "SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial".
+- **Ported to v0.28.2 (2026-11-20, orchestrator ruling recorded in STATE; the owner can overturn it).** Seven of the nine
+  files apply unchanged (`keyRecovery.ts`, its two test files, `useLoadGroupCall.ts` and its test, `widget.ts`,
+  `widget.test.ts`). **The connection hook moved into the SDK:** `src/state/CallViewModel/remoteMembers/Connection.ts` is
+  `sdk/src/media-backend/livekit/Connection.ts` since 0.28, and the five added test cases are in its `Connection.test.ts`
+  (they build the connection through the SDK's `connectionOpts()`). The hook is the same four edits at the same places:
+  `onParticipantDisconnected`, `onEncryptionError` (remote participants only), a `RoomEvent.Disconnected` listener and the
+  same call from `scope.onEnd`. **Layering exception:** the connection imports `getKeyRecoveryWatchdog` from
+  `src/e2ee/keyRecovery.ts` (`../../../../src/e2ee/keyRecovery.ts`), the one place in the SDK that reaches into `src/`
+  together with entry 16's guard import (upstream's direction is `src` to `sdk`). Why: the watchdog is wired to the widget
+  client and the session in `src/`, and the room events it needs are only seen inside the connection; the other ways
+  (an SDK extension point, or observing `RTCMember.encryptionError$` from `src/`) would change which identity and which
+  room the watchdog's episodes are keyed on, a behaviour change this entry does not make. **The session binding is
+  still the call's session:** `useLoadGroupCall` binds `client.matrixRTC.getRoomSession(room)`, and the SDK's
+  `createRTCSlot` takes the same session for the default slot (`m.call`, `ROOM`), which is the one `InCallView` uses.
+  **Test harness ports in `keyRecoveryWiring.test.ts`** (it runs the real `MatrixRTCSession` from matrix-js-sdk 44.0.0): the
+  session's `joinRTCSession` and `leaveRoomSession` are now `join` and `leave`, `join` takes the published transports as its
+  second argument (the old `focus_active` third argument is gone), `_onRTCSessionMemberUpdate()` is the public
+  `ensureRecalculateSessionMembers()`, and the join config's `makeKeyDelay` (deprecated, unused by the new encryption
+  manager) is `useKeyDelay`. All 8 tests pass; the `keyRecovery.ts` code itself needed no change.
 - **How it reaches the image:** exactly like entry 16 (read "How it reaches the image" there). The
   `element-call` stage copies the patch and applies it with `git apply --verbose` right after 0180,
   with no `--3way`, so a patch that stops applying fails the image build; `VITE_APP_VERSION` names
-  both patches (`embedded-v0.26.1-aqua.0180.0190`); stage `deps` replaces the installed package's
+  both patches (`embedded-v0.28.2-aqua.0180.0190`); stage `deps` replaces the installed package's
   `dist/` with the stage's build. No other build step changes.
 - **Why:** MatrixRTC sends a member's media key once, to each device that joins. If that single
   to-device message does not get through, nothing sends it again in a 1:1 call, and the media stays
@@ -2529,14 +2616,19 @@ registry).
 - **Evidence:**
   - Production, 2026-10-23 and 2026-10-24: 8 connected 1:1 calls were silent until a redial.
   - The stock code, matrix-js-sdk `24929be0e741be6a5d0a7226f1c682e245263b8a` (the revision
-    Element Call v0.26.1's `pnpm-lock.yaml` pins): `src/matrixrtc/RTCEncryptionManager.ts` lines
+    Element Call v0.26.1's `pnpm-lock.yaml` pinned): `src/matrixrtc/RTCEncryptionManager.ts` lines
     389 to 459 (a key is re-sent only on a membership change) and
-    `src/matrixrtc/ToDeviceKeyTransport.ts` lines 102 to 116 (the swallowed send).
+    `src/matrixrtc/ToDeviceKeyTransport.ts` lines 102 to 116 (the swallowed send). Re-read on 2026-11-20 at matrix-js-sdk
+    `3f05dc4d104a3dfc753c5e3549a18c74fab4b076` (what Element Call v0.28.2's lockfile pins): the same two behaviours hold,
+    now at `RTCEncryptionManager.ts` `ensureKeyDistribution` (line 289) and `onMembershipsUpdate` (line 355), and
+    `ToDeviceKeyTransport.ts` lines 91 to 137 (the `.catch` that rethrows only the unsupported-action case, then
+    `roomEventEncryptionKeysSent += 1`).
   - Upstream: [element-hq/element-call#4127](https://github.com/element-hq/element-call/issues/4127)
     ("Media undecryptable (one-way video) in self-hosted MatrixRTC+LiveKit, 'No targets found for
     sending key'"), open since 2026-07-28.
   - Marker proof: "Marker discrimination record" below (2026-10-24).
-- **Upstream status:** UPSTREAM DEFECT, filed as #4127 (open, no fix). Product owner ruling
+- **Upstream status:** UPSTREAM DEFECT, filed as #4127 (open, no fix; checked 2026-11-20: still open, last activity
+  2026-09-11, and v0.28.2's release note has no fix for it). Product owner ruling
   (Tim, CTO, 2026-10-24): "a, fix upstream and carry the patch". We carry this patch until
   upstream ships a fix; proposing the fix upstream is a separate step that this entry does not
   claim to have happened.
@@ -2549,7 +2641,8 @@ registry).
 - **Coverage (rule 2):** none in this repository's CI beyond the marker, and plainly so, as for
   entry 16. The tests belong to the patched Element Call tree, and the `Element patch unit tests`
   job runs Element Web's tree; they run in the aqua-meet repository against this same patch file
-  and were run for this entry on the tree of v0.26.1 with 16 and 17 applied. There is no leg in
+  and were run for this entry on the tree of v0.26.1 with 16 and 17 applied, and once locally on v0.28.2 with both
+  applied (2026-11-20; see entry 16's Coverage). There is no leg in
   the siwx-oidc Element suite (`e2e/element/`): the failure needs a lost to-device message, which
   the suite does not produce. What this repository proves is that the patch applied and its code
   reached the served bundle: the build fails on a missing marker (`[KeyRecovery]`, the log prefix of
@@ -2640,6 +2733,45 @@ builds, so `ELEMENT_CALL_STOCK_VERSION` moves to 0.26.1 and entries 16 and 17 (1
 
 Gate on the patched v1.12.33 tree: the `Element patch unit tests` job (`patch-tests` stage)
 of the bump pull request.
+
+**v1.12.33 -> v1.12.35 bump (2026-11-20), per-patch outcome** (rule 4 against a pristine `v1.12.35`,
+`7001d81efc9f` (the commit; the annotated tag object is `0abdaa91`), in Dockerfile order). Reason: 1.12.34 carries two
+security fixes (GHSA-jx97-gwvc-pfxx, GHSA-pqp6-f7wc-6498; the advisory texts were not public when checked, the GitHub
+advisory API answered 404 for both); 1.12.35 adds only a synchronous safeStorage fallback (#35807). No retirement
+condition is met and none of the patched behaviours is in the 1.12.34 or 1.12.35 release notes. Rule 4b run the same
+day: no linked upstream item changed state, entry 9 has 0 differing added/removed lines against PR #35242
+(still open), element-call#4127 (entry 17) is still open.
+Element Web 1.12.34 moved `@element-hq/element-call-embedded` from 0.26.1 to 0.28.2 (and
+`@element-hq/element-call-component` from a git commit to npm `0.28.1`), so the `element-call` stage was rebased as
+rule 4 requires: new `ELEMENT_CALL_TAG` and `ELEMENT_CALL_COMMIT`, `ELEMENT_CALL_STOCK_VERSION` 0.28.2.
+
+| # | Patch | Outcome at v1.12.35 |
+|---|---|---|
+| 1 to 5 | | apply unchanged (line offsets only) |
+| 6 | `browser-eventindex` | **ported**, `WebPlatform.ts` field hunk and `WebPlatform.test.ts` (see entry 6) |
+| 7 to 9 | | apply unchanged |
+| 10 | `sw-media-401-token-retry` | **ported**, service worker refactor, one hunk dropped because upstream does it (see entry 10) |
+| 11, 12 | | apply unchanged |
+| 13 | `room-retention` | **ported**, one import line in `MessagePanel.tsx` (see entry 13) |
+| 14 | `client-views-host` | **ported**, `PipContainer`, `RoomListViewModel` and two test import blocks; `ClientViewGate.test.tsx` fixed for happy-dom 21 (see entry 14) |
+| 15 | `client-views-room-retention` | applies unchanged once 14 is ported |
+| 16 | `0180-bt-audio-output` | **ported to Element Call v0.28.2**, factory hook into the SDK, unconditional attachment (see entry 16) |
+| 17 | `0190-media-key-recovery` | **ported to Element Call v0.28.2**, connection hook into the SDK, tests ported to js-sdk 44.0.0 (see entry 17) |
+
+Checks run locally on 2026-11-20 (not a deployed artefact): all fifteen Element Web patches applied in Dockerfile order
+to a fresh clone of the tag give the same tree as the ported working tree; `scripts/element-patch-tests.sh` on that tree
+(vitest 5.0.5, happy-dom 21.0.3, 72 files): 71 pass and one file has two red tests, both of them the wall-clock
+budgets of `eventToMarkdown.test.ts` (entry 11, "a 64 KiB body compares in under 500 ms", 556 ms and 839 ms) on a host
+at a load average of about 30; the same file passed those cases at 235 to 358 ms in the same run and its code is
+untouched by this bump, so they are a measurement of the host, not of the patch. They are NOT listed in
+`patch-tests-known-red.txt`; the gate is the `Element patch unit tests` job of the bump pull request. `tsc --noEmit`
+in `apps/web` of the patched tree: 3 errors, all in entry 14's `client-views/ViewModelBridge.ts` and its test (typed `_t`
+keys that live in `shared-components`' catalog, `_t("timeline|message_shared_by", ...)` and
+`timeline|decryption_failure|historical_*`); none is in a file this bump changed, `languageHandler.ts` re-exports the same
+`_t` at v1.12.33, and the webpack build does not type-check, so they do not stop the image. Not run at v1.12.33, so
+whether they predate the bump is inferred, not measured; an owner of entry 14 should take them. The Element Call tree of the stage (the tag plus 16 and 17,
+`git apply --verbose` in the stage's order) type-checks with 0 errors, its eight patch test files (136 tests) pass, and
+`pnpm run build:embedded:production` of it succeeds locally with both markers in the one `assets/index-*.js` chunk.
 
 ## Marker discrimination record
 
@@ -2782,6 +2914,16 @@ What the table does not say, and the choices behind it:
   1-14, `git grep`). **Candidate:** the patch adds the key (and `face_notice_off`) to `en_EN.json` and uses it in `ViewModelBridge.ts`.
   **Unproven until the Dockerfile's marker loop runs in CI:** that the built `i18n/en_EN.<hash>.json` carries the key (it does for
   entry 11's `copy_markdown`, which is also a key, and for entry 14's `labs|client_views_description` text).
+- **Entries 16 and 17 (2026-11-20), re-proved at Element Call v0.28.2.** Markers unchanged (`[aqua-meet audio output]`,
+  `[KeyRecovery]`, both in `widgets/element-call/assets/index-*.js`). **Candidate:** a local
+  `pnpm run build:embedded:production` of the v0.28.2 tag with entries 16 and 17 applied in the stage's order
+  (`VITE_APP_VERSION=embedded-v0.28.2-aqua.0180.0190`, not the Docker image and not a deployed artefact) writes one
+  entry chunk, `assets/index-BIUz3t7Z.js`, which carries each marker once and which `index.html` names. **Stock:** the
+  `dist/` of `@element-hq/element-call-embedded@0.28.2` as pnpm installed it for Element Web v1.12.35 (13 `.js` files,
+  `assets/index-CqnG6OLe.js` is the entry chunk): 0 occurrences of either marker in any file. The glob still names exactly
+  one file on both sides. The stock package's `dist/` differs from a local build in chunks that upstream's CI adds (a
+  Sentry release-injection file, a `rolldown-runtime` chunk, an `indexeddb-crypto-store` chunk); sizes are alike (45 MB each).
+  The image build's own marker loop was not run for this entry: the image is built by CI.
 - **To re-prove after a tag bump or a new entry:** extract `/app` of the new build and of the stock
   image for the new tag, serve each from a loopback static server, and run
   `scripts/element-patch-markers.sh --absent <every entry> http://127.0.0.1:<port>` against stock
