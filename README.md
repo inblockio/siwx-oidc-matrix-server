@@ -242,9 +242,9 @@ that refuses to run without the patch, MatrixRTC experimental features (MSC4108,
 MSC4143, MSC3266, MSC4222), delayed-event and message rate limits, retention off by
 default, server notices, and `serve_server_wellknown: false`.
 
-**Element Web: 15 patches, and 2 for the Element Call build it serves**, applied in this
+**Element Web: 16 patches, and 2 for the Element Call build it serves**, applied in this
 order by `dockerfiles/Dockerfile.element` with `git apply`; the order of 1-11 is
-load-bearing, and 13, 14 and 15 are applied after 12. Registry (all seventeen entries):
+load-bearing, and 13 to 16 are applied after 12. Registry (all eighteen entries):
 [`patches/element-web/README.md`](patches/element-web/README.md).
 
 1. [`force-first-device-recovery.patch`](patches/element-web/force-first-device-recovery.patch):
@@ -308,7 +308,14 @@ load-bearing, and 13, 14 and 15 are applied after 12. Registry (all seventeen en
     becomes a system line. It builds on 13 and 14 and has no effect without the
     `io.inblock.room_retention` key (entry 13) and the two gates of entry 14. FEATURE, local,
     not proposed upstream.
-16. [`0180-bt-audio-output.patch`](patches/element-call/0180-bt-audio-output.patch):
+16. [`room-retention-indicator.patch`](patches/element-web/room-retention-indicator.patch):
+    a room whose messages are deleted automatically (its `m.room.retention` `max_lifetime`)
+    shows a clock before its name in the room list ("Messages are deleted after 2 weeks" as
+    label and tooltip) and a line under the name in the room header ("Messages here are deleted
+    after 2 weeks"), live as the setting changes; the Rocket.Chat face gets the same two through
+    `ViewRoom.retention` and the kit. Only with the `io.inblock.room_retention` key (entry 13).
+    FEATURE, local, not proposed upstream.
+17. [`0180-bt-audio-output.patch`](patches/element-call/0180-bt-audio-output.patch):
     a patch to **Element Call v0.28.2**, not to Element Web. The image builds Element
     Call's embedded widget from source with it (stage `element-call`) and serves that
     build instead of the npm package Element Web installs. Calls stay audible with
@@ -316,9 +323,9 @@ load-bearing, and 13, 14 and 15 are applied after 12. Registry (all seventeen en
     audio on the chosen output across device and microphone changes, and autoplay-block
     reporting. Element Call is AGPL-3.0-only OR LicenseRef-Element-Commercial; this file
     is the source offer for the modification. UPSTREAM DEFECT, deliberately not filed.
-17. [`0190-media-key-recovery.patch`](patches/element-call/0190-media-key-recovery.patch):
+18. [`0190-media-key-recovery.patch`](patches/element-call/0190-media-key-recovery.patch):
     a second patch to **Element Call v0.28.2**, applied in the same `element-call` stage
-    after 16. A call recovers when a media E2EE key is lost: the widget client's call-key
+    after 17. A call recovers when a media E2EE key is lost: the widget client's call-key
     to-device sends are retried and sent again, and a watchdog re-sends our own call
     membership with a fresh `created_ts` when a remote stays undecryptable without a key.
     Without it a 1:1 call whose key does not get through stays silent until a redial.

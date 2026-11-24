@@ -192,6 +192,10 @@ module.exports = {
 		replaceFile(/composer\/VideoMessageRecorder\/VideoMessageRecorder\.tsx$/, src('video-message-recorder.tsx')),
 		// M12 X4, reason class "D41 hide": Element's connection bar has no retry; the client reconnects itself.
 		replaceFile(/components\/connectionStatus\/ConnectionStatusBar\.tsx$/, src('connection-status-bar.tsx')),
+		// Room retention indicator (owner's ruling 2026-11-24), reason class "retention indicator": the sidebar row and the
+		// header title wrap the originals and add the host's clock and text for a room whose messages are deleted automatically.
+		replaceFile(/client\/sidebar\/RoomList\/SidebarItemTemplateWithData\.tsx$/, src('sidebar-item-retention.tsx')),
+		replaceFile(/client\/views\/room\/Header\/RoomTitle\.tsx$/, src('room-title-retention.tsx')),
 		new webpack.DefinePlugin({
 			'process.env.NODE_ENV': JSON.stringify('development'),
 			'process.env.TEST_MODE': JSON.stringify(''),

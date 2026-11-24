@@ -107,6 +107,8 @@ describe('CAPABILITIES.md', () => {
 				['encryption-event', 'shown', 'interim (D41)'],
 				['retention-notice', 'shown', 'wired'],
 				['retention-expired', 'shown', 'wired'],
+				['retention-indicator-list', 'shown', 'wired'],
+				['retention-indicator-header', 'shown', 'wired'],
 				['skip-to-main-content', 'shown', 'wired'],
 			],
 		);

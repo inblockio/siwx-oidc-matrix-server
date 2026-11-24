@@ -42,6 +42,24 @@ export interface ViewRoom {
     showsUnread?: boolean;
     /** The room's notification level (the item's `roomNotifState`). */
     notificationLevel: ViewNotificationLevel;
+    /**
+     * The room's messages are deleted automatically: its `m.room.retention` (state key "") has a positive integer
+     * `max_lifetime`, and Element's config key `io.inblock.room_retention` is set. Absent otherwise (always without the
+     * key). Read from the room state, as the room list item's clock (`retentionLabel`) is. A host without the field sets none.
+     */
+    retention?: ViewRoomRetention;
+}
+
+/** A room's automatic message clean-up, with Element's own texts for it (already translated). */
+export interface ViewRoomRetention {
+    /** The room's `max_lifetime` in milliseconds. */
+    maxLifetimeMs: number;
+    /** The period as Element's Disappearing messages picker names it (a configured label, e.g. "2 weeks", or "Custom (...)"). */
+    period: string;
+    /** The room list clock's accessible label and tooltip, "Messages are deleted after 2 weeks". */
+    listLabel: string;
+    /** The room header's line, shown without hovering, "Messages here are deleted after 2 weeks". */
+    headerText: string;
 }
 
 /** M6 B1: a custom room-list section (Element's `RoomList.CustomSectionData`), `tag` opaque, `order` Element's (0 = top). */
