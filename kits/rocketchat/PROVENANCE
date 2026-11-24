@@ -3,7 +3,7 @@ repo:    inblockio/element-views-track (private), path kits/rocketchat
 commit:  8b1463e025dce6509c9440a5c4e6cad2ec16406f (main, 2026-11-08T06:59:45+01:00, "M14 close Trace");
          last commit touching the path: a38bd7dcb2954de9406ee08db1b30200c074ecfd (2026-11-08T03:08:07+01:00)
 vendored: 2026-11-18, by `git archive <commit> kits/rocketchat`, every tracked file, unmodified (125 files, 832743 bytes); the changes listed in the last section came after
-manifest: MANIFEST.sha256 (sha256 of each file, LC_ALL=C sorted path order; it lists the 125 vendored files and, since M4, the 2 files added then: 127 lines, the yarn lock and its NOTE are not in it); sha256 of MANIFEST.sha256 = 9668d2df73a31e219eb96bc4499cdc17edca2789b39353312717c45bc86c757a
+manifest: MANIFEST.sha256 (sha256 of each file, LC_ALL=C sorted path order; it lists the 125 vendored files, the 2 files added in M4 and the 4 added by the retention indicator: 131 lines, the yarn lock and its NOTE are not in it); sha256 of MANIFEST.sha256 = 4d29d79171098ce03169173761de785ff4847e5061b56bb295a045013f6fefcc
 not vendored: the test kit kits/fixture-list (never part of the image)
 Why vendored: the source repo is private, a GitHub Actions build of this repo has no credentials for it.
 Refresh: see docs/element-web-source-build.md, section "Rocket.Chat kit stage".
@@ -23,4 +23,19 @@ added    test/retention-type.test.ts  the type registration
 changed  CAPABILITIES.md              Room Information line (Disappearing messages entry), rows retention-notice and retention-expired
 changed  PROVENANCE                   this section, the manifest line
 changed  NOTICE                       the kit's own files: Copyright 2026 inblock.io, AGPL-3.0-only (the owner's ruling of 2026-11-18; was "to be confirmed", "proposed")
+changed  MANIFEST.sha256              regenerated for the files above
+
+Changes on top of the provenance commit (room retention indicator, owner's ruling 2026-11-24; registry entry 16 of
+patches/element-web/README.md is its host half). Same rule as the section above: MANIFEST.sha256 holds the changed state.
+changed  src/bridge-types.ts          ViewRoom gains the optional `retention` (ViewRoomRetention: period, list label, header text)
+changed  src/adapter/map.ts           toRoom and toSubscription carry `retentionIndicator` (absent for a room without clean-up)
+changed  src/adapter/source.ts        a change of the indicator is a later subscription update (the sidebar row re-renders)
+changed  webpack.config.js            two swaps: SidebarItemTemplateWithData -> sidebar-item-retention, RoomTitle -> room-title-retention
+added    src/retention-indicator.ts   the `retentionIndicator` field: from ViewRoom.retention, read back from a document (pure)
+added    src/sidebar-item-retention.tsx  wraps the sidebar row: a clock before the name, label and tooltip = the host's text
+added    src/room-title-retention.tsx    wraps the header title: a clock and the host's text after the title, visible
+changed  CAPABILITIES.md              rows retention-indicator-list and retention-indicator-header
+changed  test/capabilities.test.ts    the expected row list gains the two rows
+added    test/retention-indicator.test.ts  fields, mapping, live updates in the source, the two swaps
+changed  PROVENANCE                   this section, the manifest line
 changed  MANIFEST.sha256              regenerated for the files above

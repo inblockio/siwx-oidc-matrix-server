@@ -1,0 +1,1134 @@
+diff --git a/apps/web/res/css/views/rooms/_RoomHeader.pcss b/apps/web/res/css/views/rooms/_RoomHeader.pcss
+index 905e035..536da02 100644
+--- a/apps/web/res/css/views/rooms/_RoomHeader.pcss
++++ b/apps/web/res/css/views/rooms/_RoomHeader.pcss
+@@ -78,6 +78,15 @@ Please see LICENSE files in the repository root for full details.
+     flex-shrink: 0;
+ }
+ 
++/* The automatic message clean-up line under the room name (only for a room with m.room.retention) */
++.mx_RoomHeader_retention {
++    display: flex;
++    gap: var(--cpd-space-1x);
++    align-items: center;
++    min-width: 0;
++    color: var(--cpd-color-text-secondary);
++}
++
+ .mx_RoomHeader .mx_FacePile {
+     color: $secondary-content;
+     background: $background;
+diff --git a/apps/web/src/client-views/ViewModelBridge.retentionIndicator.test.ts b/apps/web/src/client-views/ViewModelBridge.retentionIndicator.test.ts
+new file mode 100644
+index 0000000..827b56a
+--- /dev/null
++++ b/apps/web/src/client-views/ViewModelBridge.retentionIndicator.test.ts
+@@ -0,0 +1,184 @@
++/*
++ * Copyright 2026 inblock.io
++ *
++ * SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++ * Please see LICENSE files in the repository root for full details.
++ */
++
++// @vitest-environment happy-dom
++
++import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
++import { type MatrixClient, PendingEventOrdering, Room, RoomStateEvent } from "matrix-js-sdk/src/matrix";
++import { stubClient, flushPromises, mkEvent } from "test-utils";
++
++import { ViewModelBridge } from "./ViewModelBridge";
++import RoomListStoreV3 from "../stores/room-list-v3/RoomListStoreV3";
++import { SortingAlgorithm } from "../stores/room-list-v3/skip-list/sorters";
++import { SDKContextClass } from "../contexts/SDKContextClass";
++import { CHATS_TAG } from "../stores/room-list-v3/section";
++import DMRoomMap from "../utils/DMRoomMap";
++import SdkConfig from "../SdkConfig";
++import { ROOM_RETENTION_CONFIG_KEY, ROOM_RETENTION_EVENT_TYPE } from "../utils/RoomRetention";
++
++/*
++ * The room list of the face carries each room's automatic message clean-up (`ViewRoom.retention`), from the room's
++ * `m.room.retention`, only while `io.inblock.room_retention` is set, and follows the setting live. Real room list
++ * view-model, bridge and rooms; only the store's list and the open room are faked.
++ */
++
++/** The retention key is not in the typed config: put it in untyped, as the app reads it. */
++const putConfig = (config: object): void => SdkConfig.put(config as Parameters<typeof SdkConfig.put>[0]);
++
++const DAY = 86400000;
++const ON = {
++    [ROOM_RETENTION_CONFIG_KEY]: {
++        choices: [
++            { ms: DAY, label: "1 day" },
++            { ms: 14 * DAY, label: "2 weeks" },
++        ],
++    },
++};
++const TWO_WEEKS = {
++    maxLifetimeMs: 14 * DAY,
++    period: "2 weeks",
++    listLabel: "Messages are deleted after 2 weeks",
++    headerText: "Messages here are deleted after 2 weeks",
++};
++
++describe("ViewModelBridge: ViewRoom.retention", () => {
++    let client: MatrixClient;
++    let bridge: ViewModelBridge | undefined;
++    let meeting: Room;
++    let plain: Room;
++
++    function setPolicy(room: Room, content: object, stateKey = ""): void {
++        room.currentState.setStateEvents([
++            mkEvent({
++                event: true,
++                type: ROOM_RETENTION_EVENT_TYPE,
++                room: room.roomId,
++                user: "@admin:server",
++                skey: stateKey,
++                content,
++            }),
++        ]);
++    }
++
++    const retentionOf = (room: Room): unknown => bridge!.rooms().find((r) => r.id === room.roomId)?.retention;
++    const hasKey = (room: Room): boolean => "retention" in (bridge!.rooms().find((r) => r.id === room.roomId) ?? {});
++    const start = async (): Promise<void> => {
++        bridge = new ViewModelBridge(client);
++        await flushPromises();
++    };
++
++    beforeEach(() => {
++        client = stubClient();
++        vi.spyOn(client, "getCrypto").mockReturnValue(undefined);
++        const mk = (id: string, name: string): Room => {
++            const room = new Room(id, client, client.getSafeUserId(), {
++                pendingEventOrdering: PendingEventOrdering.Detached,
++            });
++            room.name = name;
++            return room;
++        };
++        meeting = mk("!meeting:server", "Meeting");
++        plain = mk("!plain:server", "Plain");
++        vi.spyOn(client, "getRoom").mockImplementation((id) => [meeting, plain].find((r) => r.roomId === id) ?? null);
++        DMRoomMap.setShared({ getUserIdForRoomId: vi.fn().mockReturnValue(null) } as unknown as DMRoomMap);
++        vi.spyOn(RoomListStoreV3.instance, "getSortedRoomsInActiveSpace").mockImplementation(() => ({
++            spaceId: "home",
++            sections: [{ tag: CHATS_TAG, rooms: [meeting, plain] }],
++        }));
++        vi.spyOn(RoomListStoreV3.instance, "isLoadingRooms", "get").mockReturnValue(false);
++        vi.spyOn(RoomListStoreV3.instance, "activeSortAlgorithm", "get").mockReturnValue(SortingAlgorithm.Recency);
++        vi.spyOn(SDKContextClass.instance.spaceStore, "activeSpaceRoom", "get").mockReturnValue(null);
++        vi.spyOn(SDKContextClass.instance.roomViewStore, "getRoomId").mockReturnValue(null);
++    });
++
++    afterEach(() => {
++        bridge?.dispose?.();
++        bridge = undefined;
++        SdkConfig.reset();
++        vi.restoreAllMocks();
++    });
++
++    it("has no retention field without the config key, also for a room with a policy, and watches nothing", async () => {
++        setPolicy(meeting, { max_lifetime: 14 * DAY });
++        const before = meeting.listenerCount(RoomStateEvent.Events);
++        await start();
++        expect(bridge!.rooms().map((r) => r.id)).toEqual([meeting.roomId, plain.roomId]);
++        expect(hasKey(meeting)).toBe(false);
++        expect(hasKey(plain)).toBe(false);
++        expect(meeting.listenerCount(RoomStateEvent.Events)).toBe(before);
++    });
++
++    it("puts the period and Element's texts on the room with clean-up, and nothing on the room without", async () => {
++        putConfig(ON);
++        setPolicy(meeting, { max_lifetime: 14 * DAY });
++        await start();
++        expect(retentionOf(meeting)).toEqual(TWO_WEEKS);
++        expect(hasKey(plain)).toBe(false);
++    });
++
++    it("refreshes the field live and emits a rooms change: on, changed, off", async () => {
++        putConfig(ON);
++        await start();
++        const onChange = vi.fn();
++        bridge!.onChange(onChange);
++        expect(hasKey(meeting)).toBe(false);
++
++        setPolicy(meeting, { max_lifetime: 14 * DAY });
++        await flushPromises();
++        expect(retentionOf(meeting)).toEqual(TWO_WEEKS);
++        expect(onChange).toHaveBeenCalledWith({ kind: "rooms" });
++
++        onChange.mockClear();
++        setPolicy(meeting, { max_lifetime: DAY });
++        await flushPromises();
++        expect(retentionOf(meeting)).toEqual({
++            maxLifetimeMs: DAY,
++            period: "1 day",
++            listLabel: "Messages are deleted after 1 day",
++            headerText: "Messages here are deleted after 1 day",
++        });
++        expect(onChange).toHaveBeenCalledWith({ kind: "rooms" });
++
++        onChange.mockClear();
++        setPolicy(meeting, { min_lifetime: 0 });
++        await flushPromises();
++        expect(hasKey(meeting)).toBe(false);
++        expect(onChange).toHaveBeenCalledWith({ kind: "rooms" });
++        expect(hasKey(plain)).toBe(false);
++    });
++
++    it("ignores a retention event under another state key and other state events", async () => {
++        putConfig(ON);
++        await start();
++        const onChange = vi.fn();
++        bridge!.onChange(onChange);
++        setPolicy(meeting, { max_lifetime: DAY }, "other");
++        meeting.currentState.setStateEvents([
++            mkEvent({
++                event: true,
++                type: "m.room.topic",
++                room: meeting.roomId,
++                user: "@a:server",
++                skey: "",
++                content: {},
++            }),
++        ]);
++        await flushPromises();
++        expect(hasKey(meeting)).toBe(false);
++        expect(onChange).not.toHaveBeenCalledWith({ kind: "rooms" });
++    });
++
++    it("stops watching the rooms when disposed", async () => {
++        putConfig(ON);
++        const before = meeting.listenerCount(RoomStateEvent.Events);
++        await start();
++        expect(meeting.listenerCount(RoomStateEvent.Events)).toBeGreaterThan(before);
++        bridge!.dispose();
++        expect(meeting.listenerCount(RoomStateEvent.Events)).toBe(before);
++        bridge = undefined;
++    });
++});
+diff --git a/apps/web/src/client-views/ViewModelBridge.ts b/apps/web/src/client-views/ViewModelBridge.ts
+index 60c7813..00d1493 100644
+--- a/apps/web/src/client-views/ViewModelBridge.ts
++++ b/apps/web/src/client-views/ViewModelBridge.ts
+@@ -97,6 +97,7 @@ import {
+     maxLifetimeFromContent,
+     nextExpiryDelay,
+ } from "../utils/RoomRetention";
++import { getRoomRetentionIndicator, isRetentionPolicyEvent } from "../utils/RoomRetentionIndicator";
+ import { CallCard } from "./CallCard";
+ import { getClientViews, getMeetUrl, selectClientView } from "./registry";
+ import { toViewAudio, toViewE2e, toViewMedia, toViewMessage, toViewRoom, toViewUrlPreviews } from "./mapping";
+@@ -1495,18 +1496,22 @@ export class ViewModelBridge implements ClientViewBridge {
+                 watched?.off();
+                 const offItem = item.subscribe(() => this.syncRooms());
+                 const offEcho = room ? this.watchNotificationLevel(room) : () => {};
++                const offRetention = room ? this.watchRetentionPolicy(room) : () => {};
+                 this.watchedItems.set(id, {
+                     item,
+                     off: () => {
+                         offItem();
+                         offEcho();
++                        offRetention();
+                     },
+                 });
+             }
+             const s = item.getSnapshot();
+             if (!sections?.length) sections = (s.sections ?? []).map(({ tag, name }, order) => ({ tag, name, order }));
+             const avatarUrl = room ? (avatarUrlForRoom(room, AVATAR_PX, AVATAR_PX, "crop") ?? undefined) : undefined;
+-            rooms.push(toViewRoom(s, rooms.length, avatarUrl, room ? this.notificationLevelOf(room) : undefined));
++            const viewRoom = toViewRoom(s, rooms.length, avatarUrl, room ? this.notificationLevelOf(room) : undefined);
++            const retention = getRoomRetentionIndicator(room);
++            rooms.push(retention ? { ...viewRoom, retention } : viewRoom);
+             if (!this.statusBar && room) this.watchConnection(room);
+         }
+         // An invite that became a join: the kit asks for the room's timeline again (none was built while it was invited).
+@@ -1578,6 +1583,28 @@ export class ViewModelBridge implements ClientViewBridge {
+         }
+     }
+ 
++    /**
++     * A change of the room's retention policy (`m.room.retention`, state key "") re-reads the room list, so
++     * `ViewRoom.retention` appears, changes and goes with it. Nothing is watched while retention is not configured.
++     */
++    private watchRetentionPolicy(room: Room): () => void {
++        if (!isRetentionEnabled()) return () => {};
++        const onState = (ev: MatrixEvent): void => {
++            if (isRetentionPolicyEvent(ev)) this.syncRooms();
++        };
++        const onCurrentState = (): void => this.syncRooms();
++        try {
++            room.on(RoomStateEvent.Events, onState);
++            room.on(RoomEvent.CurrentStateUpdated, onCurrentState);
++        } catch {
++            return () => {};
++        }
++        return () => {
++            room.off(RoomStateEvent.Events, onState);
++            room.off(RoomEvent.CurrentStateUpdated, onCurrentState);
++        };
++    }
++
+     private localChatRooms(): ViewRoom[] {
+         const out: ViewRoom[] = [];
+         for (const id of this.localChats) {
+diff --git a/apps/web/src/client-views/types.ts b/apps/web/src/client-views/types.ts
+index 0c83291..b9eff88 100644
+--- a/apps/web/src/client-views/types.ts
++++ b/apps/web/src/client-views/types.ts
+@@ -48,6 +48,24 @@ export interface ViewRoom {
+     showsUnread: boolean;
+     /** The room's notification level (the item's `roomNotifState`). */
+     notificationLevel: ViewNotificationLevel;
++    /**
++     * The room's messages are deleted automatically: its `m.room.retention` (state key "") has a positive integer
++     * `max_lifetime`, and Element's config key `io.inblock.room_retention` is set. Absent otherwise (always without the
++     * key). Read from the room state, as the room list item's clock (`retentionLabel`) is.
++     */
++    retention?: ViewRoomRetention;
++}
++
++/** A room's automatic message clean-up, with Element's own texts for it (already translated). */
++export interface ViewRoomRetention {
++    /** The room's `max_lifetime` in milliseconds. */
++    maxLifetimeMs: number;
++    /** The period as Element's Disappearing messages picker names it (a configured label, e.g. "2 weeks", or "Custom (...)"). */
++    period: string;
++    /** The room list clock's accessible label and tooltip, "Messages are deleted after 2 weeks". */
++    listLabel: string;
++    /** The room header's line, shown without hovering, "Messages here are deleted after 2 weeks". */
++    headerText: string;
+ }
+ 
+ /**
+diff --git a/apps/web/src/components/views/rooms/RoomHeader/RoomHeader.retentionIndicator.test.tsx b/apps/web/src/components/views/rooms/RoomHeader/RoomHeader.retentionIndicator.test.tsx
+new file mode 100644
+index 0000000..303f668
+--- /dev/null
++++ b/apps/web/src/components/views/rooms/RoomHeader/RoomHeader.retentionIndicator.test.tsx
+@@ -0,0 +1,167 @@
++/*
++Copyright 2026 inblock.io
++
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++// @vitest-environment happy-dom
++
++import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
++import React from "react";
++import { type MatrixClient, PendingEventOrdering, Room } from "matrix-js-sdk/src/matrix";
++import { act, render, type RenderOptions, screen } from "test-utils-rtl";
++import { filterConsole, mkEvent, stubClient } from "test-utils";
++
++import RoomHeader from "./RoomHeader";
++import DMRoomMap from "../../../../utils/DMRoomMap";
++import RoomContext, { type RoomContextType } from "../../../../contexts/RoomContext";
++import { ScopedRoomContextProvider } from "../../../../contexts/ScopedRoomContext";
++import MatrixClientContext from "../../../../contexts/MatrixClientContext";
++import { SDKContext } from "../../../../contexts/SDKContext";
++import { SDKContextClass } from "../../../../contexts/SDKContextClass";
++import SettingsStore from "../../../../settings/SettingsStore";
++import SdkConfig from "../../../../SdkConfig";
++import { CallStore } from "../../../../stores/CallStore";
++import * as ShieldUtils from "../../../../utils/ShieldUtils";
++import { ROOM_RETENTION_CONFIG_KEY, ROOM_RETENTION_EVENT_TYPE } from "../../../../utils/RoomRetention";
++
++vi.mock("../../../../utils/ShieldUtils");
++vi.mock("../../../../hooks/right-panel/useCurrentPhase", () => ({
++    useCurrentPhase: () => ({ currentPhase: "foo", isOpen: false }),
++}));
++vi.mock("../../../../Modal");
++
++/** The retention key is not in the typed config: put it in untyped, as the app reads it. */
++const putConfig = (config: object): void => SdkConfig.put(config as Parameters<typeof SdkConfig.put>[0]);
++
++const DAY = 86400000;
++const CHOICES = [
++    { ms: DAY, label: "1 day" },
++    { ms: 14 * DAY, label: "2 weeks" },
++];
++const ON = { [ROOM_RETENTION_CONFIG_KEY]: { choices: CHOICES } };
++const HEADER_TEXT = "Messages here are deleted after 2 weeks";
++
++describe("RoomHeader: the automatic message clean-up line (m.room.retention)", () => {
++    filterConsole(
++        "[getType] Room !1:example.org does not have an m.room.create event",
++        "Age for event was not available, using `now - origin_server_ts` as a fallback. If the device clock is not correct issues might occur.",
++    );
++
++    const ROOM_ID = "!1:example.org";
++    let client: MatrixClient;
++    let room: Room;
++    let roomContext: RoomContextType;
++
++    function getWrapper(): RenderOptions {
++        return {
++            wrapper: ({ children }) => (
++                <SDKContext.Provider value={SDKContextClass.instance}>
++                    <MatrixClientContext.Provider value={client}>
++                        <ScopedRoomContextProvider {...roomContext}>{children}</ScopedRoomContextProvider>
++                    </MatrixClientContext.Provider>
++                </SDKContext.Provider>
++            ),
++        };
++    }
++
++    function setPolicy(content: object, stateKey = ""): void {
++        room.currentState.setStateEvents([
++            mkEvent({
++                event: true,
++                type: ROOM_RETENTION_EVENT_TYPE,
++                room: ROOM_ID,
++                user: "@admin:example.org",
++                skey: stateKey,
++                content,
++            }),
++        ]);
++    }
++
++    /** The name and info button (the header has a second "Room info" button among its icons). */
++    const infoButton = (): HTMLElement => document.querySelector<HTMLElement>("button.mx_RoomHeader_infoWrapper")!;
++
++    beforeEach(() => {
++        client = stubClient();
++        room = new Room(ROOM_ID, client, "@alice:example.org", {
++            pendingEventOrdering: PendingEventOrdering.Detached,
++        });
++        DMRoomMap.setShared({ getUserIdForRoomId: vi.fn() } as unknown as DMRoomMap);
++        vi.spyOn(ShieldUtils, "shieldStatusForRoom").mockResolvedValue(ShieldUtils.E2EStatus.Normal);
++        vi.spyOn(CallStore.instance, "getCall").mockReturnValue(null);
++        vi.spyOn(CallStore.instance, "getConfiguredRTCTransports").mockReturnValue([]);
++        roomContext = {
++            ...RoomContext,
++            roomId: ROOM_ID,
++            roomViewStore: { isViewingCall: vi.fn().mockReturnValue(false), on: vi.fn(), off: vi.fn(), emit: vi.fn() },
++        } as unknown as RoomContextType;
++    });
++
++    afterEach(() => {
++        SdkConfig.reset();
++        vi.resetAllMocks();
++        SettingsStore.reset();
++    });
++
++    it("shows nothing when the config key is absent, even for a room with a policy", () => {
++        setPolicy({ max_lifetime: 14 * DAY });
++        const { container } = render(<RoomHeader room={room} />, getWrapper());
++        expect(container.querySelector(".mx_RoomHeader_retention")).toBeNull();
++        expect(screen.queryByText(/deleted after/)).toBeNull();
++        expect(infoButton()).not.toHaveAttribute("aria-describedby");
++    });
++
++    it("shows nothing for a room without a policy when the key is set", () => {
++        putConfig(ON);
++        const { container } = render(<RoomHeader room={room} />, getWrapper());
++        expect(container.querySelector(".mx_RoomHeader_retention")).toBeNull();
++        expect(infoButton()).not.toHaveAttribute("aria-describedby");
++    });
++
++    it("shows nothing for a policy that is Off, has no max_lifetime or another state key", () => {
++        putConfig(ON);
++        setPolicy({ min_lifetime: 0 });
++        setPolicy({ max_lifetime: 14 * DAY }, "other");
++        const { container } = render(<RoomHeader room={room} />, getWrapper());
++        expect(container.querySelector(".mx_RoomHeader_retention")).toBeNull();
++    });
++
++    it("shows the clock and the text under the room name, visible without hovering", () => {
++        putConfig(ON);
++        setPolicy({ max_lifetime: 14 * DAY });
++        const { container } = render(<RoomHeader room={room} />, getWrapper());
++
++        const line = container.querySelector(".mx_RoomHeader_retention")!;
++        expect(line).toHaveTextContent(HEADER_TEXT);
++        expect(line.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
++        // Below the heading, inside the same info box: the name and its line keep truncating side by side
++        const heading = container.querySelector(".mx_RoomHeader_heading")!;
++        expect(heading.parentElement).toBe(line.parentElement);
++        expect(heading.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
++        expect(line.querySelector(".mx_RoomHeader_truncated")).toHaveTextContent(HEADER_TEXT);
++        // The info button's own label hides its content, so the line is its description
++        expect(infoButton()).toHaveAttribute("aria-describedby", line.id);
++        expect(infoButton()).toHaveAccessibleDescription(HEADER_TEXT);
++    });
++
++    it("appears, changes and disappears live with the room's setting", () => {
++        putConfig(ON);
++        const { container } = render(<RoomHeader room={room} />, getWrapper());
++        const line = (): Element | null => container.querySelector(".mx_RoomHeader_retention");
++        expect(line()).toBeNull();
++
++        act(() => setPolicy({ max_lifetime: 14 * DAY }));
++        expect(line()).toHaveTextContent(HEADER_TEXT);
++
++        act(() => setPolicy({ max_lifetime: DAY }));
++        expect(line()).toHaveTextContent("Messages here are deleted after 1 day");
++
++        act(() => setPolicy({ max_lifetime: 2 * 60000 }));
++        expect(line()).toHaveTextContent("Messages here are deleted after Custom (2m)");
++
++        act(() => setPolicy({ min_lifetime: 0 }));
++        expect(line()).toBeNull();
++        expect(infoButton()).not.toHaveAttribute("aria-describedby");
++    });
++});
+diff --git a/apps/web/src/components/views/rooms/RoomHeader/RoomHeader.tsx b/apps/web/src/components/views/rooms/RoomHeader/RoomHeader.tsx
+index e7779b7..acccad5 100644
+--- a/apps/web/src/components/views/rooms/RoomHeader/RoomHeader.tsx
++++ b/apps/web/src/components/views/rooms/RoomHeader/RoomHeader.tsx
+@@ -7,7 +7,7 @@ SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Com
+ Please see LICENSE files in the repository root for full details.
+ */
+ 
+-import React, { type JSX, useCallback, useContext, useState } from "react";
++import React, { type JSX, useCallback, useContext, useId, useState } from "react";
+ import { Text, Button, IconButton, Menu, MenuItem, Tooltip } from "@vector-im/compound-web";
+ import VideoCallIcon from "@vector-im/compound-design-tokens/assets/web/icons/video-call-solid";
+ import VoiceCallIcon from "@vector-im/compound-design-tokens/assets/web/icons/voice-call-solid";
+@@ -20,6 +20,7 @@ import NotificationsIcon from "@vector-im/compound-design-tokens/assets/web/icon
+ import VerifiedIcon from "@vector-im/compound-design-tokens/assets/web/icons/verified";
+ import ErrorIcon from "@vector-im/compound-design-tokens/assets/web/icons/error-solid";
+ import PublicIcon from "@vector-im/compound-design-tokens/assets/web/icons/public";
++import TimeIcon from "@vector-im/compound-design-tokens/assets/web/icons/time";
+ import { HistoryVisibility, JoinRule, type Room } from "matrix-js-sdk/src/matrix";
+ import { Flex, Box, StatusTextView } from "@element-hq/web-shared-components";
+ import { CallType } from "matrix-js-sdk/src/webrtc/call";
+@@ -59,6 +60,7 @@ import { LocalRoom } from "../../../../models/LocalRoom.ts";
+ import { useIsEncrypted } from "../../../../hooks/useIsEncrypted.ts";
+ import { useUserStatus } from "../../../../hooks/useUserStatus.ts";
+ import { SDKContext } from "../../../../contexts/SDKContext.ts";
++import { useRoomRetentionIndicator } from "../../../../hooks/room/useRoomRetentionIndicator.ts";
+ 
+ function RoomHeaderButtons({ room, extraButtons }: { room: Room; extraButtons?: JSX.Element }): JSX.Element {
+     const sdkContext = useContext(SDKContext);
+@@ -443,6 +445,9 @@ export default function RoomHeader({
+     const isRoomEncrypted = useIsEncrypted(sdkContext.client!, room);
+     const e2eStatus = useEncryptionStatus(sdkContext.client!, room);
+     const askToJoinEnabled = useFeatureEnabled("feature_ask_to_join");
++    // Automatic message clean-up (m.room.retention, io.inblock.room_retention): a line under the name, absent otherwise.
++    const retention = useRoomRetentionIndicator(room);
++    const retentionId = useId();
+     const onAvatarClick = (): void => {
+         defaultDispatcher.dispatch({
+             action: "open_room_settings",
+@@ -468,6 +473,7 @@ export default function RoomHeader({
+                 {/* Disable on-click actions until the room is created */}
+                 <button
+                     aria-label={_t("right_panel|room_summary_card|title")}
++                    aria-describedby={retention ? retentionId : undefined}
+                     tabIndex={0}
+                     onClick={
+                         room instanceof LocalRoom
+@@ -529,6 +535,12 @@ export default function RoomHeader({
+ 
+                             {isRoomEncrypted && historyVisibilityIcon(historyVisibility)}
+                         </Text>
++                        {retention && (
++                            <Text as="div" size="sm" id={retentionId} className="mx_RoomHeader_retention">
++                                <TimeIcon width="16px" height="16px" className="mx_RoomHeader_icon" aria-hidden />
++                                <span className="mx_RoomHeader_truncated">{retention.headerText}</span>
++                            </Text>
++                        )}
+                     </Box>
+                 </button>
+                 {/* If the room is local-only then we don't want to show any additional buttons, as it won't work */}
+diff --git a/apps/web/src/hooks/room/useRoomRetentionIndicator.ts b/apps/web/src/hooks/room/useRoomRetentionIndicator.ts
+new file mode 100644
+index 0000000..80815d6
+--- /dev/null
++++ b/apps/web/src/hooks/room/useRoomRetentionIndicator.ts
+@@ -0,0 +1,27 @@
++/*
++Copyright 2026 inblock.io
++
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++import { useMemo } from "react";
++import { type Room } from "matrix-js-sdk/src/matrix";
++
++import { useRoomState } from "../useRoomState";
++import { isRetentionEnabled } from "../../utils/RoomRetention";
++import {
++    type RoomRetentionIndicator,
++    maxLifetimeOfState,
++    retentionIndicatorFor,
++} from "../../utils/RoomRetentionIndicator";
++
++/**
++ * The room's "messages are deleted after ..." indicator, following the room state: it appears, changes and goes
++ * when `m.room.retention` is set, changed or switched off. Undefined while the `io.inblock.room_retention` config
++ * key is absent or the room has no clean-up.
++ */
++export function useRoomRetentionIndicator(room: Room): RoomRetentionIndicator | undefined {
++    const maxLifetimeMs = useRoomState(room, (state) => (isRetentionEnabled() ? maxLifetimeOfState(state) : null));
++    return useMemo(() => retentionIndicatorFor(maxLifetimeMs), [maxLifetimeMs]);
++}
+diff --git a/apps/web/src/i18n/strings/en_EN.json b/apps/web/src/i18n/strings/en_EN.json
+index e878076..72e514d 100644
+--- a/apps/web/src/i18n/strings/en_EN.json
++++ b/apps/web/src/i18n/strings/en_EN.json
+@@ -2181,6 +2181,8 @@
+         "custom": "Custom (%(duration)s)",
+         "face_notice_off": "turned off disappearing messages.",
+         "face_notice_set": "set messages in this room to disappear after %(duration)s.",
++        "indicator_header": "Messages here are deleted after %(duration)s",
++        "indicator_list": "Messages are deleted after %(duration)s",
+         "legend": "Disappearing messages",
+         "notice_off": "%(senderName)s turned off disappearing messages.",
+         "notice_set": "%(senderName)s set messages in this room to disappear after %(duration)s.",
+diff --git a/apps/web/src/utils/RoomRetentionIndicator.ts b/apps/web/src/utils/RoomRetentionIndicator.ts
+new file mode 100644
+index 0000000..e0508b4
+--- /dev/null
++++ b/apps/web/src/utils/RoomRetentionIndicator.ts
+@@ -0,0 +1,68 @@
++/*
++Copyright 2026 inblock.io
++
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++/*
++The room's "messages are deleted after ..." indicator: the clock before the room name in the room list and the line
++in the room header. Built on the rules of `RoomRetention.ts`: nothing is shown unless the `io.inblock.room_retention`
++config key is set and the room's `m.room.retention` (state key "") has a positive integer `max_lifetime`.
++*/
++
++import { type MatrixEvent, type Room, type RoomState } from "matrix-js-sdk/src/matrix";
++
++import { _t } from "../languageHandler";
++import {
++    ROOM_RETENTION_EVENT_TYPE,
++    getRetentionConfig,
++    labelForLifetime,
++    maxLifetimeFromContent,
++} from "./RoomRetention";
++
++/** What the indicator shows for a room whose messages are deleted automatically. */
++export interface RoomRetentionIndicator {
++    /** The room's `max_lifetime` in milliseconds. */
++    maxLifetimeMs: number;
++    /** The period as the Disappearing messages picker names it (`labelForLifetime`), e.g. "2 weeks". */
++    period: string;
++    /** The room list's clock: its accessible label and tooltip, "Messages are deleted after 2 weeks". */
++    listLabel: string;
++    /** The room header's line, visible without hovering, "Messages here are deleted after 2 weeks". */
++    headerText: string;
++}
++
++/** The `max_lifetime` of a room state's `m.room.retention` (state key ""), or null when it has none. Never throws. */
++export function maxLifetimeOfState(state: RoomState | null | undefined): number | null {
++    try {
++        const ev = state?.getStateEvents(ROOM_RETENTION_EVENT_TYPE, "");
++        return ev ? maxLifetimeFromContent(ev.getContent()) : null;
++    } catch {
++        return null;
++    }
++}
++
++/** The indicator for a `max_lifetime`; undefined when the config key is absent or the room has no clean-up. */
++export function retentionIndicatorFor(maxLifetimeMs: number | null): RoomRetentionIndicator | undefined {
++    const cfg = getRetentionConfig();
++    if (!cfg || maxLifetimeMs === null) return undefined;
++    const period = labelForLifetime(maxLifetimeMs, cfg);
++    return {
++        maxLifetimeMs,
++        period,
++        listLabel: _t("room_retention|indicator_list", { duration: period }),
++        headerText: _t("room_retention|indicator_header", { duration: period }),
++    };
++}
++
++/** The indicator for a room's current state; undefined when nothing is to be shown. */
++export function getRoomRetentionIndicator(room: Room | null | undefined): RoomRetentionIndicator | undefined {
++    if (!room || !getRetentionConfig()) return undefined;
++    return retentionIndicatorFor(maxLifetimeOfState(room.currentState));
++}
++
++/** Whether a state event sets the room's retention policy (`m.room.retention`, state key ""). */
++export function isRetentionPolicyEvent(ev: MatrixEvent): boolean {
++    return ev.getType() === ROOM_RETENTION_EVENT_TYPE && ev.getStateKey() === "";
++}
+diff --git a/apps/web/src/viewmodels/room-list/RoomListItemViewModel.retentionIndicator.test.tsx b/apps/web/src/viewmodels/room-list/RoomListItemViewModel.retentionIndicator.test.tsx
+new file mode 100644
+index 0000000..2a12ffb
+--- /dev/null
++++ b/apps/web/src/viewmodels/room-list/RoomListItemViewModel.retentionIndicator.test.tsx
+@@ -0,0 +1,254 @@
++/*
++Copyright 2026 inblock.io
++
++SPDX-License-Identifier: AGPL-3.0-only OR GPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE files in the repository root for full details.
++*/
++
++// @vitest-environment happy-dom
++
++import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
++import React from "react";
++import { type MatrixClient, PendingEventOrdering, Room, RoomEvent, RoomStateEvent } from "matrix-js-sdk/src/matrix";
++import { RoomListItemView } from "@element-hq/web-shared-components";
++import { act, render, screen } from "test-utils-rtl";
++import { createTestClient, flushPromises, mkEvent, tearDownAfterTest } from "test-utils";
++
++import { RoomNotificationState } from "../../stores/notifications/RoomNotificationState";
++import { RoomNotificationStateStore } from "../../stores/notifications/RoomNotificationStateStore";
++import { MessagePreviewStore } from "../../stores/message-preview";
++import SettingsStore from "../../settings/SettingsStore";
++import DMRoomMap from "../../utils/DMRoomMap";
++import { CallStore } from "../../stores/CallStore";
++import RoomListStoreV3 from "../../stores/room-list-v3/RoomListStoreV3";
++import SdkConfig from "../../SdkConfig";
++import { ROOM_RETENTION_CONFIG_KEY, ROOM_RETENTION_EVENT_TYPE } from "../../utils/RoomRetention";
++import { RoomListItemViewModel } from "./RoomListItemViewModel";
++
++// No hover menus: their buttons would sit inside the row's button outside a real list
++vi.mock("./utils", () => ({
++    hasAccessToOptionsMenu: vi.fn().mockReturnValue(false),
++    hasAccessToNotificationMenu: vi.fn().mockReturnValue(false),
++}));
++
++vi.mock("../../stores/CallStore", () => ({
++    __esModule: true,
++    CallStore: { instance: { getCall: vi.fn(), on: vi.fn(), off: vi.fn(), emit: vi.fn() } },
++    CallStoreEvent: { ConnectedCalls: "connected_calls" },
++}));
++
++/** The retention key is not in the typed config: put it in untyped, as the app reads it. */
++const putConfig = (config: object): void => SdkConfig.put(config as Parameters<typeof SdkConfig.put>[0]);
++
++const DAY = 86400000;
++const ON = {
++    [ROOM_RETENTION_CONFIG_KEY]: {
++        choices: [
++            { ms: DAY, label: "1 day" },
++            { ms: 14 * DAY, label: "2 weeks" },
++        ],
++    },
++};
++const LIST_LABEL = "Messages are deleted after 2 weeks";
++
++describe("RoomListItemViewModel: the retention clock (m.room.retention)", () => {
++    const ROOM_ID = "!room:server";
++    let client: MatrixClient;
++    let room: Room;
++    let vm: RoomListItemViewModel | undefined;
++
++    function setPolicy(content: object, stateKey = ""): void {
++        room.currentState.setStateEvents([
++            mkEvent({
++                event: true,
++                type: ROOM_RETENTION_EVENT_TYPE,
++                room: ROOM_ID,
++                user: "@admin:server",
++                skey: stateKey,
++                content,
++            }),
++        ]);
++    }
++
++    function setTopic(topic: string): void {
++        room.currentState.setStateEvents([
++            mkEvent({
++                event: true,
++                type: "m.room.topic",
++                room: ROOM_ID,
++                user: "@admin:server",
++                skey: "",
++                content: { topic },
++            }),
++        ]);
++    }
++
++    const create = (): RoomListItemViewModel => (vm = new RoomListItemViewModel({ room, client }));
++
++    beforeEach(() => {
++        client = createTestClient();
++        room = new Room(ROOM_ID, client, client.getSafeUserId(), {
++            pendingEventOrdering: PendingEventOrdering.Detached,
++        });
++        room.name = "A room with a really long name that has to truncate in the room list";
++        const notificationState = tearDownAfterTest(new RoomNotificationState(room, false));
++        vi.spyOn(RoomNotificationStateStore.instance, "getRoomState").mockReturnValue(notificationState);
++        DMRoomMap.setShared({ getUserIdForRoomId: vi.fn().mockReturnValue(undefined) } as unknown as DMRoomMap);
++        vi.spyOn(SettingsStore, "getValue").mockImplementation((setting) => {
++            if (setting === "RoomList.OrderedCustomSections") return [];
++            if (setting === "RoomList.CustomSectionData") return {};
++            return false;
++        });
++        vi.spyOn(SettingsStore, "watchSetting").mockImplementation(() => "watcher-id");
++        vi.spyOn(MessagePreviewStore.instance, "getPreviewForRoom").mockResolvedValue(null);
++        vi.spyOn(CallStore.instance, "getCall").mockReturnValue(null);
++        vi.spyOn(RoomListStoreV3.instance, "orderedSectionTags", "get").mockReturnValue([]);
++    });
++
++    afterEach(() => {
++        vm?.dispose();
++        vm = undefined;
++        SdkConfig.reset();
++        vi.restoreAllMocks();
++    });
++
++    describe("the view-model field retentionLabel", () => {
++        it("is absent without the config key, for a room with a policy, and nothing listens to the room state", () => {
++            setPolicy({ max_lifetime: 14 * DAY });
++            const before = room.listenerCount(RoomStateEvent.Events);
++            create();
++            expect(vm!.getSnapshot().retentionLabel).toBeUndefined();
++            expect(room.listenerCount(RoomStateEvent.Events)).toBe(before);
++        });
++
++        it("is absent for a room without a policy, Off, or a policy under another state key", () => {
++            putConfig(ON);
++            create();
++            expect(vm!.getSnapshot().retentionLabel).toBeUndefined();
++            setPolicy({ min_lifetime: 0 });
++            setPolicy({ max_lifetime: DAY }, "other");
++            expect(vm!.getSnapshot().retentionLabel).toBeUndefined();
++        });
++
++        it("is set from the room's max_lifetime with the configured period label", () => {
++            putConfig(ON);
++            setPolicy({ max_lifetime: 14 * DAY });
++            create();
++            expect(vm!.getSnapshot().retentionLabel).toBe(LIST_LABEL);
++        });
++
++        it("is set, changed and cleared live when the room's setting changes", () => {
++            putConfig(ON);
++            create();
++            const onChange = vi.fn();
++            vm!.subscribe(onChange);
++
++            setPolicy({ max_lifetime: 14 * DAY });
++            expect(vm!.getSnapshot().retentionLabel).toBe(LIST_LABEL);
++            setPolicy({ max_lifetime: DAY });
++            expect(vm!.getSnapshot().retentionLabel).toBe("Messages are deleted after 1 day");
++            setPolicy({ max_lifetime: 2 * 60000 });
++            expect(vm!.getSnapshot().retentionLabel).toBe("Messages are deleted after Custom (2m)");
++            setPolicy({ min_lifetime: 0 });
++            expect(vm!.getSnapshot().retentionLabel).toBeUndefined();
++            expect(onChange).toHaveBeenCalledTimes(4);
++        });
++
++        it("does not change on other state events, and survives a rebuild of the item", async () => {
++            putConfig(ON);
++            setPolicy({ max_lifetime: 14 * DAY });
++            create();
++            const onChange = vi.fn();
++            vm!.subscribe(onChange);
++            setTopic("hello");
++            expect(onChange).not.toHaveBeenCalled();
++            room.name = "Renamed";
++            room.emit(RoomEvent.Name, room);
++            await flushPromises();
++            expect(vm!.getSnapshot().name).toBe("Renamed");
++            expect(vm!.getSnapshot().retentionLabel).toBe(LIST_LABEL);
++        });
++
++        it("stops listening when disposed", () => {
++            putConfig(ON);
++            const before = room.listenerCount(RoomStateEvent.Events);
++            create();
++            expect(room.listenerCount(RoomStateEvent.Events)).toBe(before + 1);
++            vm!.dispose();
++            expect(room.listenerCount(RoomStateEvent.Events)).toBe(before);
++            setPolicy({ max_lifetime: DAY });
++            expect(vm!.getSnapshot().retentionLabel).toBeUndefined();
++        });
++    });
++
++    describe("the shared room list item view", () => {
++        function renderItem(): ReturnType<typeof render> {
++            return render(
++                <ul role="listbox" aria-label="Rooms">
++                    <RoomListItemView
++                        vm={vm!}
++                        role="option"
++                        isSelected={false}
++                        isFocused={false}
++                        onFocus={() => {}}
++                        isFirstItem={true}
++                        isLastItem={true}
++                        renderAvatar={() => <span data-testid="avatar" />}
++                    />
++                </ul>,
++            );
++        }
++
++        const option = (): HTMLElement => screen.getByRole("option");
++
++        it("renders no clock and no description without the config key (stock)", () => {
++            setPolicy({ max_lifetime: 14 * DAY });
++            create();
++            renderItem();
++            expect(screen.queryByTestId("room-retention-icon")).toBeNull();
++            expect(option()).not.toHaveAttribute("aria-describedby");
++            expect(screen.getByTestId("room-name")).toHaveTextContent(room.name);
++        });
++
++        it("renders no clock for a room without clean-up when the key is set", () => {
++            putConfig(ON);
++            create();
++            renderItem();
++            expect(screen.queryByTestId("room-retention-icon")).toBeNull();
++            expect(option()).not.toHaveAttribute("aria-describedby");
++        });
++
++        it("renders the clock before the room name with its label, and the row describes itself with it", () => {
++            putConfig(ON);
++            setPolicy({ max_lifetime: 14 * DAY });
++            create();
++            renderItem();
++            const icon = screen.getByTestId("room-retention-icon");
++            expect(icon).toHaveAttribute("role", "img");
++            expect(icon).toHaveAttribute("aria-label", LIST_LABEL);
++            const name = screen.getByTestId("room-name");
++            expect(icon.compareDocumentPosition(name) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
++            // The name keeps its own truncating element and full-name title
++            expect(name).toHaveAttribute("title", room.name);
++            expect(name).toHaveTextContent(room.name);
++            // The row's description is the clock (its aria-label; the browser leg EW-RR3 checks the computed description,
++            // which dom-accessibility-api does not derive from an svg's aria-label under happy-dom)
++            expect(icon.id).not.toBe("");
++            expect(option()).toHaveAttribute("aria-describedby", icon.id);
++            // The row's accessible name is unchanged
++            expect(option()).toHaveAttribute("aria-label", `Open room ${room.name}`);
++        });
++
++        it("shows the clock and goes away live with the room's setting", () => {
++            putConfig(ON);
++            create();
++            renderItem();
++            expect(screen.queryByTestId("room-retention-icon")).toBeNull();
++            act(() => setPolicy({ max_lifetime: 14 * DAY }));
++            expect(screen.getByTestId("room-retention-icon")).toHaveAttribute("aria-label", LIST_LABEL);
++            act(() => setPolicy({ min_lifetime: 0 }));
++            expect(screen.queryByTestId("room-retention-icon")).toBeNull();
++            expect(option()).not.toHaveAttribute("aria-describedby");
++        });
++    });
++});
+diff --git a/apps/web/src/viewmodels/room-list/RoomListItemViewModel.ts b/apps/web/src/viewmodels/room-list/RoomListItemViewModel.ts
+index 32bcb06..2a6b389 100644
+--- a/apps/web/src/viewmodels/room-list/RoomListItemViewModel.ts
++++ b/apps/web/src/viewmodels/room-list/RoomListItemViewModel.ts
+@@ -13,11 +13,11 @@ import {
+     type Section,
+     type UserStatus,
+ } from "@element-hq/web-shared-components";
+-import { ClientEvent, KnownMembership, RoomEvent } from "matrix-js-sdk/src/matrix";
++import { ClientEvent, KnownMembership, RoomEvent, RoomStateEvent } from "matrix-js-sdk/src/matrix";
+ import { CallType } from "matrix-js-sdk/src/webrtc/call";
+ import { logger } from "matrix-js-sdk/src/logger";
+ 
+-import type { Room, MatrixClient, RoomMember, ClientEventHandlerMap } from "matrix-js-sdk/src/matrix";
++import type { Room, MatrixClient, RoomMember, ClientEventHandlerMap, MatrixEvent } from "matrix-js-sdk/src/matrix";
+ import type { RoomNotificationState } from "../../stores/notifications/RoomNotificationState";
+ import { RoomNotificationStateStore } from "../../stores/notifications/RoomNotificationStateStore";
+ import { NotificationStateEvents } from "../../stores/notifications/NotificationState";
+@@ -44,6 +44,8 @@ import RoomListStoreV3 from "../../stores/room-list-v3/RoomListStoreV3";
+ import { getCustomSectionData, isDefaultSectionTag } from "../../stores/room-list-v3/section";
+ import { _t } from "../../languageHandler";
+ import { fetchUserStatus } from "../../utils/userStatus";
++import { isRetentionEnabled } from "../../utils/RoomRetention";
++import { getRoomRetentionIndicator, isRetentionPolicyEvent } from "../../utils/RoomRetentionIndicator";
+ 
+ /**
+  * View section type without `isSelected` field
+@@ -134,6 +136,15 @@ export class RoomListItemViewModel
+         // Subscribe to room-specific events
+         this.disposables.trackListener(props.room, RoomEvent.Name, this.onRoomChanged);
+         this.disposables.trackListener(props.room, RoomEvent.Tags, this.onRoomChanged);
++        // The retention clock follows the room's m.room.retention (only while the io.inblock.room_retention key is set)
++        if (isRetentionEnabled()) {
++            props.room.on(RoomStateEvent.Events, this.onRoomStateEvent);
++            props.room.on(RoomEvent.CurrentStateUpdated, this.onRetentionChanged);
++            this.disposables.track(() => {
++                props.room.off(RoomStateEvent.Events, this.onRoomStateEvent);
++                props.room.off(RoomEvent.CurrentStateUpdated, this.onRetentionChanged);
++            });
++        }
+ 
+         // Rebuild the available sections when their order changes or when one is created/renamed/removed
+         const orderSectionsRef = SettingsStore.watchSetting("RoomList.OrderedCustomSections", null, () =>
+@@ -239,6 +250,14 @@ export class RoomListItemViewModel
+         this.updateItem();
+     };
+ 
++    private onRoomStateEvent = (ev: MatrixEvent): void => {
++        if (isRetentionPolicyEvent(ev)) this.onRetentionChanged();
++    };
++
++    private onRetentionChanged = (): void => {
++        this.snapshot.merge({ retentionLabel: getRoomRetentionIndicator(this.props.room)?.listLabel });
++    };
++
+     /**
+      * Update the item snapshot with current sync data.
+      * Preserves the message preview which is managed separately.
+@@ -391,6 +410,7 @@ export class RoomListItemViewModel
+             name: room.name,
+             isBold: notifState.hasAnyNotificationOrActivity,
+             messagePreview,
++            retentionLabel: getRoomRetentionIndicator(room)?.listLabel,
+             notification: {
+                 hasAnyNotificationOrActivity: notifState.hasAnyNotificationOrActivity || hasParticipantsInCall,
+                 isUnsentMessage: notifState.isUnsentMessage,
+diff --git a/packages/shared-components/src/room-list/VirtualizedRoomListView/RoomListItemWrapper/RoomListItemView/RoomListItemContent.tsx b/packages/shared-components/src/room-list/VirtualizedRoomListView/RoomListItemWrapper/RoomListItemView/RoomListItemContent.tsx
+index 7d4dde7..9004324 100644
+--- a/packages/shared-components/src/room-list/VirtualizedRoomListView/RoomListItemWrapper/RoomListItemView/RoomListItemContent.tsx
++++ b/packages/shared-components/src/room-list/VirtualizedRoomListView/RoomListItemWrapper/RoomListItemView/RoomListItemContent.tsx
+@@ -7,6 +7,7 @@
+ 
+ import React, { type JSX, memo, type ReactNode } from "react";
+ import { Text, Tooltip } from "@vector-im/compound-web";
++import TimeIcon from "@vector-im/compound-design-tokens/assets/web/icons/time";
+ import classNames from "classnames";
+ 
+ import { Flex } from "../../../../core/utils/Flex";
+@@ -26,6 +27,8 @@ export interface RoomListItemContentProps {
+     renderAvatar: (room: Room) => ReactNode;
+     /** Whether the item is being dragged */
+     isDragging?: boolean;
++    /** The id given to the retention clock, which the row names as its description (none in the drag overlay) */
++    retentionIconId?: string;
+ }
+ 
+ /**
+@@ -37,9 +40,23 @@ export const RoomListItemContent = memo(function RoomListItemContent({
+     vm,
+     renderAvatar,
+     isDragging = false,
++    retentionIconId,
+ }: RoomListItemContentProps): JSX.Element {
+     const item = useViewModel(vm);
+ 
++    const roomName = (
++        <div className={styles.roomName} title={item.name} data-testid="room-name">
++            {item.name}
++            {item.userStatus && (
++                <Tooltip description={item.userStatus.text} maxWidth="30ch" maxLines={1}>
++                    <Text as="span" className={styles.userStatusEmoji}>
++                        {item.userStatus.emoji}
++                    </Text>
++                </Tooltip>
++            )}
++        </div>
++    );
++
+     return (
+         <Flex
+             className={classNames(styles.container, {
+@@ -52,16 +69,24 @@ export const RoomListItemContent = memo(function RoomListItemContent({
+             <Flex className={styles.content} gap="var(--cpd-space-2x)" align="center" justify="space-between">
+                 {/* We truncate the room name when too long. Title here is to show the full name on hover */}
+                 <div className={styles.ellipsis}>
+-                    <div className={styles.roomName} title={item.name} data-testid="room-name">
+-                        {item.name}
+-                        {item.userStatus && (
+-                            <Tooltip description={item.userStatus.text} maxWidth="30ch" maxLines={1}>
+-                                <Text as="span" className={styles.userStatusEmoji}>
+-                                    {item.userStatus.emoji}
+-                                </Text>
++                    {item.retentionLabel ? (
++                        <Flex align="center" gap="var(--cpd-space-1x)" className={styles.retentionRow}>
++                            <Tooltip description={item.retentionLabel} placement="right">
++                                <TimeIcon
++                                    id={retentionIconId}
++                                    role="img"
++                                    aria-label={item.retentionLabel}
++                                    width="16px"
++                                    height="16px"
++                                    className={styles.retentionIcon}
++                                    data-testid="room-retention-icon"
++                                />
+                             </Tooltip>
+-                        )}
+-                    </div>
++                            {roomName}
++                        </Flex>
++                    ) : (
++                        roomName
++                    )}
+ 
+                     {item.messagePreview && (
+                         <Text as="div" size="sm" className={styles.ellipsis} title={item.messagePreview}>
+diff --git a/packages/shared-components/src/room-list/VirtualizedRoomListView/RoomListItemWrapper/RoomListItemView/RoomListItemView.module.css b/packages/shared-components/src/room-list/VirtualizedRoomListView/RoomListItemWrapper/RoomListItemView/RoomListItemView.module.css
+index f6a4641..0ff6054 100644
+--- a/packages/shared-components/src/room-list/VirtualizedRoomListView/RoomListItemWrapper/RoomListItemView/RoomListItemView.module.css
++++ b/packages/shared-components/src/room-list/VirtualizedRoomListView/RoomListItemWrapper/RoomListItemView/RoomListItemView.module.css
+@@ -108,6 +108,16 @@
+     padding-left: var(--cpd-space-1-5x);
+ }
+ 
++/* The retention clock before the room name: the name keeps truncating, the clock never shrinks */
++.retentionRow {
++    min-width: 0;
++}
++
++.retentionIcon {
++    flex-shrink: 0;
++    color: var(--cpd-color-icon-secondary);
++}
++
+ .selected {
+     .container {
+         background-color: var(--cpd-color-bg-action-tertiary-selected);
+diff --git a/packages/shared-components/src/room-list/VirtualizedRoomListView/RoomListItemWrapper/RoomListItemView/RoomListItemView.tsx b/packages/shared-components/src/room-list/VirtualizedRoomListView/RoomListItemWrapper/RoomListItemView/RoomListItemView.tsx
+index 7064c70..fe8b5ac 100644
+--- a/packages/shared-components/src/room-list/VirtualizedRoomListView/RoomListItemWrapper/RoomListItemView/RoomListItemView.tsx
++++ b/packages/shared-components/src/room-list/VirtualizedRoomListView/RoomListItemWrapper/RoomListItemView/RoomListItemView.tsx
+@@ -5,7 +5,7 @@
+  * Please see LICENSE files in the repository root for full details.
+  */
+ 
+-import React, { type JSX, memo, useEffect, useRef, useState, type ReactNode, type Ref } from "react";
++import React, { type JSX, memo, useEffect, useId, useRef, useState, type ReactNode, type Ref } from "react";
+ import classNames from "classnames";
+ import { useMergeRefs } from "react-merge-refs";
+ 
+@@ -75,6 +75,11 @@ export interface RoomListItemViewSnapshot {
+     messagePreview?: string;
+     /** The MSC4426 user status of the other user in a DM room, if any */
+     userStatus?: UserStatus;
++    /**
++     * The room's messages are deleted automatically: a clock is shown before the room name, with this text as its
++     * accessible label and tooltip (e.g. "Messages are deleted after 2 weeks"). Absent: no clock.
++     */
++    retentionLabel?: string;
+     /** Notification decoration data */
+     notification: NotificationDecorationData;
+     /** Whether the more options menu should be shown */
+@@ -221,6 +226,8 @@ export const RoomListItemView = memo(function RoomListItemView({
+ 
+     // Generate a11y label from notification state and room name
+     const a11yLabel = getA11yLabel(item.name, item.notification);
++    // The row's own label hides its content from assistive technology, so the retention clock is its description.
++    const retentionIconId = useId();
+ 
+     return (
+         <RoomListItemContextMenu vm={vm}>
+@@ -240,6 +247,7 @@ export const RoomListItemView = memo(function RoomListItemView({
+                 align="stretch"
+                 type="button"
+                 aria-label={a11yLabel}
++                aria-describedby={item.retentionLabel ? retentionIconId : undefined}
+                 onClick={vm.onOpenRoom}
+                 onFocus={onItemFocus}
+                 onBlur={onItemBlur}
+@@ -247,7 +255,7 @@ export const RoomListItemView = memo(function RoomListItemView({
+                 aria-selected={props.role === "option" ? isSelected : undefined}
+                 {...props}
+             >
+-                <RoomListItemContent vm={vm} renderAvatar={renderAvatar} />
++                <RoomListItemContent vm={vm} renderAvatar={renderAvatar} retentionIconId={retentionIconId} />
+             </Flex>
+         </RoomListItemContextMenu>
+     );

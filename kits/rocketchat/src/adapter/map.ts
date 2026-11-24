@@ -3,6 +3,7 @@ import type { IMessage, IRoom, ISubscription, IUser } from '@rocket.chat/core-ty
 
 import type { ViewCall, ViewE2e, ViewEncryption, ViewMe, ViewMedia, ViewMessage, ViewNotificationLevel, ViewRoom, ViewSection } from '../bridge-types.ts';
 import { fromCommonMark } from './format.ts';
+import { retentionIndicatorFields } from '../retention-indicator.ts';
 
 /**
  * Rocket.Chat's own setting that makes channel and group names show `fname` (the display name) instead of `name`
@@ -133,6 +134,8 @@ export const toRoom = (r: ViewRoom, name: string, me: ViewMe, epoch: number): IR
 		ts: new Date(0),
 		_updatedAt: at,
 		lm: at,
+		// The room's automatic message clean-up, for the header line (src/room-title-retention.tsx); absent without one.
+		...retentionIndicatorFields(r),
 	} as unknown as IRoom;
 };
 
@@ -184,6 +187,8 @@ export const toSubscription = (r: ViewRoom, name: string, me: ViewMe, epoch: num
 		// M6 B1: the room's custom section is Rocket.Chat's subscription `category` (exclusive with the favourite, as in Rocket.Chat).
 		...(r.section === undefined ? {} : { category: r.section }),
 		...notificationFields(r.notificationLevel),
+		// The room's automatic message clean-up, for the sidebar clock (src/sidebar-item-retention.tsx); absent without one.
+		...retentionIndicatorFields(r),
 		lr: at,
 		_updatedAt: at,
 		// An invite (A5): Rocket.Chat's own invite screen with Accept and Reject. The room list view-model has no inviter,

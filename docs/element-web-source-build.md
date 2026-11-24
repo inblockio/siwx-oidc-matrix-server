@@ -7,8 +7,8 @@ runs `entrypoints/element_entrypoint.sh`.
 
 ## Why from source
 
-We carry fifteen vendored patches that cannot ship on the prebuilt
-`vectorim/element-web` image, and a sixteenth and a seventeenth that patch Element Call, whose
+We carry sixteen vendored patches that cannot ship on the prebuilt
+`vectorim/element-web` image, and a seventeenth and an eighteenth that patch Element Call, whose
 embedded widget the image builds from source (stage `element-call`) because Element Web only copies
 a prebuilt npm package. The **canonical list** — what, why, upstream status,
 retirement condition, and the order they are applied in — is
@@ -33,13 +33,13 @@ ourselves.
   commit `7001d81efc9f…` (`ARG ELEMENT_WEB_COMMIT`, the commit the tag points at, not the annotated tag object): the
   build fails if the tag resolves to a different commit.
 - Element Web v1.12.35 is a pnpm + nx monorepo (Node >= 22.18). It installs Element Call 0.28.2
-  (`@element-hq/element-call-embedded`), which the `element-call` stage rebuilds with entries 16 and 17.
+  (`@element-hq/element-call-embedded`), which the `element-call` stage rebuilds with entries 17 and 18.
 - Bumped from v1.12.33 on 2026-11-20 for the two security fixes of 1.12.34 (GHSA-jx97-gwvc-pfxx and
   GHSA-pqp6-f7wc-6498; their advisory texts were not public when this was written). 1.12.35 only adds a
   synchronous safeStorage fallback. Four Element Web patches were forward-ported (entries 6, 10, 13 and 14, context
   moves; entry 10 drops one hunk upstream now does itself), the `ClientViewGate` test got a stand-in `contentWindow` for
   happy-dom 21, and the Element Call stage moved from v0.26.1 to v0.28.2, whose media code lives in an `sdk/` layer
-  (entries 16 and 17 attach there). See `patches/element-web/README.md`, the "v1.12.33 -> v1.12.35 bump" section.
+  (entries 17 and 18 attach there). See `patches/element-web/README.md`, the "v1.12.33 -> v1.12.35 bump" section.
 - Bumped from v1.12.26 on 2026-09-25 for GHSA-9r5h-8m2x-w7q6 (URL-preview
   sanitisation, fixed 1.12.27) and GHSA-wqmv-r2qj-2j9p (XSS in HTML export,
   fixed 1.12.28). Two patches were forward-ported because upstream moved their

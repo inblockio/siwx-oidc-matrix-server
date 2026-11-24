@@ -2,6 +2,7 @@
 import type { IMessage, IRoom, ISubscription, IUser } from '@rocket.chat/core-typings';
 
 import type { ActionOutcome, ClientViewBridge, LoadOlderResult, ViewAnchor, ViewPanelCard, ViewConnection, ViewMessage, ViewNotificationLevel, ViewRoom, ViewSection, ViewSettingsTab } from '../bridge-types.ts';
+import { retentionIndicatorOf } from '../retention-indicator.ts';
 import { avatarFor, encryptionLine, errorText, initialAvatar, isNoMessageEvent, newOwnReactionNames, reactionKeyFor, slugs, toMessage, toRoom, toSender, toSubscription, toUser, toVideoConference } from './map.ts';
 
 export type Doc = IRoom | ISubscription | IMessage | IUser;
@@ -1112,7 +1113,8 @@ export class BridgeSource {
 			// before, and the later stamp stays while nothing else moves the subscription past it.
 			const before = this.subDocs.get(r.id);
 			let stamp = this.subStamps.get(r.id) ?? 0;
-			if (before && (before.fname !== sub.fname || before.category !== sub.category)) stamp = Math.max(stamp, +before._updatedAt + 1);
+			const retentionMoved = retentionIndicatorOf(before)?.listLabel !== retentionIndicatorOf(sub)?.listLabel;
+			if (before && (before.fname !== sub.fname || before.category !== sub.category || retentionMoved)) stamp = Math.max(stamp, +before._updatedAt + 1);
 			if (stamp > +sub._updatedAt) {
 				this.subStamps.set(r.id, stamp);
 				sub = { ...sub, _updatedAt: new Date(stamp) };
