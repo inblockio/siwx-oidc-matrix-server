@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 #
-# run-tests.sh: run the inblock_directory module tests (docs/directory-search.md) in
-# Synapse's own test framework, at the Synapse tag the Dockerfile pins.
+# run-tests.sh: run the module tests of synapse-modules/ in Synapse's own test framework,
+# at the Synapse tag the Dockerfile pins: inblock_directory (docs/directory-search.md)
+# and inblock_agent_marker (docs/agent-marker.md).
 #
-# WHY. The module calls a few Synapse internals (listed at the top of
-# inblock_directory/module.py). They can change in any release, so these tests are a
-# step of the Synapse bump procedure (patches/synapse/README.md, rule 4, risk R1): a
-# bump is not merged while they are red.
+# WHY. The modules call a few Synapse internals (listed at the top of
+# inblock_directory/module.py and inblock_agent_marker/module.py). They can change in any
+# release, so these tests are a step of the Synapse bump procedure
+# (patches/synapse/README.md, rule 4, risk R1): a bump is not merged while they are red.
+# The agent marker also has a log-noise test (no new WARNING lines per event, spike limit L2).
 #
 # HOW. Clones element-hq/synapse at the tag (shallow), makes a venv, installs Synapse
 # with its test extras, and runs the tests with `trial` from the checkout, with
@@ -15,7 +17,8 @@
 # (a minute or two); later runs reuse the venv.
 #
 # Usage:
-#   synapse-modules/run-tests.sh                  # all tests
+#   synapse-modules/run-tests.sh                  # all tests, on SQLite
+#   synapse-modules/run-tests.sh --postgres       # the agent marker tests on Postgres (prod's database)
 #   synapse-modules/run-tests.sh inblock_directory_tests.test_directory_module.DirectoryModuleTestCase.test_term_bounds
 #                                                 # arguments replace the default target and go to trial
 #   SYNAPSE_TAG=v1.164.0 synapse-modules/run-tests.sh   # a tag other than the Dockerfile's
@@ -26,6 +29,12 @@
 # gets the tag from --print-tag (so the Dockerfile's FROM line stays the only place the
 # Synapse version is written down), points SIWX_DIRECTORY_TESTS_DIR at a directory it
 # caches by tag, and relies on the exit code: trial's, 2 for a setup problem.
+#
+# --postgres needs a reachable server and its login in SYNAPSE_POSTGRES_HOST, _PORT, _USER and
+# _PASSWORD (Synapse's test harness creates and drops its own databases there; CI uses a
+# service container). The script installs psycopg2-binary into the venv for it.
+# GUEST_POLICY_MODULE_PATH (optional): the directory that CONTAINS the synapse_guest_policy
+# package; when set, the module under test is loaded next to the guest policy module too.
 #
 # Needs: git, network on the first run, a Rust toolchain (cargo) for the extension, and
 # either `uv` (preferred) or python3.13 with venv. The image runs Python 3.13.
@@ -39,6 +48,9 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+POSTGRES=0
+[ "${1:-}" != "--postgres" ] || { POSTGRES=1; shift; }
 
 case "${1:-}" in
   -h|--help) sed -n '2,/^$/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -81,9 +93,25 @@ if [ ! -f "$STAMP" ]; then
   touch "$STAMP"
 fi
 
+if [ "$POSTGRES" = 1 ]; then
+  for v in SYNAPSE_POSTGRES_HOST SYNAPSE_POSTGRES_USER SYNAPSE_POSTGRES_PASSWORD; do
+    [ -n "${!v:-}" ] || { echo "--postgres needs ${v}" >&2; exit 2; }
+  done
+  export SYNAPSE_POSTGRES=1
+  if ! "${VENV}/bin/python" -c 'import psycopg2' 2>/dev/null; then
+    if command -v uv >/dev/null; then VIRTUAL_ENV="$VENV" uv pip install psycopg2-binary
+    else "${VENV}/bin/pip" install psycopg2-binary; fi
+  fi
+  TRIAL_TMP="${TRIAL_TMP}-postgres"
+fi
+
 # trial runs from the checkout so that Synapse's `tests` package (the framework) imports.
 cd "$SRC"
-[ "$#" -gt 0 ] || set -- inblock_directory_tests
-PYTHONPATH="${REPO_ROOT}/synapse-modules${PYTHONPATH:+:${PYTHONPATH}}" \
+if [ "$#" -eq 0 ]; then
+  if [ "$POSTGRES" = 1 ]; then set -- inblock_agent_marker_tests
+  else set -- inblock_directory_tests inblock_agent_marker_tests; fi
+fi
+EXTRA_PATH="${GUEST_POLICY_MODULE_PATH:+:${GUEST_POLICY_MODULE_PATH}}"
+PYTHONPATH="${REPO_ROOT}/synapse-modules${EXTRA_PATH}${PYTHONPATH:+:${PYTHONPATH}}" \
   exec "${VENV}/bin/python" -m twisted.trial --temp-directory "$TRIAL_TMP" \
   "$@"

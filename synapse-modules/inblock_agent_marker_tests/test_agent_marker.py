@@ -203,7 +203,10 @@ class MarkerTestBase(unittest.HomeserverTestCase):
             return None
         from inblock_agent_marker import AgentMarker
 
-        marker = AgentMarker({"startup_delay_seconds": 0, **settings}, self.hs.get_module_api())
+        marker = AgentMarker(
+            AgentMarker.parse_config({"startup_delay_seconds": 0, **settings}),
+            self.hs.get_module_api(),
+        )
         self.settle()
         return marker
 
@@ -400,7 +403,10 @@ class AgentMarkerCases(MarkerTestBase):
         n = len(self.fm_events_in(room_id))
         self.get_success(
             self.hs.get_profile_handler().set_displayname(
-                UserID.from_string(a), create_requester(a), "Renamed Agent", True
+                target_user=UserID.from_string(a),
+                requester=create_requester(a),
+                new_displayname="Renamed Agent",
+                by_admin=True,
             )
         )
         self.pump(5)
@@ -475,12 +481,12 @@ class SweepCases(MarkerTestBase):
     def test_g2_later_sweeps_write_nothing(self) -> None:
         _, a, rooms = self.build(2)
         marker = self.load_marker()
-        ids = [[e["event_id"] for e in self.fm_events_in(r)] for r in rooms]
+        ids = [[e[0] for e in self.fm_events_in(r)] for r in rooms]
         self.assertEqual([self.fm_members(r) for r in rooms], [[a]] * 2)
         with capture_logs() as logs:
             self.get_success(marker.sweep())
         self.assertTrue(logs.lines("inblock_agent_marker", "0 room(s) written"))
-        self.assertEqual([[e["event_id"] for e in self.fm_events_in(r)] for r in rooms], ids)
+        self.assertEqual([[e[0] for e in self.fm_events_in(r)] for r in rooms], ids)
 
     def test_g3_sweep_is_batched_and_only_where_missing(self) -> None:
         p1, a, rooms = self.build(5)
@@ -515,7 +521,9 @@ class LogNoiseTestCase(MarkerTestBase):
             self.helper.join(room_id, agent, tok=self.tokens[agent])
             self.helper.send(room_id, "hello", tok=self.tokens[p])
             self.helper.send_state(room_id, "m.room.topic", {"topic": "t"}, tok=self.tokens[p])
+            self.scenario_rooms = [room_id]
             own = self.make_room(agent)
+            self.scenario_rooms.append(own)
             self.helper.send_state(own, "m.room.topic", {"topic": "t"}, tok=self.tokens[agent])
             self.pump(5)
         return logs.at_least(logging.WARNING)
@@ -526,6 +534,8 @@ class LogNoiseTestCase(MarkerTestBase):
         base = self.scenario("base")
         self.load_marker()
         loaded = self.scenario("loaded")
+        # The module really worked in the measured scenario: both chats are marked.
+        self.assertEqual([len(self.fm_members(r) or []) for r in self.scenario_rooms], [1, 1])
         out = os.environ.get("INBLOCK_AGENT_MARKER_L2_OUT")
         if out:
             with open(out, "a") as f:
