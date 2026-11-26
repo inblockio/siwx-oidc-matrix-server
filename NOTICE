@@ -153,6 +153,22 @@ patches/element-call/0190-media-key-recovery.patch
     repository is the source offer for the modification
     (patches/element-web/README.md, entry 18).
 
+patches/element-call/0200-functional-members-ringing.patch
+    Modifies Element Call as well, in the same Element Call build stage and
+    after 0190. The Element Call files it changes
+    (src/state/CallViewModel/CallNotificationLifecycle.ts, CallViewModel.ts,
+    CallViewModelTestUtils.ts, src/utils/test.ts, src/widget.ts and the tests
+    CallNotificationLifecycle.test.ts, CallViewModel.test.ts and
+    widget.test.ts) carry "SPDX-License-Identifier: AGPL-3.0-only OR
+    LicenseRef-Element-Commercial". The second option names Element's
+    commercial license, which only Element can grant, so the changes to
+    these files are licensed AGPL-3.0-only. The patch adds two files
+    (src/state/CallViewModel/FunctionalMembers.ts and FunctionalMembers.test.ts)
+    whose headers read "Copyright 2026 Element Creations Ltd." and the same
+    SPDX line; they are AGPL-3.0-only here as well. The patch is a port of
+    element-hq/element-call pull request 4326 and is the source offer for
+    the modification (patches/element-web/README.md, entry 19).
+
 
 Brand assets
 ------------
