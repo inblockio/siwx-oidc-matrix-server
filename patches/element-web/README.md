@@ -2,7 +2,7 @@
 
 This directory is the **complete, canonical list of every modification we apply to
 upstream Element Web source** before building, and to the Element Call embedded build
-that the image serves (entries 17 and 18, whose patch files live in
+that the image serves (entries 17 to 19, whose patch files live in
 [`patches/element-call/`](../element-call/)). `dockerfiles/Dockerfile.element` is the
 single build source for the element-web image that CI publishes from `main`, and it
 applies exactly the patches listed here, each with `git apply --verbose` so **a patch
@@ -12,7 +12,7 @@ that stops applying fails the image build loudly** — never silently at runtime
 repository. Each change is licensed like the Element Web file it changes, which for the
 code the image ships means AGPL-3.0-only OR GPL-3.0-only. A docs file, an Apache-2.0 test
 and two tests that adapt an AGPL-only harness differ; [`NOTICE`](../../NOTICE) lists them.
-Entries 17 and 18 change Element Call, which is AGPL-3.0-only OR LicenseRef-Element-Commercial,
+Entries 17 to 19 change Element Call, which is AGPL-3.0-only OR LicenseRef-Element-Commercial,
 so those changes are AGPL-3.0-only (NOTICE).
 
 Rules of this registry:
@@ -100,16 +100,17 @@ Rules of this registry:
    this file): the Dockerfile fails the build on a row that no longer holds, and a row that
    stock now also carries (upstream shipped the string) no longer discriminates.
 
-   **Entries 17 and 18 are not in that loop**: they patch Element Call, not Element Web, and
+   **Entries 17 to 19 are not in that loop**: they patch Element Call, not Element Web, and
    their patch files are in `patches/element-call/`. At every bump read the version of
    `@element-hq/element-call-embedded` in the new tag's `apps/web/package.json`. The build
    fails when it differs from `ARG ELEMENT_CALL_STOCK_VERSION` in `deps`, so a bump cannot
    silently serve an older Element Call than the one Element Web moved to. When it moved,
    rebase the `element-call` stage: new `ELEMENT_CALL_TAG` and `ELEMENT_CALL_COMMIT`
    together (`git ls-remote https://github.com/element-hq/element-call 'refs/tags/<tag>^{}'`),
-   try both patches, 17 and then 18, against a fresh clone of that tag (`git apply --check`
-   of 18 after applying 17), and read the retirement conditions of entries 17 and 18 before
-   forward-porting either (17 names the upstream issue to check first).
+   try the three patches, 17, 18 and then 19, against a fresh clone of that tag (`git apply --check`
+   of each after applying the ones before it), and read the retirement conditions of entries 17 to 19 before
+   forward-porting any (17 names the upstream issue to check first; 19 is retired when
+   element-call#4326 or its successor is in the pinned tag).
 
    **4b. Upstream refresh (every tag bump, from the repo root).** First, refresh the
    upstream status of every upstream link in both registries and update each entry's
@@ -247,6 +248,7 @@ re-litigated each time someone audits the registry.
 | 16 | `room-retention-indicator` | A room whose messages are deleted automatically says so: a clock before its name in the room list (label and tooltip "Messages are deleted after 2 weeks") and a line under the name in the room header ("Messages here are deleted after 2 weeks"), both from the room's `m.room.retention` and live; the Rocket.Chat face gets the same two through `ViewRoom.retention` and the kit. | config key `io.inblock.room_retention` (the face part also needs the two gates of entry 14) |
 | 17 | `0180-bt-audio-output` | Patch to the **Element Call** embedded build, not to Element Web (file in `patches/element-call/`, built by the `element-call` stage): calls stay audible with Bluetooth headsets. A Windows hands-free output rule, an audio-output guard that holds LiveKit's remote audio on the chosen output and replays it after device or microphone changes, and autoplay-block reporting. | none |
 | 18 | `0190-media-key-recovery` | Second patch to the **Element Call** embedded build (file in `patches/element-call/`, built by the same `element-call` stage, applied after 17): a call recovers when a media E2EE key is lost. The widget client's call-key to-device sends are retried and sent again, and a watchdog re-sends our own call membership with a fresh `created_ts` when a remote stays undecryptable without a key. | none |
+| 19 | `0200-functional-members-ringing` | Third patch to the **Element Call** embedded build (file in `patches/element-call/`, built by the same `element-call` stage, applied after 18): a call skips the room's functional members (bots) when it picks whom to ring, counts a room with two people and a bot as a DM, and always labels a bot's media. Element Call reads the room's `io.element.functional_members` state event, which Element Web already grants the call widget. Port of element-hq/element-call#4326. | none; inert in a room without that state event |
 
 Entry 6 is gated by a labs flag:
 
@@ -283,7 +285,7 @@ recorded by that deployment, not here.
 
 ## Which Dockerfile applies what
 
-**One Dockerfile, all eighteen patches.** `dockerfiles/Dockerfile.element` applies every
+**One Dockerfile, all nineteen patches.** `dockerfiles/Dockerfile.element` applies every
 numbered patch below, in this file's order. **8 depends on 7** and **10 depends on 9**;
 each must stay after the entry it depends on (see their Order notes). **11 is applied
 after 1-10**: its `en_EN.json` hunk was generated against the tree with
@@ -293,12 +295,13 @@ then replaces the `dist/` of the installed `@element-hq/element-call-embedded` p
 that stage's build, right after `pnpm install`. It touches no Element Web file, so it is
 independent of 1-16 and of their order. **18 patches Element Call too**: it is applied in the
 same stage right after 17, because it is generated on top of the tree with 17 applied (the two
-change no file in common). Until 2026-09-01 a
+change no file in common). **19 patches Element Call as well**: applied in the same stage after 18,
+because it changes `src/widget.ts` and `src/widget.test.ts` beside the lines 18 adds there. Until 2026-09-01 a
 separate `dev` branch applied a different subset; that branch was merged into `main` and
 deleted, so there is a single Dockerfile.
 
 A tag bump must try every Element Web patch (1-16) in this file's order, and check entries
-17 and 18 as rule 4 says. **12 is applied after 11**; it touches
+17 to 19 as rule 4 says. **12 is applied after 11**; it touches
 only `apps/web/src/utils/StorageAccess{,.test}.ts`, no file of 1-11. **13 is applied after 12**,
 last of the Element Web patches; of the stock files it changes only `en_EN.json` is also changed
 by an earlier entry (1, 3-8, 11), in a different place (its hunk is generated on the tree with 1-12
@@ -2734,6 +2737,84 @@ aqua-meet's own copy stays at v0.26.1 until it moves its tag.
   `patches/element-call/0190-media-key-recovery.patch` and the pinned tag and commit in
   `dockerfiles/Dockerfile.element`, is the corresponding source of the modification; it is public.
 
+### 19. `0200-functional-members-ringing.patch` - UPSTREAM DEFECT (element-hq/element-call#4326 open; carry until it ships)
+
+The third entry that is not a patch to Element Web: the file is
+[`patches/element-call/0200-functional-members-ringing.patch`](../element-call/0200-functional-members-ringing.patch)
+(a `git format-patch` of one commit) and it applies to **Element Call v0.28.2**
+(`b4dd44bd78c1296fb8c28519bfc41cb488d636fd`) **with entries 17 and 18 applied first**: it changes
+`src/widget.ts` and `src/widget.test.ts` next to the lines 18 adds there, and it was generated on top of that tree.
+It is a port of [element-hq/element-call#4326](https://github.com/element-hq/element-call/pull/4326)
+("Consider functional members when ringing (fix dialing sound does not stop)", open, against `main`).
+
+- **What:** The call stops treating a room's functional members (bots and other service accounts, listed in
+  the room state event `io.element.functional_members`, field `service_members`) as people.
+  1. New `src/state/CallViewModel/FunctionalMembers.ts`, `createFunctionalMembers$`: the set of those user IDs,
+     read from the room's live timeline and refreshed on room state events of that type; entries that are not
+     strings are dropped; empty without the event.
+  2. `CallNotificationLifecycle.ts` takes `humanRoomMemberUserIds$` (joined members that are not functional)
+     in place of `roomMemberUserIds$`. The ring recipient is the first one that is not us, so a bot listed
+     first is no longer rung.
+  3. `CallViewModel.ts`: the one-on-one and pip layouts count human members only, so a room with two people and
+     a bot is still a DM, and show the name tags whenever a functional member is in the call, so a bot's media
+     is never shown unlabelled.
+  4. `widget.ts` adds `io.element.functional_members` to the state events the widget asks to read. Without it the
+     widget never sees the event and 1 to 3 do nothing.
+  5. Tests: new `FunctionalMembers.test.ts` (4), three cases in `CallViewModel.test.ts` (each in two modes),
+     the renamed prop in `CallNotificationLifecycle.test.ts`, the capability in `widget.test.ts`, and the helpers
+     `mockLiveTimeline` and `functionalMembers` in `CallViewModelTestUtils.ts` and `utils/test.ts`.
+- **Gate:** none in the build; the patch is inert without the mark: in a room that has no
+  `io.element.functional_members` state event the set is empty and every code path equals stock. The
+  reading side needs the room to carry the event; writing it is not part of this entry.
+- **Ported to v0.28.2 (2026-11-26).** The upstream diff applies to v0.28.2 with 17 and 18 applied except for one
+  hunk, and two lines that apply but fail at run time. (a) `src/widget.test.ts`: the import hunk was rejected
+  because 18 adds `afterEach` and `type MatrixClient` there; resolved by hand, the new import placed before
+  `type MatrixClient`. (b) `CallViewModel.test.ts`: the new ringing test uses `RTC_CALL_INTENT_AUDIO`, which
+  upstream `main` has and v0.28.2 does not (the existing ringing tests say `intent: "audio"`); replaced by the
+  literal, or the test dies with a `ReferenceError`. (c) The two new one-on-one layout tests expect
+  `pipSize: undefined`; v0.28.2 gives `"lg"` for the same fixtures (the neighbouring three-member test expects
+  `"lg"`); both changed. No production line differs from the upstream diff.
+- **Element Web grants the read (H4, checked 2026-11-26 on tag `v1.12.35`, commit `7001d81efc9f`).** The widget
+  asks for `org.matrix.msc2762.receive.state_event:io.element.functional_members` and Element Web pre-approves
+  exactly that: `apps/web/src/stores/widgets/ElementWidgetDriver.ts:151-153` adds
+  `WidgetEventCapability.forStateEvent(EventDirection.Receive, UNSTABLE_ELEMENT_FUNCTIONAL_USERS.name)` to
+  `allowedCapabilities`, inside the trusted-call branch that starts at line 121
+  (`virtual && WidgetType.CALL && WidgetKind.Room`; `virtual` is a widget with no room state event,
+  `WidgetMessaging.ts:206`, which is how `models/Call.ts:945` creates Element Call). Its unit test lists the same
+  capability (`ElementWidgetDriver.test.ts:110`). None of our Element Web patches touches that driver. Because
+  Element Web grants it already, no Element Web patch is needed and no permission prompt appears.
+- **How it reaches the image:** exactly like entries 17 and 18. The `element-call` stage copies the patch and
+  applies it with `git apply --verbose` right after 0190, with no `--3way`, so a patch that stops applying fails
+  the image build; `VITE_APP_VERSION` names the three patches (`embedded-v0.28.2-aqua.0180.0190.0200`); stage `deps`
+  replaces the installed package's `dist/` with the stage's build.
+- **Why:** In a DM with a bot the call rang the first room member that was not us, which could be the bot, and the
+  ring of the person who should have been rung kept going ("dialing sound does not stop", the PR title).
+  Stock Element Call has a `TODO: Respect io.element.functional_members` at both places.
+- **Evidence:** the PR and its diff (saved by the agent_call track at `call-ring-rca-20261124`); the stock
+  `TODO` lines in `CallNotificationLifecycle.ts` and `CallViewModel.ts` at v0.28.2. Tests, 2026-11-26: on the
+  tree with 17 and 18 applied, the four touched test files fail on the stock production code (12 of 85 fail,
+  all the new or renamed cases) and pass with 19 (87 pass, 2 skipped upstream); the whole suite is 130 files,
+  1140 passed and 7 skipped, and `tsc` is clean.
+- **Upstream status:** UPSTREAM DEFECT, filed by Element as #4326 (open when checked, 2026-11-26). The vendored
+  patch is a port, not the byte-for-byte PR diff: (a) to (c) above differ.
+- **Retirement:** upstream Element Call ships #4326 or an equivalent (the ring recipient and the DM test skip
+  `io.element.functional_members`) in the version `ELEMENT_CALL_TAG` pins. Check at every `ELEMENT_WEB_TAG` bump
+  (rule 4). When dropping: delete the patch file, its `COPY` and `git apply` lines in the `element-call` stage, the
+  row of `markers.tsv`, this entry and its README and NOTICE lines, and the `.0200` of `ELEMENT_CALL_VERSION`.
+- **Coverage (rule 2):** none in this repository's CI beyond the marker, as for entries 17 and 18: the tests belong
+  to the patched Element Call tree (run above in a clone of the tag, not in the `Element patch unit tests` job). The
+  marker `service_members` (the field `FunctionalMembers.ts` reads) in `widgets/element-call/assets/index-*.js`
+  proves that the patched code reached the served bundle (the Dockerfile's loop checks it,
+  `scripts/element-patch-markers.sh` runs it against a deployment). The string `io.element.functional_members`
+  is not usable as the marker: matrix-js-sdk's constant for it sits in a shared chunk (`dist-*.js`) that stock
+  carries too, and the entry chunk only refers to it by variable. A first image build with it as the marker
+  failed on exactly that (2026-11-26) and the marker loop did its job. A real call into a DM with a bot has not been run for this entry; a deploy needs the
+  real-browser user check like any other build.
+- **Source offer:** Element Call is AGPL-3.0-only OR LicenseRef-Element-Commercial and the image conveys our
+  modified build of it to every browser that loads it. This repository, with
+  `patches/element-call/0200-functional-members-ringing.patch` and the pinned tag and commit in
+  `dockerfiles/Dockerfile.element`, is the corresponding source of the modification; it is public.
+
 ## Runtime-stage deltas (not `.patch` files, still upstream deviations)
 
 | Delta | Where | Why |
@@ -3009,6 +3090,14 @@ What the table does not say, and the choices behind it:
   one file on both sides. The stock package's `dist/` differs from a local build in chunks that upstream's CI adds (a
   Sentry release-injection file, a `rolldown-runtime` chunk, an `indexeddb-crypto-store` chunk); sizes are alike (45 MB each).
   The image build's own marker loop was not run for this entry: the image is built by CI.
+- **Entry 19 (2026-11-26), `service_members` in `widgets/element-call/assets/index-*.js`.** **Candidate:** a local
+  `pnpm run build:embedded:production` of the v0.28.2 tag with entries 17, 18 and 19 applied in the stage's order
+  (`VITE_APP_VERSION=embedded-v0.28.2-aqua.0180.0190.0200`, not the Docker image) writes one entry chunk,
+  `assets/index-DojcZw84.js`, with 1 occurrence (`getContent().service_members` of `FunctionalMembers.ts`). **Stock:**
+  the `dist/` of `@element-hq/element-call-embedded@0.28.2` (`npm pack`, the entry chunk `assets/index-CqnG6OLe.js`): 0
+  occurrences in it; the string is in `IndexedDBWorker-*.js` and `indexeddb-crypto-store-*.js` (matrix-js-sdk code), which the glob
+  does not name. The glob names one file on both sides. The first candidate marker, `io.element.functional_members`, is in
+  a js-sdk chunk of the candidate too and not in its entry chunk, so it was rejected (the image build failed on it).
 - **To re-prove after a tag bump or a new entry:** extract `/app` of the new build and of the stock
   image for the new tag, serve each from a loopback static server, and run
   `scripts/element-patch-markers.sh --absent <every entry> http://127.0.0.1:<port>` against stock

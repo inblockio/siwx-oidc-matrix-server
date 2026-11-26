@@ -11,9 +11,10 @@
 
 # ---------------------------------------------------------------------------
 # element-call: the Element Call embedded build that Element Web serves under
-# widgets/element-call/, built from source at a pinned tag with our two patches
-# (patches/element-call/0180-bt-audio-output.patch, registry entry 17, and
-# patches/element-call/0190-media-key-recovery.patch, registry entry 18, both in
+# widgets/element-call/, built from source at a pinned tag with our three patches
+# (patches/element-call/0180-bt-audio-output.patch, registry entry 17,
+# patches/element-call/0190-media-key-recovery.patch, registry entry 18, and
+# patches/element-call/0200-functional-members-ringing.patch, registry entry 19, all in
 # patches/element-web/README.md).
 #
 # Why: Element Web v1.12.35 does not build Element Call. apps/web/webpack.config.ts
@@ -24,13 +25,16 @@
 # autoplay-block reporting); entry 17 has the evidence. Patch 0190 makes a call
 # recover when a media key is lost (call key to-device sends retried and sent again,
 # a watchdog that re-sends our own membership when a remote stays undecryptable);
-# entry 18 has the evidence. Both attach in Element Call's sdk/ layer since 0.28
+# entry 18 has the evidence. Patch 0200 makes the call skip the room's functional
+# members (bots) when it picks whom to ring and counts a room as a DM; it reads the
+# io.element.functional_members state event and does nothing without it; entry 19.
+# 0180 and 0190 attach in Element Call's sdk/ layer since 0.28
 # (the LiveKit connection and its factory live there); each reaches back into src/
-# at exactly one import, which entries 17 and 18 record. Stage `deps` replaces the
-# installed package's dist/ with the dist/ built here.
+# at exactly one import, which entries 17 and 18 record; 0200 is in src/ only. Stage
+# `deps` replaces the installed package's dist/ with the dist/ built here.
 #
 # What: shallow clone of the pinned tag, the patches applied in order (0180, then
-# 0190, which is generated on top of 0180), then the build
+# 0190, which is generated on top of 0180, then 0200, generated on top of both), then the build
 # upstream's CI runs for the embedded package (.github/workflows/build-element-call.yaml:
 # corepack with the packageManager its package.json pins, a frozen-lockfile
 # install that ignores any pnpmfile, `pnpm run build:embedded:production`). The
@@ -51,7 +55,7 @@ FROM node:24.20.0-bullseye@sha256:25f3016fcdae6b5d65bd9bcb4064b7e4198ec8d49493fa
 
 ARG ELEMENT_CALL_TAG=v0.28.2
 ARG ELEMENT_CALL_COMMIT=b4dd44bd78c1296fb8c28519bfc41cb488d636fd
-ARG ELEMENT_CALL_VERSION=embedded-v0.28.2-aqua.0180.0190
+ARG ELEMENT_CALL_VERSION=embedded-v0.28.2-aqua.0180.0190.0200
 
 WORKDIR /src
 
@@ -72,6 +76,11 @@ RUN git apply --verbose /tmp/ec-bt-audio-output.patch
 # commit is the tree with 0180 applied), so it is applied after it.
 COPY patches/element-call/0190-media-key-recovery.patch /tmp/ec-media-key-recovery.patch
 RUN git apply --verbose /tmp/ec-media-key-recovery.patch
+
+# Entry 19 is generated on top of entries 17 and 18 (it changes src/widget.ts and
+# src/widget.test.ts next to 18's lines), so it is applied after both.
+COPY patches/element-call/0200-functional-members-ringing.patch /tmp/ec-functional-members-ringing.patch
+RUN git apply --verbose /tmp/ec-functional-members-ringing.patch
 
 # Install exactly what the lockfile pins, as upstream's CI does. VITE_APP_VERSION
 # names the build in Element Call's own version string. The build script sets its
@@ -328,7 +337,7 @@ RUN set -e; \
     pkgdir="$(dirname "$(realpath "$pkgjson")")"; \
     got="$(node -p "require('$pkgdir/package.json').version")"; \
     if [ "$got" != "${ELEMENT_CALL_STOCK_VERSION}" ]; then \
-      echo "FATAL: Element Web installs @element-hq/element-call-embedded $got, this build replaces ${ELEMENT_CALL_STOCK_VERSION}. Rebase the element-call stage onto the new Element Call release (patches/element-web/README.md, entries 17 and 18)." >&2; \
+      echo "FATAL: Element Web installs @element-hq/element-call-embedded $got, this build replaces ${ELEMENT_CALL_STOCK_VERSION}. Rebase the element-call stage onto the new Element Call release (patches/element-web/README.md, entries 17 to 19)." >&2; \
       exit 1; \
     fi; \
     test -d "$pkgdir/dist"; \

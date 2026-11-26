@@ -1,0 +1,586 @@
+From a30db56757aec4dacf3766832dd7c8d0b6431a84 Mon Sep 17 00:00:00 2001
+From: Tim Bansemer <tim.bansemer@inblock.io>
+Date: Thu, 26 Nov 2026 10:26:39 +0100
+Subject: [PATCH] Consider functional members when ringing
+
+Port of element-hq/element-call#4326 to v0.28.2. A room can mark bots and
+other service accounts as functional members (the io.element.functional_members
+state event, service_members). Stock Element Call ignores it: in a DM with a
+bot the ring recipient is the first room member that is not us, which can be
+the bot, and a room with two people and a bot is no longer treated as a DM
+for the one-on-one name tags.
+
+- New src/state/CallViewModel/FunctionalMembers.ts, createFunctionalMembers$:
+  the user IDs of the room's functional members, kept current from room state
+  events; entries that are not strings are dropped.
+- CallNotificationLifecycle takes humanRoomMemberUserIds$ (room members that
+  are not functional) instead of roomMemberUserIds$, so the ring recipient is
+  a person.
+- The one-on-one mobile and pip layouts count only human members, and still
+  show name tags when a functional member is in the call, so a bot's media is
+  never shown without a label.
+- widget.ts requests the read of io.element.functional_members in the
+  widget capabilities; without it the widget sees no such event and the rest
+  does nothing.
+- Tests: FunctionalMembers.test.ts, three cases in CallViewModel.test.ts
+  and the capability in widget.test.ts; test helpers mockLiveTimeline and a
+  functionalMembers input.
+
+Ported from main: the two new one-on-one layout tests expect pipSize "lg" (0.28.2
+gives "lg" for the same fixtures), the ringing test names the intent "audio"
+(0.28.2 has no RTC_CALL_INTENT_AUDIO), and the widget.ts and widget.test.ts
+import lists are the ones that 0190 changes.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ .../CallNotificationLifecycle.test.ts         |  2 +-
+ .../CallNotificationLifecycle.ts              | 13 ++-
+ src/state/CallViewModel/CallViewModel.test.ts | 93 ++++++++++++++++++
+ src/state/CallViewModel/CallViewModel.ts      | 30 ++++--
+ .../CallViewModel/CallViewModelTestUtils.ts   | 23 ++++-
+ .../CallViewModel/FunctionalMembers.test.ts   | 94 +++++++++++++++++++
+ src/state/CallViewModel/FunctionalMembers.ts  | 51 ++++++++++
+ src/utils/test.ts                             | 22 ++++-
+ src/widget.test.ts                            |  2 +
+ src/widget.ts                                 |  2 +
+ 10 files changed, 314 insertions(+), 18 deletions(-)
+ create mode 100644 src/state/CallViewModel/FunctionalMembers.test.ts
+ create mode 100644 src/state/CallViewModel/FunctionalMembers.ts
+
+diff --git a/src/state/CallViewModel/CallNotificationLifecycle.test.ts b/src/state/CallViewModel/CallNotificationLifecycle.test.ts
+index a624f5f..658176e 100644
+--- a/src/state/CallViewModel/CallNotificationLifecycle.test.ts
++++ b/src/state/CallViewModel/CallNotificationLifecycle.test.ts
+@@ -44,7 +44,7 @@ function mockRingEvent(
+ 
+ const defaultProps = {
+   memberUserIds$: constant<string[]>([]),
+-  roomMemberUserIds$: constant([alice.userId]),
++  humanRoomMemberUserIds$: constant([alice.userId]),
+   receivedDecline$: NEVER,
+   options: {
+     waitForCallPickup: true,
+diff --git a/src/state/CallViewModel/CallNotificationLifecycle.ts b/src/state/CallViewModel/CallNotificationLifecycle.ts
+index ec16599..060e452 100644
+--- a/src/state/CallViewModel/CallNotificationLifecycle.ts
++++ b/src/state/CallViewModel/CallNotificationLifecycle.ts
+@@ -80,8 +80,12 @@ export interface Props {
+   scope: ObservableScope;
+   /** The user ids of the session's members, ours included. */
+   memberUserIds$: Behavior<string[]>;
+-  /** The user ids of the room's members, ours included. */
+-  roomMemberUserIds$: Behavior<string[]>;
++  /**
++   * The user ids of the room's human members, ours included. Functional
++   * members (bots) must be excluded: the ring recipient is the first one that
++   * is not us.
++   */
++  humanRoomMemberUserIds$: Behavior<string[]>;
+   sentCallNotification$: Observable<CallNotificationWrapper | null>;
+   receivedDecline$: Observable<
+     Parameters<EventTimelineSetHandlerMap[RoomEvent.Timeline]>
+@@ -93,7 +97,7 @@ export interface Props {
+ export function createCallNotificationLifecycle$({
+   scope,
+   memberUserIds$,
+-  roomMemberUserIds$,
++  humanRoomMemberUserIds$,
+   sentCallNotification$,
+   receivedDecline$,
+   options,
+@@ -125,8 +129,7 @@ export function createCallNotificationLifecycle$({
+       ),
+       switchMap((notificationEvent) => {
+         // We assume that there is only one other user in the room when ringing
+-        // TODO: Respect io.element.functional_members
+-        const recipient = roomMemberUserIds$.value.find(
++        const recipient = humanRoomMemberUserIds$.value.find(
+           (userId) => userId !== localUser.userId,
+         );
+         if (recipient === undefined) {
+diff --git a/src/state/CallViewModel/CallViewModel.test.ts b/src/state/CallViewModel/CallViewModel.test.ts
+index aba2316..47fcec6 100644
+--- a/src/state/CallViewModel/CallViewModel.test.ts
++++ b/src/state/CallViewModel/CallViewModel.test.ts
+@@ -555,6 +555,58 @@ describe.each(modes)("CallViewModel (%s mode)", (mode) => {
+     });
+   });
+ 
++  test("one-on-one mobile layout hides name tags in room with 2 members and a bot", () => {
++    withTestScheduler(({ expectObservable }) => {
++      withCallViewModel(
++        {
++          remoteParticipants$: constant([aliceParticipant]),
++          roomMembers: [local, alice, bob],
++          functionalMembers: [bob.userId],
++          rtcMembers$: constant([localRtcMember, aliceRtcMember]),
++          windowSize$: constant({ width: 380, height: 700 }), // Mobile phone
++        },
++        (vm) => {
++          expectObservable(summarizeLayout$(vm.layout$)).toBe("a", {
++            a: {
++              type: "one-on-one-mobile",
++              spotlight: [`${aliceId}:0`],
++              pip: undefined,
++              pipSize: "lg",
++            },
++          });
++          // Bob is a bot, so the room is still a DM with Alice
++          expectObservable(vm.showNameTags$).toBe("n", yesNo);
++        },
++      );
++    });
++  });
++
++  test("one-on-one mobile layout shows name tags when a bot is in the call", () => {
++    withTestScheduler(({ expectObservable }) => {
++      withCallViewModel(
++        {
++          remoteParticipants$: constant([bobParticipant]),
++          roomMembers: [local, alice, bob],
++          functionalMembers: [bob.userId],
++          rtcMembers$: constant([localRtcMember, bobRtcMember]),
++          windowSize$: constant({ width: 380, height: 700 }), // Mobile phone
++        },
++        (vm) => {
++          expectObservable(summarizeLayout$(vm.layout$)).toBe("a", {
++            a: {
++              type: "one-on-one-mobile",
++              spotlight: [`${bobId}:0`],
++              pip: undefined,
++              pipSize: "lg",
++            },
++          });
++          // The remote tile is the bot's media, which must never go unlabelled
++          expectObservable(vm.showNameTags$).toBe("y", yesNo);
++        },
++      );
++    });
++  });
++
+   test("landscape mobile layouts show screen shares and group call participants", () => {
+     withTestScheduler(({ behavior, expectObservable }) => {
+       // Starts as a one-on-one call, then Alice shares her screen, then Bob
+@@ -1616,6 +1668,47 @@ describe.each(modes)("CallViewModel (%s mode)", (mode) => {
+     });
+   });
+ 
++  test("ringing picks the human recipient over a functional member listed first", () => {
++    withTestScheduler(({ behavior, schedule, expectObservable }) => {
++      withCallViewModel(
++        {
++          // Alice answers after 20ms
++          rtcMembers$: behavior("a 20ms b", {
++            a: [localRtcMember],
++            b: [localRtcMember, aliceRtcMember],
++          }),
++          // A DM with a bot, where the bot happens to come first
++          roomMembers: [bob, alice, local],
++          functionalMembers: [bob.userId],
++        },
++        (vm, rtcSession) => {
++          // Fire a ringing notification with a 30ms lifetime
++          schedule("n", {
++            n: () => {
++              rtcSession.emit(
++                MatrixRTCSessionEvent.DidSendCallNotification,
++                mockRingEvent("$notif1", 30),
++              );
++            },
++          });
++
++          // Alice, not the bot, is the recipient, and her pickup stops the ring
++          expectObservable(vm.ringingVm$).toBe("(ab) 17ms a", {
++            a: null,
++            b: expect.objectContaining({
++              type: "ringing",
++              userId: alice.userId,
++              intent: "audio",
++            }),
++          });
++          // The ring was answered, so the lifetime running out must not leave
++          expectObservable(vm.autoLeave$).toBe("-");
++        },
++        { waitForCallPickup: true },
++      );
++    });
++  });
++
+   it.skip("audio output changes when toggling earpiece mode", () => {
+     withTestScheduler(({ schedule, expectObservable }) => {
+       const devices = new MediaDevices(testScope(), {
+diff --git a/src/state/CallViewModel/CallViewModel.ts b/src/state/CallViewModel/CallViewModel.ts
+index 89b4570..fd80b63 100644
+--- a/src/state/CallViewModel/CallViewModel.ts
++++ b/src/state/CallViewModel/CallViewModel.ts
+@@ -108,6 +108,7 @@ import {
+   createCallNotificationLifecycle$,
+   createReceivedDecline$,
+ } from "./CallNotificationLifecycle.ts";
++import { createFunctionalMembers$ } from "./FunctionalMembers.ts";
+ import {
+   type LayoutSwitchViewModel,
+   createLayoutSwitchViewModel,
+@@ -606,6 +607,14 @@ export function createCallViewModel$(
+     ),
+     roomMembers(matrixRoom),
+   );
++  const functionalMembers$ = createFunctionalMembers$(scope, matrixRoom);
++  const humanRoomMembers$ = scope.behavior(
++    combineLatest([matrixRoomMembers$, functionalMembers$]).pipe(
++      map(([members, functional]) =>
++        members.filter((m) => !functional.has(m.userId)),
++      ),
++    ),
++  );
+ 
+   // TODO if we are in "unknown" state we need a loading rendering (or empty screen)
+   // Otherwise it looks like we already connected and only than the ringing starts which is weird.
+@@ -614,8 +623,8 @@ export function createCallViewModel$(
+     memberUserIds$: scope.behavior(
+       members$.pipe(map((members) => members.map((m) => m.userId))),
+     ),
+-    roomMemberUserIds$: scope.behavior(
+-      matrixRoomMembers$.pipe(map((members) => members.map((m) => m.userId))),
++    humanRoomMemberUserIds$: scope.behavior(
++      humanRoomMembers$.pipe(map((members) => members.map((m) => m.userId))),
+     ),
+     sentCallNotification$,
+     receivedDecline$: createReceivedDecline$(matrixRoom),
+@@ -1066,18 +1075,21 @@ export function createCallViewModel$(
+     layoutMedia$.pipe(
+       switchMap((l) =>
+         l.type === "pip" || l.type === "one-on-one-mobile"
+-          ? matrixRoomMembers$.pipe(
++          ? combineLatest([
++              humanRoomMembers$,
++              members$,
++              functionalMembers$,
++            ]).pipe(
+               map(
+-                (members) =>
++                ([humanMembers, callMembers, functional]) =>
+                   // Hide name tags by default in these layouts. For safety we
+                   // still need to show them in case it wouldn't be clear who
+-                  // the spotlight media belongs to.
+-                  // TODO: Respect io.element.functional_members (while still
+-                  // being careful to never show a functional member's media
+-                  // without a name tag!)
++                  // the spotlight media belongs to: a third person in the room,
++                  // or a functional member in the call.
+                   // TODO: Only hide name tags in DMs, not group chats that just
+                   // happen to have only 2 users
+-                  members.length > 2,
++                  humanMembers.length > 2 ||
++                  callMembers.some((m) => functional.has(m.userId)),
+               ),
+             )
+           : of(true),
+diff --git a/src/state/CallViewModel/CallViewModelTestUtils.ts b/src/state/CallViewModel/CallViewModelTestUtils.ts
+index 2824ec4..b6048ce 100644
+--- a/src/state/CallViewModel/CallViewModelTestUtils.ts
++++ b/src/state/CallViewModel/CallViewModelTestUtils.ts
+@@ -19,7 +19,14 @@ import {
+ } from "@element-hq/matrixrtc-sdk";
+ import { SyncState } from "matrix-js-sdk/lib/sync";
+ import { BehaviorSubject, map, of, switchMap } from "rxjs";
+-import { ClientEvent, type RoomMember, type MatrixClient } from "matrix-js-sdk";
++import {
++  ClientEvent,
++  KnownMembership,
++  type MatrixEvent,
++  type RoomMember,
++  type MatrixClient,
++  UNSTABLE_ELEMENT_FUNCTIONAL_USERS,
++} from "matrix-js-sdk";
+ import EventEmitter from "events";
+ 
+ import type { CallMembership } from "matrix-js-sdk/lib/matrixrtc";
+@@ -32,6 +39,7 @@ import {
+ import { createSentCallNotification$ } from "./CallNotificationLifecycle";
+ import {
+   mockConfig,
++  mockLiveTimeline,
+   mockMatrixRoom,
+   mockMatrixRoomMember,
+   mockRTCParticipation,
+@@ -74,6 +82,8 @@ export interface CallViewModelInputs {
+   remoteParticipants$: Behavior<Participant[]>;
+   rtcMembers$: Behavior<Partial<CallMembership>[]>;
+   roomMembers: RoomMember[];
++  /** The user IDs the room marks as functional members (bots). */
++  functionalMembers: string[];
+   /** Whether the local transport is connected. */
+   connected$: Behavior<boolean>;
+   speaking: Map<Participant, Behavior<boolean>>;
+@@ -100,6 +110,7 @@ export function withCallViewModel(mode: MatrixRTCMode) {
+         dave,
+         daveRTL,
+       ],
++      functionalMembers = [],
+       connected$ = constant(true),
+       speaking = new Map(),
+       videoEnabled = new Map(),
+@@ -145,7 +156,15 @@ export function withCallViewModel(mode: MatrixRTCMode) {
+         }
+       })() as Partial<MatrixClient> as MatrixClient,
+       getMembers: () => roomMembers,
+-      getMembersWithMembership: () => roomMembers,
++      getMembersWithMembership: (membership: string) =>
++        membership === KnownMembership.Join ? roomMembers : [],
++      getLiveTimeline: mockLiveTimeline((type, stateKey) =>
++        UNSTABLE_ELEMENT_FUNCTIONAL_USERS.matches(type) && stateKey === ""
++          ? ({
++              getContent: () => ({ service_members: functionalMembers }),
++            } as Partial<MatrixEvent> as MatrixEvent)
++          : null,
++      ),
+     });
+     const rtcSession = new MockRTCSession(room, []).withMemberships(
+       rtcMembers$,
+diff --git a/src/state/CallViewModel/FunctionalMembers.test.ts b/src/state/CallViewModel/FunctionalMembers.test.ts
+new file mode 100644
+index 0000000..d4e9d80
+--- /dev/null
++++ b/src/state/CallViewModel/FunctionalMembers.test.ts
+@@ -0,0 +1,94 @@
++/*
++Copyright 2026 Element Creations Ltd.
++
++SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE in the repository root for full details.
++*/
++
++import { beforeEach, describe, it } from "vitest";
++import {
++  type MatrixEvent,
++  type Room as MatrixRoom,
++  type RoomState,
++  RoomStateEvent,
++  UNSTABLE_ELEMENT_FUNCTIONAL_USERS,
++} from "matrix-js-sdk";
++
++import {
++  mockLiveTimeline,
++  mockMatrixRoom,
++  testScope,
++  withTestScheduler,
++} from "../../utils/test";
++import { createFunctionalMembers$ } from "./FunctionalMembers";
++
++describe("createFunctionalMembers$", () => {
++  let room: MatrixRoom;
++  let serviceMembers: string[] | undefined;
++
++  beforeEach(() => {
++    serviceMembers = undefined;
++    room = mockMatrixRoom({
++      getLiveTimeline: mockLiveTimeline((type, stateKey) =>
++        serviceMembers !== undefined &&
++        UNSTABLE_ELEMENT_FUNCTIONAL_USERS.matches(type) &&
++        stateKey === ""
++          ? ({
++              getContent: () => ({ service_members: serviceMembers }),
++            } as Partial<MatrixEvent> as MatrixEvent)
++          : null,
++      ),
++    });
++  });
++
++  function emitStateEvent(type: string): void {
++    room.emit(
++      RoomStateEvent.Events,
++      { getType: () => type } as unknown as MatrixEvent,
++      {} as RoomState,
++      null,
++    );
++  }
++
++  it("is empty without a functional members event", () => {
++    withTestScheduler(({ expectObservable }) => {
++      expectObservable(createFunctionalMembers$(testScope(), room)).toBe("a", {
++        a: new Set(),
++      });
++    });
++  });
++
++  it("tracks the functional members event", () => {
++    withTestScheduler(({ expectObservable, schedule }) => {
++      serviceMembers = ["@bot:example.com"];
++      const functional$ = createFunctionalMembers$(testScope(), room);
++      schedule("-a", {
++        a: () => {
++          serviceMembers = ["@bot:example.com", "@bot2:example.com"];
++          emitStateEvent(UNSTABLE_ELEMENT_FUNCTIONAL_USERS.name);
++        },
++      });
++      expectObservable(functional$).toBe("ab", {
++        a: new Set(["@bot:example.com"]),
++        b: new Set(["@bot:example.com", "@bot2:example.com"]),
++      });
++    });
++  });
++
++  it("ignores unrelated state events", () => {
++    withTestScheduler(({ expectObservable, schedule }) => {
++      const functional$ = createFunctionalMembers$(testScope(), room);
++      schedule("-a", { a: () => emitStateEvent("m.room.topic") });
++      expectObservable(functional$).toBe("a", { a: new Set() });
++    });
++  });
++
++  it("drops entries that are not user IDs", () => {
++    withTestScheduler(({ expectObservable }) => {
++      serviceMembers = ["@bot:example.com", 42 as unknown as string];
++      expectObservable(createFunctionalMembers$(testScope(), room)).toBe("a", {
++        a: new Set(["@bot:example.com"]),
++      });
++    });
++  });
++});
+diff --git a/src/state/CallViewModel/FunctionalMembers.ts b/src/state/CallViewModel/FunctionalMembers.ts
+new file mode 100644
+index 0000000..5a2c362
+--- /dev/null
++++ b/src/state/CallViewModel/FunctionalMembers.ts
+@@ -0,0 +1,51 @@
++/*
++Copyright 2026 Element Creations Ltd.
++
++SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE in the repository root for full details.
++*/
++
++import {
++  EventTimeline,
++  type MatrixEvent,
++  type Room as MatrixRoom,
++  RoomStateEvent,
++  UNSTABLE_ELEMENT_FUNCTIONAL_USERS,
++} from "matrix-js-sdk";
++import { filter, fromEvent, map, type Observable } from "rxjs";
++import { type Behavior, type ObservableScope } from "@element-hq/matrixrtc-sdk";
++
++/**
++ * The user IDs that the room marks as functional members (bots and other
++ * service accounts). They should not be treated as participants when deciding who
++ * to ring or whether the room is a DM.
++ */
++export function createFunctionalMembers$(
++  scope: ObservableScope,
++  matrixRoom: MatrixRoom,
++): Behavior<Set<string>> {
++  return scope.behavior(
++    (
++      fromEvent(matrixRoom, RoomStateEvent.Events) as Observable<[MatrixEvent]>
++    ).pipe(
++      filter(([event]) =>
++        UNSTABLE_ELEMENT_FUNCTIONAL_USERS.matches(event.getType()),
++      ),
++      map(() => functionalMembers(matrixRoom)),
++    ),
++    functionalMembers(matrixRoom),
++  );
++}
++
++function functionalMembers(matrixRoom: MatrixRoom): Set<string> {
++  const serviceMembers: unknown = matrixRoom
++    .getLiveTimeline()
++    .getState(EventTimeline.FORWARDS)
++    ?.getStateEvents(UNSTABLE_ELEMENT_FUNCTIONAL_USERS.name, "")
++    ?.getContent().service_members;
++  return new Set(
++    Array.isArray(serviceMembers)
++      ? serviceMembers.filter((id): id is string => typeof id === "string")
++      : [],
++  );
++}
+diff --git a/src/utils/test.ts b/src/utils/test.ts
+index 8f9f7c3..0c7af09 100644
+--- a/src/utils/test.ts
++++ b/src/utils/test.ts
+@@ -24,11 +24,13 @@ import {
+   vitest,
+ } from "vitest";
+ import {
++  type EventTimeline,
+   EventType,
+   MatrixEvent,
+   type Room as MatrixRoom,
+   type Room,
+   type RoomMember,
++  type RoomState,
+   TypedEventEmitter,
+ } from "matrix-js-sdk";
+ import {
+@@ -291,8 +293,26 @@ export function mockMatrixRoomMember(
+   } as RoomMember;
+ }
+ 
++/**
++ * A room's `getLiveTimeline`, whose forwards state looks up single state
++ * events with the given function.
++ */
++export function mockLiveTimeline(
++  getStateEvent: (type: string, stateKey: string) => MatrixEvent | null,
++): () => EventTimeline {
++  const state = {
++    getStateEvents: getStateEvent,
++  } as Partial<RoomState> as RoomState;
++  return () =>
++    ({ getState: () => state }) as Partial<EventTimeline> as EventTimeline;
++}
++
+ export function mockMatrixRoom(room: Partial<MatrixRoom>): MatrixRoom {
+-  return { ...mockEmitter(), ...room } as Partial<MatrixRoom> as MatrixRoom;
++  return {
++    ...mockEmitter(),
++    getLiveTimeline: mockLiveTimeline(() => null),
++    ...room,
++  } as Partial<MatrixRoom> as MatrixRoom;
+ }
+ 
+ /**
+diff --git a/src/widget.test.ts b/src/widget.test.ts
+index c4416e9..2f497c6 100644
+--- a/src/widget.test.ts
++++ b/src/widget.test.ts
+@@ -9,6 +9,7 @@ import { describe, expect, vi, it, beforeEach, afterEach } from "vitest";
+ import {
+   createRoomWidgetClient,
+   EventType,
++  UNSTABLE_ELEMENT_FUNCTIONAL_USERS,
+   type MatrixClient,
+ } from "matrix-js-sdk";
+ 
+@@ -98,6 +99,7 @@ describe("widget", () => {
+       { eventType: EventType.RoomName },
+       { eventType: EventType.RoomMember },
+       { eventType: EventType.RoomEncryption },
++      { eventType: UNSTABLE_ELEMENT_FUNCTIONAL_USERS.name },
+       { eventType: EventType.GroupCallMemberPrefix },
+     ];
+ 
+diff --git a/src/widget.ts b/src/widget.ts
+index 3a39a1c..d854e8f 100644
+--- a/src/widget.ts
++++ b/src/widget.ts
+@@ -10,6 +10,7 @@ import {
+   EventType,
+   createRoomWidgetClient,
+   type MatrixClient,
++  UNSTABLE_ELEMENT_FUNCTIONAL_USERS,
+ } from "matrix-js-sdk";
+ import {
+   WidgetApi,
+@@ -148,6 +149,7 @@ export const initializeWidget = (
+         { eventType: EventType.RoomName },
+         { eventType: EventType.RoomMember },
+         { eventType: EventType.RoomEncryption },
++        { eventType: UNSTABLE_ELEMENT_FUNCTIONAL_USERS.name },
+         { eventType: EventType.GroupCallMemberPrefix },
+       ];
+ 
+-- 
+2.53.0
+
