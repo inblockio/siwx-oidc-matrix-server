@@ -13,22 +13,28 @@ The module is **inert until a server lists it** in `modules:`. The image carries
 - The flag is the profile field `io.inblock.agent` (MSC4133) set by the account itself to
   `true`. `1` counts as true too (SQLite stores a JSON true as 1, Postgres as true).
 - **Join.** When a local flagged account joins a room, it is added to `service_members`. The
-  state event is sent **in the name of whoever invited it**: the invite that directly precedes
-  the account's current stay (a join after a join is a profile change; an invite from an earlier
-  stay does not count). Every other key and entry of an existing event is kept.
+  state event is sent **in the name of whoever invited it**: the module walks from the account's
+  current join to the membership event it replaced (through joins that are profile changes), and
+  the inviter is the sender of that event if it is an invite; an invite from an earlier stay does
+  not count, and no stream ordering is compared (backfilled events have negative ones). Every other key and entry of an existing event is kept.
 - **Own chats.** A chat the agent created itself has no inviter; it is marked in the agent's own
   name (`mark_own_rooms`, default `true`; the owner's answer OQ1). The write waits
   `own_room_delay_seconds` (2 s) so that room creation finishes first.
-- **On flag.** When an account changes its profile (which includes setting the flag), the module
-  marks that account's existing chats.
+- **On flag.** When an account's flag goes from unset or false to true, the module marks that
+  account's existing chats. Other profile changes (a new display name) do nothing, so a mark a
+  room admin removed does not come back that way.
 - **Start sweep.** At start (after `startup_delay_seconds`), every flagged account is checked, in
   batches of `sweep_batch_size`. It writes only where a flagged, joined agent is missing from the
   list; there is no timer. A mark a person removed by hand therefore comes back at the next start;
   the flag is the truth. Nothing removes a mark (an agent that leaves keeps its entry; a listed
   account that is absent does nothing).
 - **Skips.** One log line (INFO, `agent_marker: skip ...`) and no Synapse warning, never another
-  member as sender: the inviter may not write the state (power level), has left, is on another
-  server, or there is no invite on record (joined by link). Such a chat stays unmarked.
+  member as sender: the inviter may not write the state (power level), has left, is suspended,
+  locked, shadow-banned or deactivated (the module's send bypasses those checks, so it makes
+  them), is on another server, or there is no invite on record (joined by link). A chat whose
+  `service_members` exists but is not a list is skipped too and never overwritten. Such a chat
+  stays unmarked. In the start sweep an unexpected error in one chat is logged (with its trace)
+  and the sweep goes on with the next.
 - The module never sends with a remote sender and never reacts to its own event (it has no event
   trigger).
 
