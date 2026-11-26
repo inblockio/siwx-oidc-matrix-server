@@ -1263,6 +1263,94 @@ apply_directory_search() {
   echo "Directory search: ENABLED for ${n} service account(s), max_limit=${maxl:-<module default>}, guest_user_type=${utype}, did_field=${dfield}."
 }
 
+# -----------------------------------------------------------------------------
+# Agent marker module (inblock_agent_marker) - OPTIONAL, ENV-GATED, ALWAYS
+# RE-ASSERTED, EVERY BOOT.
+#
+# Lists every local account that flags itself as an agent (profile field
+# io.inblock.agent) in the room state io.element.functional_members of each chat
+# it is in, in the name of whoever invited it, so that Element Call does not ring
+# the agent. The code is in the image (dockerfiles/Dockerfile,
+# synapse-modules/inblock_agent_marker); this function only registers it.
+# Contract: docs/agent-marker.md.
+#
+# FLAG OFF (AGENT_MARKER_ENABLED unset, empty or false): the module is NOT
+# registered, so the image is inert until a server asks for it. A module entry this
+# function wrote on an earlier boot is removed again; nothing else in `modules:` is
+# touched.
+#
+# FAIL CLOSED. With the flag on, a malformed value or a module that cannot be
+# imported REFUSES TO START: a marker that was asked for must not silently be
+# missing.
+#
+# Env:
+#   AGENT_MARKER_ENABLED         true/1/yes/on turns it on; empty/false/0/no/off leaves
+#                                it off; any other value refuses to start
+#   AGENT_MARKER_FLAG_FIELD      the profile field, default io.inblock.agent
+#   AGENT_MARKER_MARK_OWN_ROOMS  true/false, default true: a chat the agent created
+#                                itself is marked in the agent's own name
+# -----------------------------------------------------------------------------
+AGENT_MARKER_MODULE_CLASS="inblock_agent_marker.AgentMarker"
+
+agent_marker_refuse() {
+  echo "REFUSING TO START: $*" >&2
+  exit 1
+}
+
+apply_agent_marker() {
+  local hs=/data/homeserver.yaml
+  local raw="${AGENT_MARKER_ENABLED:-}"
+  local field="${AGENT_MARKER_FLAG_FIELD:-io.inblock.agent}"
+  local own="${AGENT_MARKER_MARK_OWN_ROOMS:-true}"
+  local on=0
+
+  case "${raw,,}" in
+    true|1|yes|on) on=1 ;;
+    ""|false|0|no|off) on=0 ;;
+    *) agent_marker_refuse "AGENT_MARKER_ENABLED must be true/1/yes/on or empty/false/0/no/off." ;;
+  esac
+
+  if [ "$on" = 0 ]; then
+    if [ "$(yq "[(.modules // [])[] | select(.module == \"${AGENT_MARKER_MODULE_CLASS}\")] | length" "$hs" 2>/dev/null)" -gt 0 ] 2>/dev/null; then
+      yq -i "del(.modules[] | select(.module == \"${AGENT_MARKER_MODULE_CLASS}\")) | del(.modules | select(length == 0))" "$hs" \
+        || agent_marker_refuse "could not remove the ${AGENT_MARKER_MODULE_CLASS} entry from ${hs}."
+      echo "Agent marker: AGENT_MARKER_ENABLED is off; removed the module entry from an earlier boot."
+    else
+      echo "Agent marker: disabled (AGENT_MARKER_ENABLED is not set)."
+    fi
+    return 0
+  fi
+
+  # Same grammar as Synapse's profile field names (and apply_did_field_protection).
+  [[ "$field" =~ ^[a-z][a-z0-9_.-]{0,254}$ ]] \
+    || agent_marker_refuse "AGENT_MARKER_FLAG_FIELD is not a profile field name (Synapse's identifier grammar ^[a-z][a-z0-9_.-]{0,254}\$)."
+  case "${own,,}" in
+    true|1|yes|on) own=true ;;
+    false|0|no|off) own=false ;;
+    *) agent_marker_refuse "AGENT_MARKER_MARK_OWN_ROOMS must be true or false." ;;
+  esac
+
+  # The module must be importable BEFORE anything is written.
+  if ! python3 -c 'from inblock_agent_marker import AgentMarker' 2>/dev/null; then
+    agent_marker_refuse "AGENT_MARKER_ENABLED is set but the module 'inblock_agent_marker' cannot be imported (it is baked into the image by dockerfiles/Dockerfile). Unset AGENT_MARKER_ENABLED or use an image that carries the module."
+  fi
+
+  # Our entry is always removed first and re-added, so it is never there twice and
+  # another module in the list is left alone.
+  AM_CLASS="$AGENT_MARKER_MODULE_CLASS" AM_FIELD="$field" AM_OWN="$own" yq -i '
+    (.modules // []) as $m
+    | .modules = ($m | map(select(.module != strenv(AM_CLASS))))
+    | .modules += [{"module": strenv(AM_CLASS), "config": {"flag_field": strenv(AM_FIELD),
+          "mark_own_rooms": (strenv(AM_OWN) == "true")}}]
+  ' "$hs" || agent_marker_refuse "could not write the modules entry to ${hs}."
+
+  # Re-read what is ON DISK, as the other gates do.
+  if [ "$(yq "[(.modules // [])[] | select(.module == \"${AGENT_MARKER_MODULE_CLASS}\")] | length" "$hs" 2>/dev/null)" != "1" ]; then
+    agent_marker_refuse "the ${AGENT_MARKER_MODULE_CLASS} entry is not in ${hs} after writing it."
+  fi
+  echo "Agent marker: ENABLED, flag_field=${field}, mark_own_rooms=${own}."
+}
+
 if [ -f /data/homeserver.yaml ]; then
   apply_mas_config
   apply_matrixrtc_config
@@ -1270,6 +1358,7 @@ if [ -f /data/homeserver.yaml ]; then
   apply_lk_jwt_membership
   apply_guest_policy
   apply_directory_search
+  apply_agent_marker
   if [ "$SECRET_STORE" = 1 ]; then
     apply_secret_store_config
   fi

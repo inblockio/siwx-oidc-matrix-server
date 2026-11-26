@@ -142,6 +142,15 @@ RUN SITE="$(python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"
     && chmod -R a+rX /opt/inblock-modules \
     && python -c 'from inblock_directory import DirectoryModule'
 
+# inblock_agent_marker: the agent marker module (docs/agent-marker.md), same packaging as
+# inblock_directory above (it shares /opt/inblock-modules and the .pth file). It is inert
+# until the entrypoint registers it (AGENT_MARKER_ENABLED). The import check also loads the
+# Synapse internals the module names at its top, so a bump that moved one fails the build.
+COPY ./synapse-modules/inblock_agent_marker /opt/inblock-modules/inblock_agent_marker
+RUN python -m compileall -q /opt/inblock-modules \
+    && chmod -R a+rX /opt/inblock-modules \
+    && python -c 'from inblock_agent_marker import AgentMarker'
+
 COPY ./entrypoints/matrix_server.sh /matrix_server.sh
 
 # LICENSE and NOTICE travel with the image. It redistributes this repository's

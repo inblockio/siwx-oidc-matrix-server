@@ -1,5 +1,7 @@
-# The inblock_directory module's tests (docs/directory-search.md), in Synapse's own test
-# framework, at the Synapse tag dockerfiles/Dockerfile pins.
+# The tests of the Synapse modules in synapse-modules/ (inblock_directory,
+# docs/directory-search.md; inblock_agent_marker, docs/agent-marker.md), in Synapse's own
+# test framework, at the Synapse tag dockerfiles/Dockerfile pins. The agent marker's tests run
+# a second time on Postgres (prod's database), against a service container.
 #
 # WHY. The module calls Synapse internals, three of them looked up per request
 # (`search_users`, `get_profile_field`, `user_directory_search_enabled`). The image build
@@ -57,6 +59,16 @@ jobs:
     # a Rust toolchain; run-tests.sh refuses with a clear message when cargo is missing.
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    # Postgres for `run-tests.sh --postgres`. Throwaway, CI-only credentials (no secret).
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       # Pinned by commit, not by a movable tag; the comment names the release.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -94,3 +106,11 @@ jobs:
 
       - name: Run the module tests against Synapse ${{ steps.tag.outputs.tag }}
         run: synapse-modules/run-tests.sh
+
+      - name: Run the agent marker tests on Postgres
+        env:
+          SYNAPSE_POSTGRES_HOST: 127.0.0.1
+          SYNAPSE_POSTGRES_PORT: '5432'
+          SYNAPSE_POSTGRES_USER: postgres
+          SYNAPSE_POSTGRES_PASSWORD: ci-only
+        run: synapse-modules/run-tests.sh --postgres

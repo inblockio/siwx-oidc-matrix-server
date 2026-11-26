@@ -78,6 +78,17 @@ The rules are the same as `patches/element-web/README.md`, and for the same reas
    `synapse-modules/inblock_directory/module.py`), so a red test here after a bump means
    the module needs a port, not that the test is wrong. See `docs/directory-search.md`.
 
+   The same script also runs the `inblock_agent_marker` tests (`synapse-modules/inblock_agent_marker_tests`,
+   `docs/agent-marker.md`), and `synapse-modules/run-tests.sh --postgres` runs them on Postgres, prod's
+   database (needs `SYNAPSE_POSTGRES_HOST`, `_PORT`, `_USER` and `_PASSWORD`; set
+   `GUEST_POLICY_MODULE_PATH` to load the module next to the guest policy module). That module calls six
+   Synapse internals, listed at the top of `synapse-modules/inblock_agent_marker/module.py` (the profile
+   field read, `event_auth` power helpers, SQL on `profiles`, `room_memberships` and
+   `local_current_membership`, and `Notifier.add_new_join_in_room_callback`). A red test after a bump means
+   the module needs a port. `LogNoiseTestCase` also fails if the module (or the new Synapse) starts logging
+   WARNING lines per event; its control test fails if Synapse stops logging them for an `on_new_event`
+   callback, which means the module can go back to that public callback. Run both: SQLite and Postgres.
+
    **4b.** Then run step 4b of `patches/element-web/README.md` rule 4 (upstream-status
    refresh over both registries, no-drift check for every entry that mirrors a PR).
 5. **`patch`, not `git apply`.** `matrixdotorg/synapse:v1.159.0` ships neither
