@@ -29,6 +29,7 @@ import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
+from unittest.mock import patch
 
 from twisted.internet.testing import MemoryReactor
 
@@ -454,6 +455,205 @@ class AgentMarkerCases(MarkerTestBase):
         # run-tests.sh sets the require flag when it found the guest policy checkout.
         if os.environ.get("INBLOCK_AGENT_MARKER_REQUIRE_GUEST_POLICY"):
             self.assertTrue(GUEST_POLICY_LOADED, "guest policy module is not importable")
+
+
+class FixRoundCases(MarkerTestBase):
+    """Fix round S2-F1: the audit's A1 to A4 and the review's F1 (spec N5, H3, DD3 to DD5)."""
+
+    def admin_put(self, path: str, body: JsonDict, admin_tok: str, method: str = "PUT") -> None:
+        channel = self.make_request(method, path, body, access_token=admin_tok)
+        self.assertEqual(channel.code, 200, channel.result)
+
+    def as_backfilled(self, event_id: str, ordering: int = -5) -> None:
+        """Give a stored event a negative stream ordering, as backfill does (backfill ids count down)."""
+        tables = (
+            "room_memberships", "current_state_events", "local_current_membership",
+            "sliding_sync_membership_snapshots", "sliding_sync_joined_rooms",
+        )
+        sqlite = "sqlite" in type(self.store.db_pool.engine).__name__.lower()
+
+        def txn(t: Any) -> None:
+            # These tables reference events(stream_ordering); the move is test set-up, so the
+            # reference checks are switched off for the transaction (superuser on Postgres).
+            t.execute("UPDATE events SET stream_ordering = stream_ordering WHERE event_id = ?", (event_id,))  # opens the transaction
+            t.execute("PRAGMA defer_foreign_keys = ON" if sqlite else "SET LOCAL session_replication_role = replica")
+            t.execute("SELECT stream_ordering FROM events WHERE event_id = ?", (event_id,))
+            old = t.fetchone()[0]
+            t.execute("UPDATE events SET stream_ordering = ? WHERE event_id = ?", (ordering, event_id))
+            for table in tables:
+                t.execute(f"UPDATE {table} SET event_stream_ordering = ? WHERE event_stream_ordering = ?", (ordering, old))
+
+        self.get_success(self.store.db_pool.runInteraction("test_as_backfilled", txn))
+
+    def _skip_scenario(self, restrict: Any, why: str) -> None:
+        p1, a = self.user("p1"), self.agent("a")
+        adm = self.user("adm", admin_user=True)
+        room_id = self.make_room(p1)
+        self.helper.invite(room_id, p1, a, tok=self.tokens[p1])
+        restrict(p1, self.tokens[adm])
+        with capture_logs() as logs:
+            self.helper.join(room_id, a, tok=self.tokens[a])
+            self.settle()
+        self.assertIsNone(self.fm_event(room_id), "module wrote in the name of a %s inviter" % why)
+        if not WITHOUT_MODULE:
+            self.assertEqual(len(logs.lines("inblock_agent_marker", "skip")), 1, logs.lines("inblock_agent_marker"))
+        self.assertEqual([r.getMessage() for r in logs.at_least(logging.WARNING)], [])
+
+    # ---- A1: no write in the name of a suspended, locked or shadow-banned inviter
+
+    def test_a1_suspended_inviter_is_skipped_with_one_line(self) -> None:
+        def restrict(user: str, tok: str) -> None:
+            self.admin_put(f"/_synapse/admin/v1/suspend/{user}", {"suspend": True}, tok)
+
+        self._skip_scenario(restrict, "suspended")
+
+    def test_a1_locked_inviter_is_skipped_with_one_line(self) -> None:
+        def restrict(user: str, tok: str) -> None:
+            self.admin_put(f"/_synapse/admin/v2/users/{user}", {"locked": True}, tok)
+
+        self._skip_scenario(restrict, "locked")
+
+    def test_a1_shadow_banned_inviter_is_skipped_with_one_line(self) -> None:
+        def restrict(user: str, tok: str) -> None:
+            self.admin_put(f"/_synapse/admin/v1/users/{user}/shadow_ban", {}, tok, method="POST")
+
+        self._skip_scenario(restrict, "shadow-banned")
+
+    # ---- A2: the on-flag reaction runs when the flag goes from unset/false to true
+
+    def test_a2_removed_mark_does_not_return_on_a_display_name_change(self) -> None:
+        p1, a = self.user("p1"), self.agent("a")
+        room_id = self.make_room(p1)
+        self.invite_and_join(room_id, p1, a)
+        self.assertEqual(self.fm_members(room_id), [a])
+        self.helper.send_state(room_id, FM_TYPE, {"service_members": []}, tok=self.tokens[p1])
+        n = len(self.fm_events_in(room_id))
+        channel = self.make_request(
+            "PUT", f"/_matrix/client/v3/profile/{a}/displayname", {"displayname": "renamed"},
+            access_token=self.tokens[a],
+        )
+        self.assertEqual(channel.code, 200, channel.result)
+        self.settle()
+        self.pump(1)
+        self.assertEqual(self.fm_members(room_id), [])
+        self.assertEqual(len(self.fm_events_in(room_id)), n)
+
+    def test_a2_flag_set_again_after_unset_marks_again(self) -> None:
+        p1, j = self.user("p1"), self.user("j")
+        room_id = self.make_room(p1)
+        self.invite_and_join(room_id, p1, j)
+        self.put_flag(j, j)
+        self.settle()
+        self.assertEqual(self.fm_members(room_id), [j])
+        self.put_flag(j, j, value=False)
+        self.settle()
+        self.helper.send_state(room_id, FM_TYPE, {"service_members": []}, tok=self.tokens[p1])
+        self.put_flag(j, j)
+        self.settle()
+        self.assertEqual(self.fm_members(room_id), [j])
+
+    # ---- F1: the inviter is the sender of the invite the CURRENT join replaced
+
+    def test_f1_backfilled_leave_does_not_bring_back_an_earlier_inviter(self) -> None:
+        p1, a = self.user("p1"), self.agent("a")
+        room_id = self.make_room(p1, public=True)
+        self.invite_and_join(room_id, p1, a)
+        self.assertEqual(self.fm_members(room_id), [a])
+        self.helper.send_state(room_id, FM_TYPE, {"service_members": []}, tok=self.tokens[p1])
+        leave_id = self.helper.leave(room_id, a, tok=self.tokens[a])["event_id"]
+        # A backfilled event has a negative stream ordering: the leave now sorts below the old invite.
+        self.as_backfilled(leave_id)
+        n = len(self.fm_events_in(room_id))
+        with capture_logs() as logs:
+            self.helper.join(room_id, a, tok=self.tokens[a])  # by link: this stay has no invite
+            self.settle()
+        self.assertEqual(self.fm_members(room_id), [])
+        self.assertEqual(len(self.fm_events_in(room_id)), n)
+        if not WITHOUT_MODULE:
+            self.assertEqual(len(logs.lines("inblock_agent_marker", "skip")), 1, logs.lines("inblock_agent_marker"))
+
+    def test_f1_inviter_is_found_through_profile_changes_of_the_stay(self) -> None:
+        # invite, join, then two joins that are profile changes: the stay still started with p1's invite.
+        p1, j = self.user("p1"), self.user("j")
+        room_id = self.make_room(p1)
+        self.invite_and_join(room_id, p1, j)
+        for name in ("one", "two"):
+            self.get_success(
+                self.hs.get_profile_handler().set_displayname(
+                    target_user=UserID.from_string(j), requester=create_requester(j),
+                    new_displayname=name, by_admin=True,
+                )
+            )
+        self.put_flag(j, j)
+        self.settle()
+        self.assertEqual(self.fm_members(room_id), [j])
+        self.assertEqual(self.fm_event(room_id).sender, p1)
+
+    # ---- A3: a service_members that is not a list is never overwritten
+
+    def test_a3_non_list_service_members_is_kept_and_skipped_with_one_line(self) -> None:
+        p1, a = self.user("p1"), self.agent("a")
+        room_id = self.make_room(p1)
+        self.helper.send_state(room_id, FM_TYPE, {"service_members": "@bot:test"}, tok=self.tokens[p1])
+        n = len(self.fm_events_in(room_id))
+        with capture_logs() as logs:
+            self.invite_and_join(room_id, p1, a)
+        self.assertEqual(self.fm_event(room_id).content.get("service_members"), "@bot:test")
+        self.assertEqual(len(self.fm_events_in(room_id)), n)
+        if not WITHOUT_MODULE:
+            self.assertEqual(len(logs.lines("inblock_agent_marker", "skip")), 1, logs.lines("inblock_agent_marker"))
+        self.assertEqual([r.getMessage() for r in logs.at_least(logging.WARNING)], [])
+
+
+class FixRoundSweepCases(MarkerTestBase):
+    MARKER_AT_START = False
+
+    def test_a2_removed_mark_does_not_return_after_a_restart_then_rename(self) -> None:
+        # The set of flagged accounts is seeded by the start sweep, so a rename after a restart is no flag change.
+        p1, a = self.user("p1"), self.user("a")
+        self.put_flag(a, a)
+        room_id = self.make_room(p1)
+        self.invite_and_join(room_id, p1, a)
+        self.assertIsNone(self.fm_event(room_id))
+        marker = self.load_marker()  # the start sweep marks (DD4: at a start)
+        self.assertEqual(self.fm_members(room_id), [a])
+        self.helper.send_state(room_id, FM_TYPE, {"service_members": []}, tok=self.tokens[p1])
+        n = len(self.fm_events_in(room_id))
+        if marker is not None:
+            self.get_success(marker.on_profile_update(a, None, False, False))
+        self.settle()
+        self.pump(1)
+        self.assertEqual(self.fm_members(room_id), [])
+        self.assertEqual(len(self.fm_events_in(room_id)), n)
+
+    # ---- A4: one room's unexpected error does not stop the start sweep
+
+    def test_a4_one_failing_room_does_not_stop_the_sweep(self) -> None:
+        p1, a = self.user("p1"), self.user("a")
+        self.put_flag(a, a)
+        rooms = []
+        for _ in range(3):
+            r = self.make_room(p1)
+            self.invite_and_join(r, p1, a)
+            rooms.append(r)
+        if WITHOUT_MODULE:
+            self.fail("red control: no module")
+        from inblock_agent_marker import AgentMarker
+
+        original = AgentMarker._mark_locked
+        bad = rooms[1]
+
+        async def flaky(self_: Any, room_id: str, agent: str, fresh: bool) -> bool:
+            if room_id == bad:
+                raise RuntimeError("boom")
+            return await original(self_, room_id, agent, fresh)
+
+        with patch.object(AgentMarker, "_mark_locked", flaky), capture_logs() as logs:
+            self.load_marker()
+        self.assertEqual([self.fm_members(r) for r in rooms if r != bad], [[a], [a]])
+        self.assertIsNone(self.fm_event(bad))
+        self.assertTrue(logs.lines("inblock_agent_marker", "sweep done"), logs.lines("inblock_agent_marker"))
+        self.assertTrue([r for r in logs.records if r.name.startswith("inblock_agent_marker") and r.exc_info])
 
 
 class SweepCases(MarkerTestBase):
